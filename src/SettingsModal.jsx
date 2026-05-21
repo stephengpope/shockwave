@@ -19,7 +19,7 @@ export default function SettingsModal({
   themeMode,
   onThemeModeChange,
 }) {
-  const [active, setActive] = useState(initialSection || SETTINGS_SECTIONS.WORKSPACES);
+  const [active, setActive] = useState(initialSection || SECTIONS[0].id);
 
   useEffect(() => {
     const onKey = (e) => {

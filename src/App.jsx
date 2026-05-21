@@ -294,8 +294,10 @@ export default function App() {
   }, [workspacePath, addDraftTab]);
 
   // ---- settings open helpers ----
-  const openSettings = useCallback((section = SETTINGS_SECTIONS.WORKSPACES) => {
-    setSettingsInitialSection(section);
+  // Pass an explicit section to land on a specific page; omit to defer to the modal's
+  // topmost section (whatever it currently is).
+  const openSettings = useCallback((section) => {
+    setSettingsInitialSection(section ?? null);
     setSettingsOpen(true);
   }, []);
 
@@ -436,7 +438,7 @@ export default function App() {
           activeWorkspaceId={activeWorkspaceId}
           onSwitch={switchWorkspace}
           onManage={() => openSettings(SETTINGS_SECTIONS.WORKSPACES)}
-          onOpenSettings={() => openSettings(SETTINGS_SECTIONS.WORKSPACES)}
+          onOpenSettings={() => openSettings()}
         />
       </aside>
 
