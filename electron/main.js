@@ -1,13 +1,15 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, protocol, net } from 'electron';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import chokidar from 'chokidar';
 import { streamText } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { parseLinks } from './linkParser.js';
 import { getAction } from './aiActions.js';
+import { createRenameCorrelator } from './renameCorrelator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -57,6 +59,15 @@ async function writeSettings(obj) {
 }
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL;
+
+// Custom `app://` scheme used to serve workspace files (images) to the
+// renderer with webSecurity intact. Must be registered before app.ready.
+// Renderer requests `app://media/<rel-path-from-vault>`; the handler resolves
+// the file against the active vault root (watcherRootDir) and returns it
+// via net.fetch(file://…). Path-traversal outside the vault is rejected.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+]);
 
 // Keep in sync with src/constants.js FILE_ACTIONS.
 const FILE_ACTIONS = Object.freeze({
@@ -192,6 +203,113 @@ async function uniquePath(dirPath, base, ext) {
   }
 }
 
+// Walk the workspace and collect lowercased basenames (without .md) for every
+// .md file, excluding any paths in `excludePaths`. Used to enforce workspace-
+// wide name uniqueness for files (case-insensitive), since the link index is
+// keyed by basename and two files sharing a name break it.
+async function collectMarkdownBasenamesLower(root, excludePaths = new Set()) {
+  const out = new Set();
+  async function walk(dir) {
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      if (e.isSymbolicLink()) continue;
+      const full = path.join(dir, e.name);
+      if (excludePaths.has(full)) continue;
+      if (e.isDirectory()) {
+        await walk(full);
+      } else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
+        out.add(e.name.slice(0, -3).toLowerCase());
+      }
+    }
+  }
+  await walk(root);
+  return out;
+}
+
+// Auto-disambiguate a target path within a workspace. Appends " 1", " 2", ...
+// to the basename until the resulting file is:
+//   - not present at the literal destination path, AND
+//   - its basename (case-insensitive) is not used by any other .md file in
+//     the workspace (so the link index doesn't collapse two files into one key).
+// `excludePaths` lets the caller exempt files that are about to be renamed
+// out of the way (otherwise renaming Foo.md -> Foo.md would collide with itself).
+async function uniqueInWorkspace({ workspaceRoot, destDir, base, ext, excludePaths = [] }) {
+  const exclude = new Set(excludePaths);
+  // For folders or files outside a workspace, fall back to same-dir uniqueness.
+  if (!workspaceRoot || ext !== '.md') {
+    return uniquePath(destDir, base, ext);
+  }
+  const taken = await collectMarkdownBasenamesLower(workspaceRoot, exclude);
+  let candidateName = base;
+  let i = 1;
+  while (true) {
+    const candidatePath = path.join(destDir, `${candidateName}${ext}`);
+    let onDisk = false;
+    try {
+      await fs.access(candidatePath);
+      onDisk = !exclude.has(candidatePath);
+    } catch {
+      onDisk = false;
+    }
+    if (!onDisk && !taken.has(candidateName.toLowerCase())) {
+      return candidatePath;
+    }
+    candidateName = `${base} ${i}`;
+    i++;
+  }
+}
+
+// Walk a directory and return absolute paths of every .md file under it
+// (recursively). Used so callers can exclude the contents of a file/folder
+// being moved from the collision check (you can't collide with yourself).
+async function listMarkdownPathsUnder(root) {
+  const out = [];
+  async function walk(dir) {
+    let entries;
+    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      if (e.isSymbolicLink()) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(full);
+      else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) out.push(full);
+    }
+  }
+  try {
+    const st = await fs.stat(root);
+    if (st.isDirectory()) await walk(root);
+    else if (root.toLowerCase().endsWith('.md')) out.push(root);
+  } catch {}
+  return out;
+}
+
+// File identity helpers used by the rename correlator. Hash is computed
+// eagerly so we still have an identity when chokidar fires `unlink` (the file
+// is gone, so we can't read it then).
+async function statInoOf(p) {
+  try {
+    const st = await fs.stat(p, { bigint: true });
+    return st.ino.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function hashFileOf(p) {
+  try {
+    const buf = await fs.readFile(p);
+    return crypto.createHash('sha1').update(buf).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
 ipcMain.handle('fs:createFile', async (_evt, { dirPath, name, content = '' }) => {
   const ext = name.endsWith('.md') ? '' : '.md';
   const base = ext ? name : name.slice(0, -3);
@@ -202,19 +320,16 @@ ipcMain.handle('fs:createFile', async (_evt, { dirPath, name, content = '' }) =>
 
 ipcMain.handle('fs:renameFile', async (_evt, { fromPath, toName }) => {
   const dir = path.dirname(fromPath);
-  const finalName = toName.endsWith('.md') ? toName : `${toName}.md`;
-  const target = path.join(dir, finalName);
+  const base = toName.replace(/\.md$/i, '').trim();
+  if (!base) throw new Error('Name cannot be empty');
+  const target = await uniqueInWorkspace({
+    workspaceRoot: watcherRootDir,
+    destDir: dir,
+    base,
+    ext: '.md',
+    excludePaths: [fromPath],
+  });
   if (target === fromPath) return target;
-  let exists = false;
-  try {
-    await fs.access(target);
-    exists = true;
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-  }
-  if (exists) {
-    throw new Error(`A file named "${finalName}" already exists in this folder.`);
-  }
   await fs.rename(fromPath, target);
   return target;
 });
@@ -347,22 +462,69 @@ ipcMain.handle('fs:createFolder', async (_evt, { dirPath, name = 'New folder' })
 
 ipcMain.handle('fs:moveItem', async (_evt, { srcPath, destDir }) => {
   const name = path.basename(srcPath);
-  const target = path.join(destDir, name);
-  if (target === srcPath) return target;
   // Reject moving a folder into itself or its own descendant.
-  if (target.startsWith(srcPath + path.sep)) {
+  if (path.join(destDir, name).startsWith(srcPath + path.sep) || destDir === srcPath) {
     throw new Error('Cannot move a folder into itself.');
   }
-  let exists = false;
-  try {
-    await fs.access(target);
-    exists = true;
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
+  const isMd = name.toLowerCase().endsWith('.md');
+  let stat;
+  try { stat = await fs.stat(srcPath); } catch { stat = null; }
+  const isFolder = stat?.isDirectory();
+
+  let target;
+  if (isMd && !isFolder) {
+    // .md file move: workspace-wide name uniqueness so the link index stays consistent.
+    const base = name.slice(0, -3);
+    target = await uniqueInWorkspace({
+      workspaceRoot: watcherRootDir,
+      destDir,
+      base,
+      ext: '.md',
+      excludePaths: [srcPath],
+    });
+  } else if (isFolder) {
+    // Folder move: same-dir uniqueness (folders don't share the link-index basename space),
+    // plus workspace-wide uniqueness for every .md file the folder contains, treating its
+    // own .md files as excluded (they move with it).
+    const inside = await listMarkdownPathsUnder(srcPath);
+    target = path.join(destDir, name);
+    // If the literal target dir already exists, append " 1", " 2", ...
+    let candidate = target;
+    let i = 1;
+    while (true) {
+      try { await fs.access(candidate); candidate = path.join(destDir, `${name} ${i}`); i++; }
+      catch { break; }
+    }
+    target = candidate;
+    // Verify no nested .md inside this folder will collide with a same-named file already
+    // in the workspace (outside this folder). If any do, auto-disambiguate the FOLDER name
+    // (simpler than renaming individual files mid-move).
+    if (watcherRootDir && inside.length > 0) {
+      const excludeSet = new Set(inside);
+      const taken = await collectMarkdownBasenamesLower(watcherRootDir, excludeSet);
+      const ourNames = new Set(inside.map((p) => path.basename(p).slice(0, -3).toLowerCase()));
+      for (const n of ourNames) {
+        if (taken.has(n)) {
+          // Bump the folder name once more — but at this point all collision is from the
+          // nested files, which keep their names. We cannot resolve this via folder rename
+          // alone. The least-surprising thing is to reject the move so the user picks
+          // explicit names.
+          throw new Error(`Cannot move "${name}": one or more files inside share a name with files elsewhere in the workspace.`);
+        }
+      }
+    }
+  } else {
+    target = path.join(destDir, name);
+    let candidate = target;
+    let i = 1;
+    while (true) {
+      try { await fs.access(candidate); candidate = path.join(destDir, `${name} ${i}`); i++; }
+      catch { break; }
+    }
+    target = candidate;
   }
-  if (exists) {
-    throw new Error(`"${name}" already exists in this folder.`);
-  }
+
+  if (target === srcPath) return target;
   await fs.rename(srcPath, target);
   return target;
 });
@@ -371,20 +533,16 @@ ipcMain.handle('fs:renameFolder', async (_evt, { fromPath, toName }) => {
   const dir = path.dirname(fromPath);
   const finalName = toName.trim();
   if (!finalName) throw new Error('Name cannot be empty');
-  const target = path.join(dir, finalName);
-  if (target === fromPath) return target;
-  let exists = false;
-  try {
-    await fs.access(target);
-    exists = true;
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
+  // Folders don't share the link-index basename space, so same-dir uniqueness is sufficient.
+  let candidate = path.join(dir, finalName);
+  if (candidate === fromPath) return candidate;
+  let i = 1;
+  while (true) {
+    try { await fs.access(candidate); candidate = path.join(dir, `${finalName} ${i}`); i++; }
+    catch { break; }
   }
-  if (exists) {
-    throw new Error(`A folder named "${finalName}" already exists in this location.`);
-  }
-  await fs.rename(fromPath, target);
-  return target;
+  await fs.rename(fromPath, candidate);
+  return candidate;
 });
 
 ipcMain.handle('context:editorMenu', async (evt, { hasSelection } = {}) => {
@@ -513,6 +671,36 @@ ipcMain.handle('ai:cancel', async (_evt, { requestId }) => {
   inflightAi.delete(requestId);
 });
 
+function timestampForFilename(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    d.getFullYear() +
+    pad(d.getMonth() + 1) +
+    pad(d.getDate()) +
+    pad(d.getHours()) +
+    pad(d.getMinutes()) +
+    pad(d.getSeconds())
+  );
+}
+
+// Save a binary image alongside its associated note.
+//   dirPath  — target directory (typically the dir of the active .md file)
+//   bytes    — Uint8Array of the image bytes
+//   ext      — file extension including leading dot, e.g. '.png'
+//   baseName — optional preferred basename (without extension). If a file
+//              with this name already exists, uniquePath will add " 1", " 2", ...
+//              Falls back to a timestamped "Pasted image …" name when omitted.
+ipcMain.handle('fs:writeImage', async (_evt, { dirPath, bytes, ext, baseName }) => {
+  if (!dirPath) throw new Error('No target folder for image.');
+  if (!ext || !ext.startsWith('.')) throw new Error('Invalid image extension.');
+  const base = baseName && baseName.trim()
+    ? baseName.trim()
+    : `Pasted image ${timestampForFilename()}`;
+  const target = await uniquePath(dirPath, base, ext);
+  await fs.writeFile(target, Buffer.from(bytes));
+  return target;
+});
+
 ipcMain.handle('fs:pathExists', async (_evt, p) => {
   try {
     await fs.access(p);
@@ -524,20 +712,30 @@ ipcMain.handle('fs:pathExists', async (_evt, p) => {
 
 // ---- workspace file watcher ----
 //
-// One watcher per app. Per CLAUDE.md "Link index": main pre-parses .md files
-// and ships {path, mtime, outgoingLinks} rows to the renderer. The watcher
-// reuses that same pattern for incremental updates — see parseLinks above.
+// One watcher per app. Two responsibilities:
+//   1. Coalesce per-path events into a 'fs:changed' stream for the renderer
+//      (parses outgoing wiki-links so the renderer doesn't have to read every
+//      changed file again).
+//   2. Detect renames. Chokidar reports a rename as unlink(old)+add(new). We
+//      pair these via the rename correlator using inode (primary) and content
+//      hash (fallback for FAT/SMB-style filesystems where ino is unreliable),
+//      so an external `mv` or an agent's `fs.rename` becomes a single
+//      {type:'rename', oldPath, newPath} event the renderer can act on.
 //
 // Events are coalesced per-path within WATCH_DEBOUNCE_MS so a burst of writes
-// (atomic rename, multi-file save) collapses to one notification per path.
+// collapses to one notification per path.
 
 const WATCH_DEBOUNCE_MS = 150;
+const RENAME_GRACE_MS = 800;   // how long we hold an unlink waiting for a possible add to pair with
+
 let currentWatcher = null;
 let watcherRootDir = null;
 let watcherWindowId = null;
 let pendingByPath = new Map();    // path -> 'add' | 'change' | 'unlink'
 let pendingTreeOnly = false;       // folder events or non-.md events
 let flushTimer = null;
+let correlator = null;             // createRenameCorrelator instance, reset per workspace
+let renameQueue = [];              // emitted rename events awaiting flush to renderer
 
 function senderWindow() {
   if (watcherWindowId == null) return null;
@@ -550,14 +748,44 @@ function scheduleFlush() {
   flushTimer = setTimeout(flushWatcher, WATCH_DEBOUNCE_MS);
 }
 
+// Ship a 'rename' event with the new file's mtime + outgoingLinks so the
+// renderer can: (1) re-key its link index, (2) refresh outgoing links if
+// content changed during the move, (3) rewrite references in other files.
+async function sendRename(win, oldPath, newPath) {
+  try {
+    const [content, stat] = await Promise.all([
+      fs.readFile(newPath, 'utf8'),
+      fs.stat(newPath),
+    ]);
+    win.webContents.send('fs:changed', {
+      type: 'rename',
+      oldPath,
+      newPath,
+      mtime: stat.mtimeMs,
+      outgoingLinks: parseLinks(content),
+    });
+  } catch {
+    // The new file may have been renamed/deleted again before we could read it.
+    // Fall back to an unlink for the old path so the index doesn't drift.
+    win.webContents.send('fs:changed', { type: 'unlink', path: oldPath });
+  }
+}
+
 async function flushWatcher() {
   flushTimer = null;
   const win = senderWindow();
   const entries = [...pendingByPath.entries()];
   const treeOnly = pendingTreeOnly;
+  const queuedRenames = renameQueue.splice(0);
   pendingByPath.clear();
   pendingTreeOnly = false;
   if (!win) return;
+
+  // Renames first — the renderer needs to re-key paths before any subsequent
+  // add/change/unlink for the new path arrives.
+  for (const { oldPath, newPath } of queuedRenames) {
+    await sendRename(win, oldPath, newPath);
+  }
 
   for (const [p, type] of entries) {
     if (type === 'unlink') {
@@ -580,37 +808,91 @@ async function flushWatcher() {
     }
   }
 
-  if (treeOnly && entries.length === 0) {
+  if (treeOnly && entries.length === 0 && queuedRenames.length === 0) {
     win.webContents.send('fs:changed', { type: 'tree' });
   }
 }
 
-function recordFileEvent(type, p) {
-  if (p.toLowerCase().endsWith('.md')) {
-    const prev = pendingByPath.get(p);
-    if (type === 'unlink') {
-      pendingByPath.set(p, 'unlink');
-    } else if (type === 'add') {
-      pendingByPath.set(p, prev === 'unlink' ? 'change' : 'add');
-    } else {
-      // change
-      pendingByPath.set(p, prev === 'add' ? 'add' : 'change');
-    }
-  } else {
+// Wire chokidar -> correlator -> pendingByPath. The correlator emits one of
+// 'add' | 'unlink' | 'rename'. The first two go through pendingByPath so they
+// pick up the per-path coalescing behavior; 'rename' goes through renameQueue
+// since it's already a paired event and shouldn't be merged with anything.
+function setupCorrelator() {
+  correlator = createRenameCorrelator({
+    emit: (e) => {
+      if (e.type === 'rename') {
+        renameQueue.push(e);
+        scheduleFlush();
+      } else if (e.type === 'unlink') {
+        pendingByPath.set(e.path, 'unlink');
+        scheduleFlush();
+      } else if (e.type === 'add') {
+        // Preserve unlink->add merge semantic from the prior implementation:
+        // an unlink immediately followed by an add for the same path is a change.
+        const prev = pendingByPath.get(e.path);
+        pendingByPath.set(e.path, prev === 'unlink' ? 'change' : 'add');
+        scheduleFlush();
+      }
+    },
+    graceMs: RENAME_GRACE_MS,
+  });
+}
+
+async function onChokidarAdd(p) {
+  if (!p.toLowerCase().endsWith('.md')) {
     pendingTreeOnly = true;
+    scheduleFlush();
+    return;
   }
+  const [ino, hash] = await Promise.all([statInoOf(p), hashFileOf(p)]);
+  correlator.onPathAppeared(p, ino, hash);
+}
+
+async function onChokidarChange(p) {
+  if (!p.toLowerCase().endsWith('.md')) {
+    pendingTreeOnly = true;
+    scheduleFlush();
+    return;
+  }
+  // Atomic saves (vim/VS Code) arrive here, with a new inode. Update identity
+  // so a future unlink for this path has the latest ino+hash to correlate with.
+  const [ino, hash] = await Promise.all([statInoOf(p), hashFileOf(p)]);
+  correlator.onPathSeen(p, ino, hash);
+  pendingByPath.set(p, pendingByPath.get(p) === 'add' ? 'add' : 'change');
   scheduleFlush();
+}
+
+function onChokidarUnlink(p) {
+  if (!p.toLowerCase().endsWith('.md')) {
+    pendingTreeOnly = true;
+    scheduleFlush();
+    return;
+  }
+  correlator.onPathGone(p);
+}
+
+// Seed the correlator with current identity for every .md file in the
+// workspace. Runs once on watchStart, before chokidar fires any events, so an
+// unlink right after startup can still be correlated to its prior identity.
+async function seedCorrelator(root) {
+  const paths = await listMarkdownPathsUnder(root);
+  await Promise.all(paths.map(async (p) => {
+    const [ino, hash] = await Promise.all([statInoOf(p), hashFileOf(p)]);
+    correlator.onPathSeen(p, ino, hash);
+  }));
 }
 
 async function stopWatcher() {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   pendingByPath.clear();
   pendingTreeOnly = false;
+  renameQueue.length = 0;
   if (currentWatcher) {
     const w = currentWatcher;
     currentWatcher = null;
     try { await w.close(); } catch { /* ignore close errors */ }
   }
+  correlator = null;
   watcherRootDir = null;
   watcherWindowId = null;
 }
@@ -621,6 +903,8 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
   if (!win) return;
   watcherWindowId = win.id;
   watcherRootDir = dirPath;
+  setupCorrelator();
+  await seedCorrelator(dirPath);
   currentWatcher = chokidar.watch(dirPath, {
     ignored: (p) => {
       // Skip if any path segment within the watched root starts with '.'
@@ -634,9 +918,9 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
     persistent: true,
   });
   currentWatcher
-    .on('add', (p) => recordFileEvent('add', p))
-    .on('change', (p) => recordFileEvent('change', p))
-    .on('unlink', (p) => recordFileEvent('unlink', p))
+    .on('add', onChokidarAdd)
+    .on('change', onChokidarChange)
+    .on('unlink', onChokidarUnlink)
     .on('addDir', () => { pendingTreeOnly = true; scheduleFlush(); })
     .on('unlinkDir', () => { pendingTreeOnly = true; scheduleFlush(); });
 });
@@ -658,6 +942,23 @@ nativeTheme.on('updated', () => {
 });
 
 app.whenReady().then(() => {
+  protocol.handle('app', async (req) => {
+    try {
+      const url = new URL(req.url);
+      if (url.host !== 'media') return new Response('not found', { status: 404 });
+      if (!watcherRootDir) return new Response('no vault', { status: 404 });
+      const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+      const abs = path.normalize(path.join(watcherRootDir, rel));
+      const rootNorm = path.normalize(watcherRootDir);
+      if (abs !== rootNorm && !abs.startsWith(rootNorm + path.sep)) {
+        return new Response('forbidden', { status: 403 });
+      }
+      return await net.fetch(pathToFileURL(abs).toString());
+    } catch {
+      return new Response('error', { status: 500 });
+    }
+  });
+
   if (process.platform === 'darwin' && app.dock?.setIcon) {
     try {
       app.dock.setIcon(ICON_PATH);

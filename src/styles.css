@@ -1113,6 +1113,21 @@ html, body, #root {
 
 .cm-autolink:hover { filter: brightness(0.9); }
 
+/* ---------- Image embed (atomic widget replacing ![](url) syntax) ---------- */
+
+.cm-image-embed {
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+.cm-image-embed img {
+  max-width: 100%;
+  max-height: 480px;
+  border-radius: 4px;
+  display: block;
+  margin: 4px 0;
+}
+
 /* ---------- AI streaming insert ---------- */
 
 .cm-ai-stream {

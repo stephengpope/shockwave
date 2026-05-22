@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('api', {
   renameFile: (fromPath, toName) =>
     ipcRenderer.invoke('fs:renameFile', { fromPath, toName }),
   duplicateFile: (filePath) => ipcRenderer.invoke('fs:duplicateFile', filePath),
+  writeImage: (dirPath, bytes, ext, baseName) =>
+    ipcRenderer.invoke('fs:writeImage', { dirPath, bytes, ext, baseName }),
   trashFile: (filePath) => ipcRenderer.invoke('fs:trashFile', filePath),
   trashFolder: (folderPath) => ipcRenderer.invoke('fs:trashFolder', folderPath),
   revealInFolder: (filePath) => ipcRenderer.invoke('shell:revealInFolder', filePath),

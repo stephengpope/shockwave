@@ -14,6 +14,7 @@ import ErrorMessage from './ErrorMessage.jsx';
 import ErrorDialog from './ErrorDialog.jsx';
 import InlineAiModal from './InlineAiModal.jsx';
 import { prettyName } from './linkIndex.js';
+import { rewriteReferences } from './renameOps.js';
 import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, AI_PROVIDERS, AI_ACTIONS } from './constants.js';
 import { useLinkIndex } from './hooks/useLinkIndex.js';
 import { useTabs } from './hooks/useTabs.js';
@@ -44,15 +45,17 @@ function flattenAll(nodes, out = []) {
   return out;
 }
 
-function findNameConflict({ tree, currentPath, newName, workspacePath }) {
+// Workspace-wide, case-insensitive .md basename collision check. The link
+// index is keyed by basename, so two files sharing a name (in any folder)
+// collapse into one and break references. This drives the live title-input
+// warning. The IPC handlers auto-disambiguate if the user submits anyway.
+function findNameConflict({ tree, currentPath, newName }) {
   const clean = newName.replace(/\.md$/i, '').toLowerCase().trim();
   if (!clean) return null;
-  const targetDir = currentPath ? dirOf(currentPath) : workspacePath;
   for (const node of flattenAll(tree)) {
     if (node.children) continue;
     if (node.id === currentPath) continue;
     if (!node.name.toLowerCase().endsWith('.md')) continue;
-    if (dirOf(node.id) !== targetDir) continue;
     if (node.name.slice(0, -3).toLowerCase() === clean) return node.id;
   }
   return null;
@@ -86,6 +89,11 @@ export default function App() {
   const workspacePath = activeWorkspace?.path ?? null;
   const workspacePathRef = useRef(workspacePath);
   useEffect(() => { workspacePathRef.current = workspacePath; }, [workspacePath]);
+
+  // Live ref to the active file's absolute path. Used by the editor's image
+  // paste/drop handler (target dir for the saved image) and the inline image
+  // renderer (base for resolving relative URLs). Null for drafts.
+  const activeFilePathRef = useRef(null);
 
   // ---- app title ----
   useEffect(() => {
@@ -193,6 +201,10 @@ export default function App() {
   const { activeFile, activeIsDraft, activeTab, openInActiveTab, openInNewTab, addDraftTab,
           switchTab, closeTab, closeTabsForPath, closeTabsUnderPath, renameTabsPath, resetTabs,
           promoteDraft, tabs, activeTabId, goBack, goForward, canGoBack, canGoForward } = tabsApi;
+
+  useEffect(() => {
+    activeFilePathRef.current = activeIsDraft ? null : activeFile;
+  }, [activeFile, activeIsDraft]);
 
   const onBack = useCallback(() => { if (activeTabId) goBack(activeTabId); }, [activeTabId, goBack]);
   const onForward = useCallback(() => { if (activeTabId) goForward(activeTabId); }, [activeTabId, goForward]);
@@ -501,11 +513,38 @@ export default function App() {
   }, []);
 
   // ---- handle rename commits from the tree (files OR folders) ----
+  //
+  // Folder renames change every nested file's path. We re-key the link index
+  // and any open tabs synchronously to keep them in sync — same shape as the
+  // drag-and-drop move handler (onMoveItems above). Without this, the index
+  // would carry stale path keys until the watcher echoed unlink+add for
+  // every nested file, and any open tab inside the renamed folder would
+  // point at a nonexistent path.
   const onTreeRename = useCallback(async ({ id, name }) => {
     const isFolder = !id.toLowerCase().endsWith('.md');
     if (isFolder) {
       try {
-        await window.api.renameFolder(id, name);
+        // Capture nested .md paths from the index BEFORE renaming.
+        const outgoing = linkIndex.linkIndexRef.current.getOutgoingMap();
+        const srcAsDir = id.endsWith('/') ? id : id + '/';
+        const insideSrc = [];
+        for (const p of outgoing.keys()) {
+          if (p === id || p.startsWith(srcAsDir)) insideSrc.push(p);
+        }
+        // Flush any pending edits before the rename invalidates the path.
+        await writeNow();
+        const newFolderPath = await window.api.renameFolder(id, name);
+        const newAsDir = newFolderPath.endsWith('/') ? newFolderPath : newFolderPath + '/';
+        for (const oldP of insideSrc) {
+          const suffix = oldP === id ? '' : oldP.slice(srcAsDir.length);
+          const newP = suffix ? (newAsDir + suffix) : newFolderPath;
+          linkIndex.linkIndexRef.current.renameFile(oldP, newP);
+          renameTabsPath(oldP, newP);
+        }
+        if (selectedFolderPath === id) setSelectedFolderPath(newFolderPath);
+        else if (selectedFolderPath && selectedFolderPath.startsWith(srcAsDir)) {
+          setSelectedFolderPath(newAsDir + selectedFolderPath.slice(srcAsDir.length));
+        }
         await fileOps.treeAndIndexChanged();
       } catch (err) {
         showError(err.message ?? String(err));
@@ -513,7 +552,7 @@ export default function App() {
       return;
     }
     return fileOps.performRename(id, name);
-  }, [fileOps, showError]);
+  }, [fileOps, linkIndex, renameTabsPath, selectedFolderPath, showError, writeNow]);
 
   // ---- URL prompt (used by editor "Add external link") ----
   const requestUrl = useCallback(() => {
@@ -548,10 +587,15 @@ export default function App() {
 
   // ---- external file change subscription ----
   //
-  // Watcher events fall into three buckets:
-  //   - {type:'add'|'change', path, mtime, outgoingLinks}  — .md file appeared or modified
-  //   - {type:'unlink', path}                              — .md file removed
-  //   - {type:'tree'}                                       — folder change / non-.md (tree refresh only)
+  // Watcher events fall into four buckets:
+  //   - {type:'add'|'change', path, mtime, outgoingLinks}             — .md file appeared or modified
+  //   - {type:'unlink', path}                                          — .md file removed
+  //   - {type:'rename', oldPath, newPath, mtime, outgoingLinks}        — paired by the correlator (inode+hash)
+  //   - {type:'tree'}                                                  — folder change / non-.md (tree refresh only)
+  //
+  // The 'rename' event lets external renames (Finder, `mv`, agents, git checkout)
+  // rewrite references the same way in-app renames do — without it, refs in
+  // other files would break silently when something moves outside the app.
   //
   // Self-echo guard: every renderer-initiated write triggers a watcher event ~350ms
   // later. The renderer has already called linkIndex.updateFile with a Date.now()
@@ -577,6 +621,44 @@ export default function App() {
         scheduleRefresh();
         return;
       }
+      if (evt.type === 'rename') {
+        // 1) Re-key the index so subsequent events for newPath are coherent.
+        linkIndex.renameFile(evt.oldPath, evt.newPath);
+        // 2) Refresh outgoing links if content changed during the move (rare).
+        const stored = linkIndex.linkIndexRef.current.getMtime(evt.newPath);
+        if (stored == null || evt.mtime > stored) {
+          linkIndex.applyParsedLinks(evt.newPath, evt.outgoingLinks, evt.mtime);
+        }
+        // 3) Update any open tabs pointing at the old path.
+        renameTabsPath(evt.oldPath, evt.newPath);
+        // 4) Rewrite `[[OldName]]` references in other files. Idempotent — if
+        //    the rename was in-app, these were already rewritten and the regex
+        //    matches nothing on the watcher echo.
+        const oldBaseName = evt.oldPath.split('/').pop().replace(/\.md$/i, '');
+        const newBaseName = evt.newPath.split('/').pop().replace(/\.md$/i, '');
+        if (oldBaseName !== newBaseName) {
+          (async () => {
+            try {
+              await rewriteReferences({
+                api: window.api,
+                linkIndex: linkIndex.linkIndexRef.current,
+                oldBaseName,
+                newBaseName,
+                selfPath: evt.newPath,
+              });
+              // Re-read self in case self-refs were rewritten on disk.
+              try {
+                const content = await window.api.readFile(evt.newPath);
+                linkIndex.updateFile(evt.newPath, content);
+              } catch { /* file may have moved again */ }
+            } catch (err) {
+              showError(err.message ?? String(err));
+            }
+          })();
+        }
+        scheduleRefresh();
+        return;
+      }
       // 'add' | 'change'
       const stored = linkIndex.linkIndexRef.current.getMtime(evt.path);
       if (stored == null || evt.mtime > stored) {
@@ -589,7 +671,7 @@ export default function App() {
       if (refreshTimer) clearTimeout(refreshTimer);
     };
     // linkIndex methods are stable useCallbacks; linkIndexRef is a stable useRef.
-  }, [workspacePath, refreshTree, linkIndex.applyParsedLinks, linkIndex.removeFile, linkIndex.linkIndexRef]);
+  }, [workspacePath, refreshTree, linkIndex, renameTabsPath, showError]);
 
   // ---- boot: load settings + subscribe to system theme ----
   useEffect(() => {
@@ -693,7 +775,6 @@ export default function App() {
       tree,
       currentPath: activeFile,
       newName: draft,
-      workspacePath,
     });
   }, [titleDraft, tree, workspacePath, activeFile, activeIsDraft, titleFromActive]);
 
@@ -789,6 +870,8 @@ export default function App() {
                 onChange={onEditorChange}
                 getPageIndexRef={linkIndex.pageIndexRef}
                 getVaultPathRef={workspacePathRef}
+                getActiveFilePathRef={activeFilePathRef}
+                onImageError={showError}
                 onRequestUrl={requestUrl}
                 onAskAgent={onInlineAiTrigger}
                 dark={isDark}

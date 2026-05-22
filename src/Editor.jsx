@@ -14,6 +14,8 @@ import { wikiLinkCompletions } from './wikiCompletions.js';
 import { hideMarkdownMarkers } from './hideMarkdownMarkers.js';
 import { headingStyles } from './headingStyles.js';
 import { autoLinks } from './autoLinks.js';
+import { imagePaste } from './imagePaste.js';
+import { imageWidgets } from './imageWidgets.js';
 import {
   streamingInsertExtension,
   beginStreamInsert,
@@ -39,7 +41,7 @@ import { EDITOR_ACTIONS } from './constants.js';
  *   clear()                        — empties the doc, resets cursor
  */
 const Editor = forwardRef(function Editor(
-  { onLinkClick, onChange, getPageIndexRef, getVaultPathRef, onRequestUrl, onAskAgent, dark },
+  { onLinkClick, onChange, getPageIndexRef, getVaultPathRef, getActiveFilePathRef, onImageError, onRequestUrl, onAskAgent, dark },
   ref,
 ) {
   const hostRef = useRef(null);
@@ -49,12 +51,14 @@ const Editor = forwardRef(function Editor(
   const changeRef = useRef(onChange);
   const requestUrlRef = useRef(onRequestUrl);
   const askAgentRef = useRef(onAskAgent);
+  const imageErrorRef = useRef(onImageError);
   const isProgrammaticRef = useRef(false);
 
   useEffect(() => { linkClickRef.current = onLinkClick; }, [onLinkClick]);
   useEffect(() => { changeRef.current = onChange; }, [onChange]);
   useEffect(() => { requestUrlRef.current = onRequestUrl; }, [onRequestUrl]);
   useEffect(() => { askAgentRef.current = onAskAgent; }, [onAskAgent]);
+  useEffect(() => { imageErrorRef.current = onImageError; }, [onImageError]);
 
   const handleContextMenu = async (e) => {
     e.preventDefault();
@@ -203,6 +207,14 @@ const Editor = forwardRef(function Editor(
       autoLinks,
       taskCheckboxes,
       bulletPoints,
+      imagePaste({
+        getActiveFilePath: () => getActiveFilePathRef?.current ?? null,
+        onError: (msg) => imageErrorRef.current?.(msg),
+      }),
+      imageWidgets(
+        () => getActiveFilePathRef?.current ?? null,
+        () => getVaultPathRef?.current ?? null,
+      ),
       wikiLinks(
         (name) => linkClickRef.current?.(name),
         () => getPageIndexRef?.current ?? new Map(),
