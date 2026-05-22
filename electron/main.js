@@ -404,19 +404,26 @@ function revealLabel() {
   return 'Show in file manager';
 }
 
-ipcMain.handle('context:fileMenu', async (evt) => {
+ipcMain.handle('context:fileMenu', async (evt, opts = {}) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
+  const { isMd = true } = opts;
   return new Promise((resolve) => {
     let chosen = null;
-    const menu = Menu.buildFromTemplate([
-      { label: 'Open in new tab', click: () => { chosen = FILE_ACTIONS.NEW_TAB; } },
+    const template = [];
+    if (isMd) {
+      template.push(
+        { label: 'Open in new tab', click: () => { chosen = FILE_ACTIONS.NEW_TAB; } },
+      );
+    }
+    template.push(
       { label: 'Duplicate', click: () => { chosen = FILE_ACTIONS.DUPLICATE; } },
       { type: 'separator' },
       { label: revealLabel(), click: () => { chosen = FILE_ACTIONS.REVEAL; } },
       { type: 'separator' },
       { label: 'Rename', click: () => { chosen = FILE_ACTIONS.RENAME; } },
       { label: 'Delete', click: () => { chosen = FILE_ACTIONS.DELETE; } },
-    ]);
+    );
+    const menu = Menu.buildFromTemplate(template);
     menu.on('menu-will-close', () => {
       setImmediate(() => resolve(chosen));
     });

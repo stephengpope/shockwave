@@ -101,7 +101,7 @@ html, body, #root {
 
 .app {
   display: grid;
-  grid-template-columns: 40px 260px 1fr;
+  grid-template-columns: 40px var(--sidebar-width, 260px) 1fr;
   height: 100vh;
 }
 
@@ -154,6 +154,37 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
+}
+
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+}
+
+.image-drag-ghost {
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
+  padding: 4px 10px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--fg-primary);
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .tree-wrap { flex: 1; min-height: 0; padding: 24px 0 8px; }

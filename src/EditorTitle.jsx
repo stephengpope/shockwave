@@ -4,8 +4,13 @@ export default function EditorTitle({ value, onChange, onCommit, conflict }) {
   const inputRef = useRef(null);
   const lastCommittedRef = useRef(value);
 
+  // Only refresh the baseline when the value changes externally — e.g. the
+  // active file switched, or the file was renamed. While the input is focused
+  // (user typing), keep the baseline stable so commit() can detect changes.
   useEffect(() => {
-    lastCommittedRef.current = value;
+    if (document.activeElement !== inputRef.current) {
+      lastCommittedRef.current = value;
+    }
   }, [value]);
 
   const commit = () => {
@@ -35,6 +40,7 @@ export default function EditorTitle({ value, onChange, onCommit, conflict }) {
       value={value}
       placeholder="Untitled"
       onChange={(e) => onChange(e.target.value)}
+      onFocus={() => { lastCommittedRef.current = value; }}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {

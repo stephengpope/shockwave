@@ -84,6 +84,8 @@ export default function App() {
   const [aiError, setAiError] = useState(null);
   const [systemPrefersDark, setSystemPrefersDark] = useState(false);
   const [bootDone, setBootDone] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const sidebarWidthRef = useRef(260);
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || null;
   const workspacePath = activeWorkspace?.path ?? null;
@@ -291,8 +293,14 @@ export default function App() {
       activeWorkspaceId: next.activeWorkspaceId,
       appearance: { themeMode: next.themeMode },
       ai: next.ai,
+      sidebarWidth: next.sidebarWidth ?? sidebarWidthRef.current,
     });
   }, []);
+
+  const persistSidebarWidth = useCallback(async (width) => {
+    sidebarWidthRef.current = width;
+    await persistSettings({ workspaces, activeWorkspaceId, themeMode, ai: aiSettings, sidebarWidth: width });
+  }, [persistSettings, workspaces, activeWorkspaceId, themeMode, aiSettings]);
 
   const loadWorkspace = useCallback(async (workspace) => {
     await flushAndCancel();
@@ -687,6 +695,10 @@ export default function App() {
       setThemeMode(settings.appearance?.themeMode || THEME_MODES.SYSTEM);
       setWorkspaces(settings.workspaces || []);
       if (settings.ai) setAiSettings(settings.ai);
+      if (typeof settings.sidebarWidth === 'number') {
+        setSidebarWidth(settings.sidebarWidth);
+        sidebarWidthRef.current = settings.sidebarWidth;
+      }
 
       const lastId = settings.activeWorkspaceId;
       if (lastId) {
@@ -778,8 +790,30 @@ export default function App() {
     });
   }, [titleDraft, tree, workspacePath, activeFile, activeIsDraft, titleFromActive]);
 
+  const onSidebarResizeStart = useCallback((e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebarWidthRef.current;
+    const onMove = (ev) => {
+      const next = Math.max(180, Math.min(600, startWidth + ev.clientX - startX));
+      sidebarWidthRef.current = next;
+      setSidebarWidth(next);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      persistSidebarWidth(sidebarWidthRef.current);
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [persistSidebarWidth]);
+
   return (
-    <div className="app">
+    <div className="app" style={{ '--sidebar-width': `${sidebarWidth}px` }}>
       <ThinSidebar
         onNewFile={onNewFile}
         onNewFolder={onNewFolder}
@@ -813,6 +847,10 @@ export default function App() {
           onSwitch={switchWorkspace}
           onManage={() => openSettings(SETTINGS_SECTIONS.WORKSPACES)}
           onOpenSettings={() => openSettings()}
+        />
+        <div
+          className="sidebar-resize-handle"
+          onMouseDown={onSidebarResizeStart}
         />
       </aside>
 

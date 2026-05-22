@@ -101,6 +101,55 @@ function isFileDrag(e) {
   return [...types].includes('Files');
 }
 
+// Module-level handle for sidebar→editor image drags. We can't rely on
+// dataTransfer here: react-arborist drives the source via react-dnd, which
+// registers a window-level dragover handler that forces dropEffect='none'
+// for any drag landing outside its own drop targets (HTML5BackendImpl.js
+// `handleTopDragOver`). That cancels the drop visually and makes the data
+// unreliable. So we stash the source path here on tree dragstart and read
+// it on editor drop.
+let pendingSidebarImagePath = null;
+export function beginSidebarImageDrag(absPath) {
+  pendingSidebarImagePath = absPath;
+}
+export function endSidebarImageDrag() {
+  pendingSidebarImagePath = null;
+}
+function isSidebarImageDrag() {
+  return pendingSidebarImagePath !== null;
+}
+
+// Posix relative path from `fromDir` to absolute `toPath`. Both inputs are
+// posix-style (forward slashes). Used only for in-app sidebar→editor drops.
+function posixRelative(fromDir, toPath) {
+  const fromParts = fromDir.split('/').filter(Boolean);
+  const toParts = toPath.split('/').filter(Boolean);
+  let i = 0;
+  while (i < fromParts.length && i < toParts.length - 1 && fromParts[i] === toParts[i]) i++;
+  const up = fromParts.slice(i).map(() => '..');
+  const down = toParts.slice(i);
+  return [...up, ...down].join('/');
+}
+
+function insertSidebarImage(view, srcAbsPath, { getActiveFilePath, onError }) {
+  const activePath = getActiveFilePath?.();
+  if (!activePath) {
+    onError?.('Open a file before adding images.');
+    return;
+  }
+  const targetDir = dirOf(activePath);
+  const rel = targetDir && srcAbsPath.startsWith(targetDir + '/')
+    ? srcAbsPath.slice(targetDir.length + 1)
+    : posixRelative(targetDir, srcAbsPath);
+  const insert = `![](${encodeMarkdownUrl(rel)})`;
+  const { from, to } = view.state.selection.main;
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: from + insert.length },
+    scrollIntoView: true,
+  });
+}
+
 // Paste is handled via CM6's domEventHandlers (no precedence issue —
 // nothing else preventDefaults the clipboard paste in capture phase).
 //
@@ -125,11 +174,23 @@ const pasteHandler = ({ getActiveFilePath, onError }) =>
 const dropPlugin = ({ getActiveFilePath, onError }) =>
   ViewPlugin.define((view) => {
     const onDragOver = (e) => {
-      if (!isFileDrag(e)) return;
+      const sidebar = isSidebarImageDrag();
+      if (!isFileDrag(e) && !sidebar) return;
       e.preventDefault();
+      // For sidebar drags, stop the event from reaching react-dnd's
+      // window-level handler that would otherwise force dropEffect='none'.
+      if (sidebar) e.stopPropagation();
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
     };
     const onDrop = (e) => {
+      if (isSidebarImageDrag()) {
+        const srcPath = pendingSidebarImagePath;
+        pendingSidebarImagePath = null;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        insertSidebarImage(view, srcPath, { getActiveFilePath, onError });
+        return;
+      }
       const images = pickImageFiles(e.dataTransfer?.files);
       if (images.length === 0) return;
       // stopImmediatePropagation so CM6's internal drop handler (which would

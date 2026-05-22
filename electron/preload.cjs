@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   trashFolder: (folderPath) => ipcRenderer.invoke('fs:trashFolder', folderPath),
   revealInFolder: (filePath) => ipcRenderer.invoke('shell:revealInFolder', filePath),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
-  showFileContextMenu: () => ipcRenderer.invoke('context:fileMenu'),
+  showFileContextMenu: (opts) => ipcRenderer.invoke('context:fileMenu', opts),
   showFolderContextMenu: () => ipcRenderer.invoke('context:folderMenu'),
   showEditorContextMenu: (opts) => ipcRenderer.invoke('context:editorMenu', opts),
   createFolder: (dirPath, name) => ipcRenderer.invoke('fs:createFolder', { dirPath, name }),
