@@ -529,6 +529,11 @@ html, body, #root {
 
 /* ---------- CodeMirror in-page widgets ---------- */
 
+.cm-content,
+.cm-line {
+  line-height: 1.5;
+}
+
 .cm-task-checkbox {
   vertical-align: -2px;
   margin: 0 4px 0 0;

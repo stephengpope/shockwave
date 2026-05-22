@@ -200,7 +200,7 @@ const Editor = forwardRef(function Editor(
           ? { dark: '#3a3a3a', activeDark: '#5a5a5a' }
           : { light: '#e0e0e0', activeLight: '#c0c0c0' },
       }),
-      markdown(),
+      markdown({ extensions: [{ remove: ['SetextHeading'] }] }),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       headingStyles,
       hideMarkdownMarkers,
