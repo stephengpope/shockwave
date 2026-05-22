@@ -1,5 +1,5 @@
 import React from 'react';
-import { PencilIcon, CodeIcon, LockIcon, CheckCircleIcon, DotCircleIcon } from './Icons.jsx';
+import { PencilIcon, CodeIcon, CheckCircleIcon, DotCircleIcon } from './Icons.jsx';
 import { VIEW_MODES, SAVE_STATES } from './constants.js';
 
 function formatNum(n) {
@@ -15,7 +15,6 @@ function formatNum(n) {
  *   chars           number
  *   viewMode        'live' | 'raw'
  *   onToggleViewMode()
- *   aiActive        boolean — show the lock icon while inline AI is editing
  *   saveState       'saved' | 'unsaved'
  */
 export default function EditorStatusBar({
@@ -24,7 +23,6 @@ export default function EditorStatusBar({
   chars,
   viewMode,
   onToggleViewMode,
-  aiActive,
   saveState,
 }) {
   const isLive = viewMode === VIEW_MODES.LIVE;
@@ -52,14 +50,6 @@ export default function EditorStatusBar({
 
       <span className="status-item">{formatNum(words)} words</span>
       <span className="status-item">{formatNum(chars)} characters</span>
-
-      <span
-        className={`status-icon status-lock ${aiActive ? 'status-lock-on' : 'status-lock-off'}`}
-        title={aiActive ? 'Editor locked — inline AI is writing' : 'Editor unlocked'}
-        aria-label={aiActive ? 'Editor locked' : 'Editor unlocked'}
-      >
-        <LockIcon size={12} />
-      </span>
 
       <span
         className={`status-icon status-sync ${isSaved ? 'status-sync-saved' : 'status-sync-pending'}`}

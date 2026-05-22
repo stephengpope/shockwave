@@ -1222,15 +1222,6 @@ html, body, #root {
   line-height: 0;
 }
 
-.editor-status-bar .status-lock-off {
-  color: var(--fg-muted);
-  opacity: 0.6;
-}
-
-.editor-status-bar .status-lock-on {
-  color: var(--accent);
-}
-
 .editor-status-bar .status-sync-saved {
   color: #2bbf6c;
 }

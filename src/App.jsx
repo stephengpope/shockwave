@@ -952,7 +952,6 @@ export default function App() {
                   chars={editorStats.chars}
                   viewMode={viewMode}
                   onToggleViewMode={onToggleViewMode}
-                  aiActive={inlineAi.isAsking}
                   saveState={saveState}
                 />
               </>
