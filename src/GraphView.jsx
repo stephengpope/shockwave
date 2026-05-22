@@ -9,9 +9,21 @@ function flatten(nodes, out = []) {
   return out;
 }
 
-export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVersion, onOpenFile }) {
+// Reads the current theme's graph colors from CSS variables on :root.
+// Called whenever the theme (or first mount) changes so the force-graph
+// re-paints with the right palette.
+function readThemeColors() {
+  const cs = getComputedStyle(document.documentElement);
+  return {
+    node: cs.getPropertyValue('--graph-node').trim() || '#5e5ce6',
+    link: cs.getPropertyValue('--graph-link').trim() || 'rgba(0,0,0,0.2)',
+  };
+}
+
+export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVersion, onOpenFile, dark }) {
   const hostRef = useRef(null);
   const fgRef = useRef(null);
+  const colorsRef = useRef(readThemeColors());
 
   const graphData = useMemo(() => {
     const nodes = [];
@@ -42,8 +54,8 @@ export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVe
       .graphData(graphData)
       .nodeLabel('name')
       .nodeRelSize(5)
-      .linkColor(() => 'rgba(0,0,0,0.2)')
-      .nodeColor(() => '#5e5ce6')
+      .linkColor(() => colorsRef.current.link)
+      .nodeColor(() => colorsRef.current.node)
       .onNodeClick((node) => onOpenFile(node.id));
     fgRef.current = fg;
 
@@ -63,6 +75,16 @@ export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVe
   useEffect(() => {
     if (fgRef.current) fgRef.current.graphData(graphData);
   }, [graphData]);
+
+  // Re-read CSS vars on theme change and force a re-render of nodes/links.
+  useEffect(() => {
+    colorsRef.current = readThemeColors();
+    const fg = fgRef.current;
+    if (fg) {
+      fg.linkColor(() => colorsRef.current.link);
+      fg.nodeColor(() => colorsRef.current.node);
+    }
+  }, [dark]);
 
   return <div ref={hostRef} className="graph-host" />;
 }

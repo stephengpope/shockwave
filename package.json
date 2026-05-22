@@ -2,6 +2,7 @@
   "name": "shockwave",
   "version": "1.0.0",
   "description": "Shockwave — markdown-vault editor",
+  "type": "module",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently -k -n vite,electron -c blue,green \"npm:dev:vite\" \"npm:dev:electron\"",
@@ -23,6 +24,8 @@
     "wait-on": "^9.0.10"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.78",
+    "@ai-sdk/openai": "^3.0.64",
     "@codemirror/autocomplete": "^6.20.2",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-markdown": "^6.5.0",
@@ -31,6 +34,7 @@
     "@codemirror/theme-one-dark": "^6.1.3",
     "@codemirror/view": "^6.43.0",
     "@replit/codemirror-indentation-markers": "^6.5.3",
+    "ai": "^6.0.189",
     "chokidar": "^5.0.0",
     "codemirror": "^6.0.2",
     "force-graph": "^1.51.4",

@@ -2,10 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { SETTINGS_SECTIONS } from './constants.js';
 import WorkspacesSection from './settings/WorkspacesSection.jsx';
 import AppearanceSection from './settings/AppearanceSection.jsx';
+import AiSection from './settings/AiSection.jsx';
 
 const SECTIONS = [
   { id: SETTINGS_SECTIONS.APPEARANCE, label: 'Appearance' },
   { id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
+  { id: SETTINGS_SECTIONS.AI, label: 'AI / Coding Agent' },
 ];
 
 export default function SettingsModal({
@@ -18,6 +20,8 @@ export default function SettingsModal({
   onRemoveWorkspace,
   themeMode,
   onThemeModeChange,
+  ai,
+  onAiChange,
 }) {
   const [active, setActive] = useState(initialSection || SECTIONS[0].id);
 
@@ -60,6 +64,9 @@ export default function SettingsModal({
               themeMode={themeMode}
               onChange={onThemeModeChange}
             />
+          )}
+          {active === SETTINGS_SECTIONS.AI && (
+            <AiSection ai={ai} onChange={onAiChange} />
           )}
         </div>
       </div>

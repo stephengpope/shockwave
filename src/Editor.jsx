@@ -1,5 +1,5 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
@@ -11,6 +11,15 @@ import { taskCheckboxes } from './taskCheckboxes.js';
 import { bulletPoints } from './bulletPoints.js';
 import { wikiLinks } from './wikiLinks.js';
 import { wikiLinkCompletions } from './wikiCompletions.js';
+import { hideMarkdownMarkers } from './hideMarkdownMarkers.js';
+import { headingStyles } from './headingStyles.js';
+import { autoLinks } from './autoLinks.js';
+import {
+  streamingInsertExtension,
+  beginStreamInsert,
+  appendStreamChunk,
+  endStreamInsert,
+} from './streamingInsert.js';
 import { EDITOR_ACTIONS } from './constants.js';
 
 /**
@@ -30,19 +39,22 @@ import { EDITOR_ACTIONS } from './constants.js';
  *   clear()                        — empties the doc, resets cursor
  */
 const Editor = forwardRef(function Editor(
-  { onLinkClick, onChange, getPageIndexRef, getVaultPathRef, onRequestUrl, dark },
+  { onLinkClick, onChange, getPageIndexRef, getVaultPathRef, onRequestUrl, onAskAgent, dark },
   ref,
 ) {
   const hostRef = useRef(null);
   const viewRef = useRef(null);
+  const readOnlyCompartmentRef = useRef(null);
   const linkClickRef = useRef(onLinkClick);
   const changeRef = useRef(onChange);
   const requestUrlRef = useRef(onRequestUrl);
+  const askAgentRef = useRef(onAskAgent);
   const isProgrammaticRef = useRef(false);
 
   useEffect(() => { linkClickRef.current = onLinkClick; }, [onLinkClick]);
   useEffect(() => { changeRef.current = onChange; }, [onChange]);
   useEffect(() => { requestUrlRef.current = onRequestUrl; }, [onRequestUrl]);
+  useEffect(() => { askAgentRef.current = onAskAgent; }, [onAskAgent]);
 
   const handleContextMenu = async (e) => {
     e.preventDefault();
@@ -81,6 +93,17 @@ const Editor = forwardRef(function Editor(
         scrollIntoView: true,
       });
       v2.focus();
+      return;
+    }
+    if (action === EDITOR_ACTIONS.INLINE_AI) {
+      // Capture range + selection text + surrounding context BEFORE the modal
+      // opens (focus leaves the editor). The parent owns the modal and the
+      // streaming dispatch.
+      const selection = view.state.sliceDoc(from, to);
+      const docText = view.state.doc.toString();
+      const contextBefore = docText.slice(0, from);
+      const contextAfter = docText.slice(to);
+      askAgentRef.current?.({ from, to, selection, contextBefore, contextAfter });
     }
   };
 
@@ -124,6 +147,28 @@ const Editor = forwardRef(function Editor(
       isProgrammaticRef.current = false;
       view.dispatch({ selection: { anchor: 0 } });
     },
+    beginStream: (from, to) => {
+      const view = viewRef.current;
+      if (!view) return null;
+      return beginStreamInsert(view, from, to);
+    },
+    appendStream: (text) => {
+      const view = viewRef.current;
+      if (!view) return;
+      appendStreamChunk(view, text);
+    },
+    endStream: (completed) => {
+      const view = viewRef.current;
+      if (!view) return;
+      endStreamInsert(view, !!completed);
+    },
+    setReadOnly: (ro) => {
+      const view = viewRef.current;
+      const cmp = readOnlyCompartmentRef.current;
+      if (!view || !cmp) return;
+      view.dispatch({ effects: cmp.reconfigure(EditorState.readOnly.of(!!ro)) });
+    },
+    focus: () => { viewRef.current?.focus(); },
   }), []);
 
   useEffect(() => {
@@ -133,7 +178,12 @@ const Editor = forwardRef(function Editor(
       () => getVaultPathRef?.current ?? null,
     );
 
+    const readOnlyCompartment = new Compartment();
+    readOnlyCompartmentRef.current = readOnlyCompartment;
+
     const extensions = [
+      readOnlyCompartment.of(EditorState.readOnly.of(false)),
+      streamingInsertExtension,
       lineNumbers(),
       highlightActiveLine(),
       history(),
@@ -148,6 +198,9 @@ const Editor = forwardRef(function Editor(
       }),
       markdown(),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      headingStyles,
+      hideMarkdownMarkers,
+      autoLinks,
       taskCheckboxes,
       bulletPoints,
       wikiLinks(
@@ -179,7 +232,9 @@ const Editor = forwardRef(function Editor(
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
           backgroundColor: 'transparent',
         },
-        '.cm-content': { paddingLeft: '4px' },
+        '.cm-content': { paddingLeft: '4px', paddingRight: 'var(--text-col-left)' },
+        '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
+        '.cm-activeLineGutter': { backgroundColor: 'var(--bg-hover)' },
         '.cm-gutters': { backgroundColor: 'transparent', borderRight: 'none' },
         '.cm-lineNumbers': { paddingLeft: '8px', paddingRight: '12px' },
         // Reserve room for up to 5-digit line numbers so the gutter width stays
@@ -195,6 +250,7 @@ const Editor = forwardRef(function Editor(
     return () => {
       view.destroy();
       viewRef.current = null;
+      readOnlyCompartmentRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dark]);

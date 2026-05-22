@@ -37,6 +37,16 @@
   --indent-line-active: #c0c0c0;
 
   --shadow-popover: 0 4px 16px rgba(0, 0, 0, 0.12);
+
+  /* AI streaming highlight (yellow while writing, green pulse on done). */
+  --ai-stream-bg: #fdf6d8;
+  --ai-done-bg-start: #e8f6ec;
+  --ai-done-bg-peak: #c6ebd1;
+  --ai-done-bg-end: rgba(198, 235, 209, 0);
+
+  /* Graph view colors. */
+  --graph-node: #5e5ce6;
+  --graph-link: rgba(0, 0, 0, 0.2);
 }
 
 [data-theme="dark"] {
@@ -69,6 +79,15 @@
 
   --indent-line: #3a3a3a;
   --indent-line-active: #5a5a5a;
+
+  /* Muted amber + green so the streaming highlight sits comfortably on dark bg. */
+  --ai-stream-bg: #4a4015;
+  --ai-done-bg-start: #1f3a2a;
+  --ai-done-bg-peak: #2f5a3f;
+  --ai-done-bg-end: rgba(47, 90, 63, 0);
+
+  --graph-node: #9d9bf0;
+  --graph-link: rgba(255, 255, 255, 0.25);
 }
 
 html, body, #root {
@@ -357,7 +376,7 @@ html, body, #root {
   font-size: 30px;
   font-weight: 700;
   color: var(--fg-primary);
-  padding: 16px 14px 20px var(--text-col-left);
+  padding: 16px var(--text-col-left) 20px var(--text-col-left);
   font-family: inherit;
   flex-shrink: 0;
   line-height: 1.2;
@@ -365,11 +384,10 @@ html, body, #root {
 
 .editor-title:focus { background: var(--accent-bg-soft); }
 
-.title-conflict {
+.error-message {
   width: fit-content;
   max-width: calc(100% - 70px);
-  margin: -6px 0 16px var(--text-col-left);
-  background: #d93636;
+  background: #c84747;
   color: #ffffff;
   padding: 8px 14px;
   border-radius: 6px;
@@ -378,16 +396,21 @@ html, body, #root {
   position: relative;
 }
 
-.title-conflict::before {
+.error-message::before {
   content: '';
   position: absolute;
-  top: -6px;
+  top: -5px;
   left: 24px;
   width: 0;
   height: 0;
   border-left: 6px solid transparent;
   border-right: 6px solid transparent;
-  border-bottom: 6px solid #d93636;
+  border-bottom: 6px solid #c84747;
+}
+
+/* Positioning modifier for the file-title conflict use site. */
+.error-message-title {
+  margin: -6px 0 16px var(--text-col-left);
 }
 
 /* ---------- Tab strip ---------- */
@@ -510,7 +533,7 @@ html, body, #root {
 
 .backlinks-section {
   flex-shrink: 0;
-  padding: 5em 14px 18px var(--text-col-left);
+  padding: 5em var(--text-col-left) 18px var(--text-col-left);
 }
 
 .backlinks-header {
@@ -610,6 +633,121 @@ html, body, #root {
 
 .no-tab-hint {
   font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* ---------- Dialog (Dialog.jsx, ErrorDialog, ConfirmDialog) ---------- */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog-panel {
+  background: var(--bg-app);
+  color: var(--fg-primary);
+  width: min(440px, 90vw);
+  padding: 20px 22px;
+  border-radius: 12px;
+  box-shadow: var(--shadow-popover);
+  outline: none;
+}
+
+.dialog-title {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.dialog-body {
+  font-size: 13px;
+  color: var(--fg-primary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.dialog-button {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-primary);
+}
+
+.dialog-button:hover { background: var(--bg-hover); }
+
+.dialog-button-primary {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+
+.dialog-button-primary:hover { filter: brightness(1.05); background: var(--accent); }
+
+.dialog-button-destructive {
+  background: #c84747;
+  color: #ffffff;
+  border-color: #c84747;
+}
+
+.dialog-button-destructive:hover { filter: brightness(1.05); background: #c84747; }
+
+/* ---------- Inline AI modal ---------- */
+
+.inline-ai-textarea {
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+.inline-ai-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.inline-ai-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.inline-ai-checkbox-row input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.inline-ai-hint {
+  margin-top: 10px;
+  font-size: 11px;
   color: var(--fg-muted);
 }
 
@@ -894,4 +1032,101 @@ html, body, #root {
 .settings-select:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+.settings-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.settings-input-row .settings-input {
+  flex: 1;
+}
+
+.settings-input-toggle {
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.settings-input-toggle:hover { background: var(--bg-hover); color: var(--fg-primary); }
+
+.settings-subsection-title {
+  margin: 22px 0 10px 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-secondary);
+}
+
+.settings-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.settings-checkbox-row input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.settings-field-hint {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.4;
+}
+
+/* ---------- Autolinks ---------- */
+
+.cm-autolink {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cm-autolink:hover { filter: brightness(0.9); }
+
+/* ---------- AI streaming insert ---------- */
+
+.cm-ai-stream {
+  background: var(--ai-stream-bg);
+  border-radius: 2px;
+}
+
+.cm-ai-stream-done {
+  border-radius: 2px;
+  animation: cm-ai-stream-done-pulse 1s ease-out forwards;
+}
+
+@keyframes cm-ai-stream-done-pulse {
+  0%   { background: var(--ai-done-bg-start); }
+  30%  { background: var(--ai-done-bg-peak); }
+  100% { background: var(--ai-done-bg-end); }
 }

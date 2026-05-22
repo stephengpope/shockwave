@@ -1,8 +1,15 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme } = require('electron');
-const path = require('path');
-const fs = require('fs/promises');
-const chokidar = require('chokidar');
-const { parseLinks } = require('./linkParser');
+import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme } from 'electron';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import fs from 'node:fs/promises';
+import chokidar from 'chokidar';
+import { streamText } from 'ai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
+import { parseLinks } from './linkParser.js';
+import { getAction } from './aiActions.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Keep in sync with src/constants.js APP_NAME and package.json productName.
 const APP_NAME = 'Shockwave';
@@ -14,6 +21,12 @@ const DEFAULT_SETTINGS = {
   workspaces: [],
   activeWorkspaceId: null,
   appearance: { themeMode: 'system' },
+  ai: {
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-5',
+    apiKey: '',
+    includeContextByDefault: false,
+  },
 };
 
 function settingsPath() {
@@ -28,6 +41,7 @@ async function readSettings() {
       ...DEFAULT_SETTINGS,
       ...parsed,
       appearance: { ...DEFAULT_SETTINGS.appearance, ...(parsed.appearance ?? {}) },
+      ai: { ...DEFAULT_SETTINGS.ai, ...(parsed.ai ?? {}) },
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -57,6 +71,7 @@ const FILE_ACTIONS = Object.freeze({
 const EDITOR_ACTIONS = Object.freeze({
   ADD_LINK: 'addLink',
   ADD_EXTERNAL_LINK: 'addExternalLink',
+  INLINE_AI: 'inlineAi',
 });
 
 // Keep in sync with src/constants.js FOLDER_ACTIONS.
@@ -75,7 +90,7 @@ function createWindow() {
     title: APP_NAME,
     icon: ICON_PATH,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -261,6 +276,13 @@ ipcMain.handle('shell:revealInFolder', async (_evt, filePath) => {
   shell.showItemInFolder(filePath);
 });
 
+ipcMain.handle('shell:openExternal', async (_evt, url) => {
+  // Only allow http/https — never let an arbitrary string become a shell launch.
+  if (typeof url !== 'string') return;
+  if (!/^https?:\/\//i.test(url)) return;
+  await shell.openExternal(url);
+});
+
 function revealLabel() {
   if (process.platform === 'darwin') return 'Reveal in Finder';
   if (process.platform === 'win32') return 'Show in Explorer';
@@ -369,16 +391,29 @@ ipcMain.handle('context:editorMenu', async (evt, { hasSelection } = {}) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
   return new Promise((resolve) => {
     let chosen = null;
-    const menu = Menu.buildFromTemplate([
-      { label: 'Add link',          click: () => { chosen = EDITOR_ACTIONS.ADD_LINK; } },
-      { label: 'Add external link', click: () => { chosen = EDITOR_ACTIONS.ADD_EXTERNAL_LINK; } },
+    const template = [];
+    if (hasSelection) {
+      template.push(
+        { label: 'Add link',          click: () => { chosen = EDITOR_ACTIONS.ADD_LINK; } },
+        { label: 'Add external link', click: () => { chosen = EDITOR_ACTIONS.ADD_EXTERNAL_LINK; } },
+        { type: 'separator' },
+      );
+    }
+    template.push(
+      {
+        label: hasSelection ? 'Rewrite with AI' : 'Insert AI Response',
+        click: () => { chosen = EDITOR_ACTIONS.INLINE_AI; },
+      },
       { type: 'separator' },
+    );
+    template.push(
       { role: 'cut',   enabled: hasSelection },
       { role: 'copy',  enabled: hasSelection },
       { role: 'paste' },
       { type: 'separator' },
       { role: 'selectAll' },
-    ]);
+    );
+    const menu = Menu.buildFromTemplate(template);
     menu.on('menu-will-close', () => {
       setImmediate(() => resolve(chosen));
     });
@@ -392,6 +427,90 @@ ipcMain.handle('settings:read', async () => {
 
 ipcMain.handle('settings:write', async (_evt, obj) => {
   await writeSettings(obj);
+});
+
+// ---- AI streaming ----
+//
+// One in-flight request per requestId. The renderer sends:
+//   { requestId, action: 'ask'|'rewrite', params: {...} }
+// The action registry (electron/aiActions.js) maps that to a system prompt
+// and a user message; everything else (streaming, cancellation, error
+// reporting) is action-agnostic.
+
+const inflightAi = new Map(); // requestId -> AbortController
+
+function modelFactoryFor(provider) {
+  return provider === 'openai' ? createOpenAI : createAnthropic;
+}
+
+ipcMain.handle('ai:run', async (evt, { requestId, action: actionId, params }) => {
+  const win = BrowserWindow.fromWebContents(evt.sender);
+  if (!win) return;
+  const send = (channel, payload) => {
+    if (!win.isDestroyed()) win.webContents.send(channel, payload);
+  };
+
+  try {
+    const action = getAction(actionId);
+    if (!action) {
+      send('ai:error', { requestId, message: `Unknown AI action: ${actionId}` });
+      return;
+    }
+
+    const settings = await readSettings();
+    const { provider, model, apiKey } = settings.ai ?? {};
+    if (!apiKey) {
+      send('ai:error', { requestId, message: 'No API key set. Open Settings → AI / Coding Agent to add one.' });
+      return;
+    }
+    if (!model) {
+      send('ai:error', { requestId, message: 'No model set. Open Settings → AI / Coding Agent to choose one.' });
+      return;
+    }
+
+    const client = modelFactoryFor(provider)({ apiKey });
+
+    const userMessage = action.buildUserMessage(params ?? {});
+
+    const controller = new AbortController();
+    inflightAi.set(requestId, controller);
+
+    let errorMessage = null;
+
+    const result = streamText({
+      model: client(model),
+      system: action.systemPrompt,
+      prompt: userMessage,
+      abortSignal: controller.signal,
+      onError: ({ error }) => {
+        errorMessage = error?.message ?? String(error);
+      },
+    });
+
+    try {
+      for await (const delta of result.textStream) {
+        if (controller.signal.aborted) break;
+        send('ai:chunk', { requestId, delta });
+      }
+    } catch (err) {
+      errorMessage = errorMessage ?? (err?.message ?? String(err));
+    }
+
+    if (!controller.signal.aborted) {
+      if (errorMessage) send('ai:error', { requestId, message: errorMessage });
+      else send('ai:done', { requestId });
+    }
+    inflightAi.delete(requestId);
+  } catch (err) {
+    send('ai:error', { requestId, message: err?.message ?? String(err) });
+    inflightAi.delete(requestId);
+  }
+});
+
+ipcMain.handle('ai:cancel', async (_evt, { requestId }) => {
+  const ctrl = inflightAi.get(requestId);
+  if (ctrl) ctrl.abort();
+  inflightAi.delete(requestId);
 });
 
 ipcMain.handle('fs:pathExists', async (_evt, p) => {

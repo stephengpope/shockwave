@@ -1,4 +1,4 @@
-// CommonJS mirror of src/linkIndex.js's parser pieces.
+// ESM mirror of src/linkIndex.js's parser pieces.
 // Keep LINK_RE / normalizeTarget / parseLinks in sync if either file changes.
 
 const LINK_RE = /\[\[([^\]\n]+?)\]\]/g;
@@ -65,4 +65,4 @@ function parseLinks(content) {
   return out;
 }
 
-module.exports = { parseLinks, normalizeTarget };
+export { parseLinks, normalizeTarget };

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import FileTree from './FileTree.jsx';
 import Editor from './Editor.jsx';
 import BacklinksPanel from './BacklinksPanel.jsx';
@@ -10,11 +10,15 @@ import ThinSidebar from './ThinSidebar.jsx';
 import WorkspaceSelector from './WorkspaceSelector.jsx';
 import SettingsModal from './SettingsModal.jsx';
 import UrlPromptModal from './UrlPromptModal.jsx';
+import ErrorMessage from './ErrorMessage.jsx';
+import ErrorDialog from './ErrorDialog.jsx';
+import InlineAiModal from './InlineAiModal.jsx';
 import { prettyName } from './linkIndex.js';
-import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS } from './constants.js';
+import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, AI_PROVIDERS, AI_ACTIONS } from './constants.js';
 import { useLinkIndex } from './hooks/useLinkIndex.js';
 import { useTabs } from './hooks/useTabs.js';
 import { useFileOps } from './hooks/useFileOps.js';
+import { useInlineAi } from './hooks/useInlineAi.js';
 
 const SAVE_DEBOUNCE_MS = 500;
 
@@ -68,6 +72,13 @@ export default function App() {
   // When set, renders <UrlPromptModal>. The function is the awaiting promise's resolver.
   const [urlPromptResolve, setUrlPromptResolve] = useState(null);
   const [themeMode, setThemeMode] = useState(THEME_MODES.SYSTEM);
+  const [aiSettings, setAiSettings] = useState({
+    provider: AI_PROVIDERS.ANTHROPIC,
+    model: 'claude-sonnet-4-5',
+    apiKey: '',
+    includeContextByDefault: false,
+  });
+  const [aiError, setAiError] = useState(null);
   const [systemPrefersDark, setSystemPrefersDark] = useState(false);
   const [bootDone, setBootDone] = useState(false);
 
@@ -108,6 +119,50 @@ export default function App() {
 
   const linkIndex = useLinkIndex(tree);
 
+  // ---- Inline AI (Ask / Rewrite) ----
+  // The hook owns streaming, the editor lock, and cancellation. The modal
+  // gathers the user's prompt before we dispatch.
+  //
+  // writeNow saves; it does NOT cancel the AI stream — the debounced save
+  // fires every ~500ms during streaming and we don't want to kill the stream.
+  // flushAndCancel is the variant used by paths that change the active file
+  // (tab switch, workspace switch, beforeunload), where the stream MUST stop.
+  const inlineAiRef = useRef(null);
+  const inlineAi = useInlineAi({ editorRef, onError: setAiError });
+  inlineAiRef.current = inlineAi;
+
+  // The modal is open whenever this is non-null. It holds everything we
+  // captured from the editor at the moment of right-click, since focus will
+  // move into the modal and we can't read the selection again later.
+  const [inlineAiRequest, setInlineAiRequest] = useState(null);
+
+  const onInlineAiTrigger = useCallback(({ from, to, selection, contextBefore, contextAfter }) => {
+    const hasSelection = from !== to;
+    setInlineAiRequest({
+      action: hasSelection ? AI_ACTIONS.REWRITE : AI_ACTIONS.INSERT,
+      from,
+      to,
+      selection,
+      contextBefore,
+      contextAfter,
+    });
+  }, []);
+
+  const onInlineAiCancel = useCallback(() => {
+    setInlineAiRequest(null);
+  }, []);
+
+  const onInlineAiSubmit = useCallback(({ prompt, includeContext }) => {
+    if (!inlineAiRequest) return;
+    const { action, from, to, selection, contextBefore, contextAfter } = inlineAiRequest;
+    const params = action === AI_ACTIONS.REWRITE
+      ? { userPrompt: prompt, selection, contextBefore, contextAfter, includeContext }
+      : { userPrompt: prompt, contextBefore, contextAfter, includeContext };
+    inlineAi.run({ action, params, range: { from, to } });
+    setInlineAiRequest(null);
+    editorRef.current?.focus();
+  }, [inlineAi, inlineAiRequest]);
+
   const writeNow = useCallback(async () => {
     const path = dirtyPathRef.current;
     if (!path) return;
@@ -123,12 +178,18 @@ export default function App() {
     linkIndex.updateFile(path, text);
   }, [linkIndex]);
 
+  const flushAndCancel = useCallback(async () => {
+    inlineAiRef.current?.cancel();
+    setInlineAiRequest(null);
+    await writeNow();
+  }, [writeNow]);
+
   // ---- tabs (drafts live here) ----
   const onAfterSwitch = useCallback(() => {
     if (graphMode) setGraphMode(false);
   }, [graphMode]);
 
-  const tabsApi = useTabs({ editorRef, writeNow, onAfterSwitch });
+  const tabsApi = useTabs({ editorRef, writeNow: flushAndCancel, onAfterSwitch });
   const { activeFile, activeIsDraft, activeTab, openInActiveTab, openInNewTab, addDraftTab,
           switchTab, closeTab, closeTabsForPath, closeTabsUnderPath, renameTabsPath, resetTabs,
           promoteDraft, tabs, activeTabId, goBack, goForward, canGoBack, canGoForward } = tabsApi;
@@ -217,11 +278,12 @@ export default function App() {
       workspaces: next.workspaces,
       activeWorkspaceId: next.activeWorkspaceId,
       appearance: { themeMode: next.themeMode },
+      ai: next.ai,
     });
   }, []);
 
   const loadWorkspace = useCallback(async (workspace) => {
-    await writeNow();
+    await flushAndCancel();
     await window.api.watchStop();
     resetTabs();
     setTree([]);
@@ -234,7 +296,7 @@ export default function App() {
     setTree(treeData);
     linkIndex.rebuild(files);
     await window.api.watchStart(workspace.path);
-  }, [writeNow, resetTabs, linkIndex]);
+  }, [flushAndCancel, resetTabs, linkIndex]);
 
   const switchWorkspace = useCallback(async (id) => {
     const ws = workspaces.find((w) => w.id === id);
@@ -244,14 +306,14 @@ export default function App() {
       const removed = workspaces.filter((w) => w.id !== id);
       setWorkspaces(removed);
       setActiveWorkspaceId(null);
-      await persistSettings({ workspaces: removed, activeWorkspaceId: null, themeMode });
+      await persistSettings({ workspaces: removed, activeWorkspaceId: null, themeMode, ai: aiSettings });
       showError(`Workspace "${ws.name}" no longer exists.`);
       return;
     }
     setActiveWorkspaceId(id);
-    await persistSettings({ workspaces, activeWorkspaceId: id, themeMode });
+    await persistSettings({ workspaces, activeWorkspaceId: id, themeMode, ai: aiSettings });
     await loadWorkspace(ws);
-  }, [workspaces, persistSettings, themeMode, loadWorkspace, showError]);
+  }, [workspaces, persistSettings, themeMode, aiSettings, loadWorkspace, showError]);
 
   const addWorkspace = useCallback(async () => {
     const folder = await window.api.openFolder();
@@ -265,9 +327,9 @@ export default function App() {
     const next = [...workspaces, ws];
     setWorkspaces(next);
     setActiveWorkspaceId(ws.id);
-    await persistSettings({ workspaces: next, activeWorkspaceId: ws.id, themeMode });
+    await persistSettings({ workspaces: next, activeWorkspaceId: ws.id, themeMode, ai: aiSettings });
     await loadWorkspace(ws);
-  }, [workspaces, persistSettings, themeMode, loadWorkspace, switchWorkspace]);
+  }, [workspaces, persistSettings, themeMode, aiSettings, loadWorkspace, switchWorkspace]);
 
   const removeWorkspace = useCallback(async (id) => {
     const next = workspaces.filter((w) => w.id !== id);
@@ -281,13 +343,18 @@ export default function App() {
       setSelectedFolderPath(null);
       await window.api.watchStop();
     }
-    await persistSettings({ workspaces: next, activeWorkspaceId: newActive, themeMode });
-  }, [workspaces, activeWorkspaceId, persistSettings, themeMode, resetTabs]);
+    await persistSettings({ workspaces: next, activeWorkspaceId: newActive, themeMode, ai: aiSettings });
+  }, [workspaces, activeWorkspaceId, persistSettings, themeMode, aiSettings, resetTabs]);
 
   const onThemeModeChange = useCallback(async (mode) => {
     setThemeMode(mode);
-    await persistSettings({ workspaces, activeWorkspaceId, themeMode: mode });
-  }, [persistSettings, workspaces, activeWorkspaceId]);
+    await persistSettings({ workspaces, activeWorkspaceId, themeMode: mode, ai: aiSettings });
+  }, [persistSettings, workspaces, activeWorkspaceId, aiSettings]);
+
+  const onAiChange = useCallback(async (next) => {
+    setAiSettings(next);
+    await persistSettings({ workspaces, activeWorkspaceId, themeMode, ai: next });
+  }, [persistSettings, workspaces, activeWorkspaceId, themeMode]);
 
   // ---- title commit (rename existing or promote draft) ----
   const onTitleCommit = useCallback(async (newName) => {
@@ -313,9 +380,9 @@ export default function App() {
 
   // ---- graph toggle ----
   const onToggleGraph = useCallback(async () => {
-    await writeNow();
+    await flushAndCancel();
     setGraphMode((g) => !g);
-  }, [writeNow]);
+  }, [flushAndCancel]);
 
   // ---- new file (thin sidebar) ----
   const onNewFile = useCallback(async () => {
@@ -474,10 +541,10 @@ export default function App() {
 
   // ---- beforeunload save ----
   useEffect(() => {
-    const flush = () => { writeNow(); };
+    const flush = () => { flushAndCancel(); };
     window.addEventListener('beforeunload', flush);
     return () => window.removeEventListener('beforeunload', flush);
-  }, [writeNow]);
+  }, [flushAndCancel]);
 
   // ---- external file change subscription ----
   //
@@ -537,6 +604,7 @@ export default function App() {
       setSystemPrefersDark(!!initialTheme.dark);
       setThemeMode(settings.appearance?.themeMode || THEME_MODES.SYSTEM);
       setWorkspaces(settings.workspaces || []);
+      if (settings.ai) setAiSettings(settings.ai);
 
       const lastId = settings.activeWorkspaceId;
       if (lastId) {
@@ -554,6 +622,7 @@ export default function App() {
               workspaces: next,
               activeWorkspaceId: null,
               appearance: settings.appearance ?? { themeMode: THEME_MODES.SYSTEM },
+              ai: settings.ai,
             });
             showError(`Workspace "${ws.name}" no longer exists at ${ws.path}.`);
           }
@@ -607,7 +676,10 @@ export default function App() {
   const titleFromActive = activeIsDraft
     ? ''
     : (activeFile ? prettyName(activeFile).split('/').pop() : '');
-  useEffect(() => {
+  // Layout effect — runs synchronously before paint so the title input never
+  // renders with a stale draft against a freshly-switched activeFile (which
+  // would briefly trigger a false title-conflict popup).
+  useLayoutEffect(() => {
     setTitleDraft(titleFromActive);
   }, [titleFromActive]);
 
@@ -683,6 +755,7 @@ export default function App() {
             pageIndex={linkIndex.pageIndex}
             outgoingByFile={linkIndex.linkIndexRef.current.getOutgoingMap()}
             linkIndexVersion={linkIndex.version}
+            dark={isDark}
             onOpenFile={async (id) => {
               setGraphMode(false);
               await openInActiveTab(id);
@@ -704,9 +777,9 @@ export default function App() {
                 conflict={!!titleConflict}
               />
               {titleConflict && (
-                <div className="title-conflict">
+                <ErrorMessage className="error-message-title">
                   There's already a file with the same name
-                </div>
+                </ErrorMessage>
               )}
             </div>
             <div className={activeTab ? '' : 'editor-zone-hidden'}>
@@ -717,6 +790,7 @@ export default function App() {
                 getPageIndexRef={linkIndex.pageIndexRef}
                 getVaultPathRef={workspacePathRef}
                 onRequestUrl={requestUrl}
+                onAskAgent={onInlineAiTrigger}
                 dark={isDark}
               />
             </div>
@@ -746,6 +820,21 @@ export default function App() {
         <UrlPromptModal onSubmit={handleUrlSubmit} onCancel={handleUrlCancel} />
       )}
 
+      <ErrorDialog
+        open={!!aiError}
+        message={aiError}
+        title="AI request failed"
+        onClose={() => setAiError(null)}
+      />
+
+      <InlineAiModal
+        open={!!inlineAiRequest}
+        action={inlineAiRequest?.action}
+        defaultIncludeContext={!!aiSettings.includeContextByDefault}
+        onSubmit={onInlineAiSubmit}
+        onCancel={onInlineAiCancel}
+      />
+
       {settingsOpen && (
         <SettingsModal
           initialSection={settingsInitialSection}
@@ -757,6 +846,8 @@ export default function App() {
           onRemoveWorkspace={removeWorkspace}
           themeMode={themeMode}
           onThemeModeChange={onThemeModeChange}
+          ai={aiSettings}
+          onAiChange={onAiChange}
         />
       )}
     </div>

@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('api', {
   trashFile: (filePath) => ipcRenderer.invoke('fs:trashFile', filePath),
   trashFolder: (folderPath) => ipcRenderer.invoke('fs:trashFolder', folderPath),
   revealInFolder: (filePath) => ipcRenderer.invoke('shell:revealInFolder', filePath),
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   showFileContextMenu: () => ipcRenderer.invoke('context:fileMenu'),
   showFolderContextMenu: () => ipcRenderer.invoke('context:folderMenu'),
   showEditorContextMenu: (opts) => ipcRenderer.invoke('context:editorMenu', opts),
@@ -39,6 +40,26 @@ contextBridge.exposeInMainWorld('api', {
       const listener = (_evt, payload) => cb(payload);
       ipcRenderer.on('theme:systemChanged', listener);
       return () => ipcRenderer.removeListener('theme:systemChanged', listener);
+    },
+  },
+  ai: {
+    run: (requestId, action, params) =>
+      ipcRenderer.invoke('ai:run', { requestId, action, params }),
+    cancel: (requestId) => ipcRenderer.invoke('ai:cancel', { requestId }),
+    onChunk: (cb) => {
+      const listener = (_evt, payload) => cb(payload);
+      ipcRenderer.on('ai:chunk', listener);
+      return () => ipcRenderer.removeListener('ai:chunk', listener);
+    },
+    onDone: (cb) => {
+      const listener = (_evt, payload) => cb(payload);
+      ipcRenderer.on('ai:done', listener);
+      return () => ipcRenderer.removeListener('ai:done', listener);
+    },
+    onError: (cb) => {
+      const listener = (_evt, payload) => cb(payload);
+      ipcRenderer.on('ai:error', listener);
+      return () => ipcRenderer.removeListener('ai:error', listener);
     },
   },
 });
