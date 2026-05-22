@@ -1164,6 +1164,85 @@ html, body, #root {
   margin: 4px 0;
 }
 
+/* ---------- Editor status bar (bottom right) ---------- */
+
+.editor-status-bar {
+  position: sticky;
+  bottom: 0;
+  align-self: flex-end;
+  width: max-content;
+  margin: 12px 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background: var(--bg-app);
+  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  border-radius: 6px 0 0 0;
+  box-shadow: none;
+  user-select: none;
+  z-index: 3;
+}
+
+[data-theme="dark"] .editor-status-bar {
+  background: var(--bg-popover);
+}
+
+.editor-status-bar .status-item {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor-status-bar .status-toggle {
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  padding: 3px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.editor-status-bar .status-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.editor-status-bar .status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-secondary);
+  line-height: 0;
+}
+
+.editor-status-bar .status-lock-off {
+  color: var(--fg-muted);
+  opacity: 0.6;
+}
+
+.editor-status-bar .status-lock-on {
+  color: var(--accent);
+}
+
+.editor-status-bar .status-sync-saved {
+  color: #2bbf6c;
+}
+
+[data-theme="dark"] .editor-status-bar .status-sync-saved {
+  color: #4ade80;
+}
+
+.editor-status-bar .status-sync-pending {
+  color: var(--fg-muted);
+}
+
 /* ---------- AI streaming insert ---------- */
 
 .cm-ai-stream {

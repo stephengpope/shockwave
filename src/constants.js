@@ -49,3 +49,16 @@ export const THEME_MODES = Object.freeze({
   DARK: 'dark',
   SYSTEM: 'system',
 });
+
+// Editor live-preview mode. 'live' renders headings, wiki-link widgets, image
+// embeds, task checkboxes, etc. 'raw' shows the underlying markdown text only.
+export const VIEW_MODES = Object.freeze({
+  LIVE: 'live',
+  RAW: 'raw',
+});
+
+// Status of the in-flight save lifecycle, surfaced on the editor status bar.
+export const SAVE_STATES = Object.freeze({
+  SAVED: 'saved',
+  UNSAVED: 'unsaved',
+});

@@ -13,9 +13,10 @@ import UrlPromptModal from './UrlPromptModal.jsx';
 import ErrorMessage from './ErrorMessage.jsx';
 import ErrorDialog from './ErrorDialog.jsx';
 import InlineAiModal from './InlineAiModal.jsx';
+import EditorStatusBar from './EditorStatusBar.jsx';
 import { prettyName } from './linkIndex.js';
 import { rewriteReferences } from './renameOps.js';
-import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, AI_PROVIDERS, AI_ACTIONS } from './constants.js';
+import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, AI_PROVIDERS, AI_ACTIONS, VIEW_MODES, SAVE_STATES } from './constants.js';
 import { useLinkIndex } from './hooks/useLinkIndex.js';
 import { useTabs } from './hooks/useTabs.js';
 import { useFileOps } from './hooks/useFileOps.js';
@@ -86,6 +87,9 @@ export default function App() {
   const [bootDone, setBootDone] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const sidebarWidthRef = useRef(260);
+  const [viewMode, setViewMode] = useState(VIEW_MODES.LIVE);
+  const [editorStats, setEditorStats] = useState({ words: 0, chars: 0 });
+  const [saveState, setSaveState] = useState(SAVE_STATES.SAVED);
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || null;
   const workspacePath = activeWorkspace?.path ?? null;
@@ -186,6 +190,8 @@ export default function App() {
     const text = editor.getText();
     await window.api.writeFile(path, text);
     linkIndex.updateFile(path, text);
+    // Only flip to "saved" if nothing else dirtied the path while we were writing.
+    if (dirtyPathRef.current === null) setSaveState(SAVE_STATES.SAVED);
   }, [linkIndex]);
 
   const flushAndCancel = useCallback(async () => {
@@ -222,6 +228,7 @@ export default function App() {
   // ---- on editor change: schedule debounced save; promote drafts ----
   const onEditorChange = useCallback(() => {
     if (!activeTab) return;
+    setSaveState(SAVE_STATES.UNSAVED);
     if (activeTab.isDraft) {
       // Promote then schedule a save against the new path.
       (async () => {
@@ -287,6 +294,9 @@ export default function App() {
   }, [openInActiveTab, graphMode]);
 
   // ---- workspace operations ----
+  const viewModeRef = useRef(viewMode);
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+
   const persistSettings = useCallback(async (next) => {
     await window.api.settings.write({
       workspaces: next.workspaces,
@@ -294,6 +304,7 @@ export default function App() {
       appearance: { themeMode: next.themeMode },
       ai: next.ai,
       sidebarWidth: next.sidebarWidth ?? sidebarWidthRef.current,
+      viewMode: next.viewMode ?? viewModeRef.current,
     });
   }, []);
 
@@ -309,6 +320,7 @@ export default function App() {
     setTree([]);
     setSelectedFolderPath(null);
     setGraphMode(false);
+    setSaveState(SAVE_STATES.SAVED);
     const [treeData, files] = await Promise.all([
       window.api.readTree(workspace.path),
       window.api.readAllMarkdown(workspace.path),
@@ -370,6 +382,12 @@ export default function App() {
     setThemeMode(mode);
     await persistSettings({ workspaces, activeWorkspaceId, themeMode: mode, ai: aiSettings });
   }, [persistSettings, workspaces, activeWorkspaceId, aiSettings]);
+
+  const onToggleViewMode = useCallback(async () => {
+    const next = viewMode === VIEW_MODES.LIVE ? VIEW_MODES.RAW : VIEW_MODES.LIVE;
+    setViewMode(next);
+    await persistSettings({ workspaces, activeWorkspaceId, themeMode, ai: aiSettings, viewMode: next });
+  }, [viewMode, persistSettings, workspaces, activeWorkspaceId, themeMode, aiSettings]);
 
   const onAiChange = useCallback(async (next) => {
     setAiSettings(next);
@@ -699,6 +717,10 @@ export default function App() {
         setSidebarWidth(settings.sidebarWidth);
         sidebarWidthRef.current = settings.sidebarWidth;
       }
+      if (settings.viewMode === VIEW_MODES.RAW || settings.viewMode === VIEW_MODES.LIVE) {
+        setViewMode(settings.viewMode);
+        viewModeRef.current = settings.viewMode;
+      }
 
       const lastId = settings.activeWorkspaceId;
       if (lastId) {
@@ -912,15 +934,28 @@ export default function App() {
                 onImageError={showError}
                 onRequestUrl={requestUrl}
                 onAskAgent={onInlineAiTrigger}
+                onStats={setEditorStats}
                 dark={isDark}
+                viewMode={viewMode}
               />
             </div>
             {activeTab ? (
-              <BacklinksPanel
-                groups={activeBacklinks}
-                vaultPath={workspacePath}
-                onOpen={openInActiveTab}
-              />
+              <>
+                <BacklinksPanel
+                  groups={activeBacklinks}
+                  vaultPath={workspacePath}
+                  onOpen={openInActiveTab}
+                />
+                <EditorStatusBar
+                  backlinkCount={activeBacklinks.length}
+                  words={editorStats.words}
+                  chars={editorStats.chars}
+                  viewMode={viewMode}
+                  onToggleViewMode={onToggleViewMode}
+                  aiActive={inlineAi.isAsking}
+                  saveState={saveState}
+                />
+              </>
             ) : (
               <div className="no-tab-cta">
                 <button className="create-file-btn" onClick={onNewFile}>

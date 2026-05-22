@@ -22,7 +22,16 @@ import {
   appendStreamChunk,
   endStreamInsert,
 } from './streamingInsert.js';
-import { EDITOR_ACTIONS } from './constants.js';
+import { EDITOR_ACTIONS, VIEW_MODES } from './constants.js';
+
+function computeStats(state) {
+  const chars = state.doc.length;
+  if (chars === 0) return { words: 0, chars: 0 };
+  const text = state.doc.toString();
+  const trimmed = text.trim();
+  const words = trimmed === '' ? 0 : trimmed.split(/\s+/).length;
+  return { words, chars };
+}
 
 /**
  * Imperative editor wrapper.
@@ -41,17 +50,21 @@ import { EDITOR_ACTIONS } from './constants.js';
  *   clear()                        — empties the doc, resets cursor
  */
 const Editor = forwardRef(function Editor(
-  { onLinkClick, onChange, getPageIndexRef, getVaultPathRef, getActiveFilePathRef, onImageError, onRequestUrl, onAskAgent, dark },
+  { onLinkClick, onChange, getPageIndexRef, getVaultPathRef, getActiveFilePathRef, onImageError, onRequestUrl, onAskAgent, onStats, dark, viewMode },
   ref,
 ) {
   const hostRef = useRef(null);
   const viewRef = useRef(null);
   const readOnlyCompartmentRef = useRef(null);
+  const livePreviewCompartmentRef = useRef(null);
+  const livePreviewExtensionsRef = useRef(null);
   const linkClickRef = useRef(onLinkClick);
   const changeRef = useRef(onChange);
   const requestUrlRef = useRef(onRequestUrl);
   const askAgentRef = useRef(onAskAgent);
   const imageErrorRef = useRef(onImageError);
+  const statsRef = useRef(onStats);
+  const statsRafRef = useRef(0);
   const isProgrammaticRef = useRef(false);
 
   useEffect(() => { linkClickRef.current = onLinkClick; }, [onLinkClick]);
@@ -59,6 +72,18 @@ const Editor = forwardRef(function Editor(
   useEffect(() => { requestUrlRef.current = onRequestUrl; }, [onRequestUrl]);
   useEffect(() => { askAgentRef.current = onAskAgent; }, [onAskAgent]);
   useEffect(() => { imageErrorRef.current = onImageError; }, [onImageError]);
+  useEffect(() => { statsRef.current = onStats; }, [onStats]);
+
+  // Toggle the live-preview decoration bundle without rebuilding the editor.
+  // Cursor, history, scroll all survive a reconfigure.
+  useEffect(() => {
+    const view = viewRef.current;
+    const cmp = livePreviewCompartmentRef.current;
+    const live = livePreviewExtensionsRef.current;
+    if (!view || !cmp || !live) return;
+    const next = viewMode === VIEW_MODES.RAW ? [] : live;
+    view.dispatch({ effects: cmp.reconfigure(next) });
+  }, [viewMode]);
 
   const handleContextMenu = async (e) => {
     e.preventDefault();
@@ -141,6 +166,7 @@ const Editor = forwardRef(function Editor(
         view.dispatch({ selection: { anchor: 0 } });
         requestAnimationFrame(() => { view.scrollDOM.scrollTop = 0; });
       }
+      statsRef.current?.(computeStats(view.state));
     },
     clear: () => {
       const view = viewRef.current;
@@ -150,6 +176,7 @@ const Editor = forwardRef(function Editor(
       view.dispatch({ changes: { from: 0, to: current.length, insert: '' } });
       isProgrammaticRef.current = false;
       view.dispatch({ selection: { anchor: 0 } });
+      statsRef.current?.({ words: 0, chars: 0 });
     },
     beginStream: (from, to) => {
       const view = viewRef.current;
@@ -185,6 +212,32 @@ const Editor = forwardRef(function Editor(
     const readOnlyCompartment = new Compartment();
     readOnlyCompartmentRef.current = readOnlyCompartment;
 
+    const livePreviewCompartment = new Compartment();
+    livePreviewCompartmentRef.current = livePreviewCompartment;
+
+    // Decorations that turn the editor into a live preview. Toggling them off
+    // (raw mode) shows the underlying markdown syntax. `markdown()` syntax
+    // highlighting stays on either way so headings/code keep their colors.
+    // Autocomplete stays on too — `[[` completion is useful in raw mode.
+    const livePreviewExtensions = [
+      headingStyles,
+      hideMarkdownMarkers,
+      autoLinks,
+      taskCheckboxes,
+      bulletPoints,
+      imageWidgets(
+        () => getActiveFilePathRef?.current ?? null,
+        () => getVaultPathRef?.current ?? null,
+      ),
+      wikiLinks(
+        (name) => linkClickRef.current?.(name),
+        () => getPageIndexRef?.current ?? new Map(),
+      ),
+    ];
+    livePreviewExtensionsRef.current = livePreviewExtensions;
+
+    const initialLive = viewMode === VIEW_MODES.RAW ? [] : livePreviewExtensions;
+
     const extensions = [
       readOnlyCompartment.of(EditorState.readOnly.of(false)),
       streamingInsertExtension,
@@ -202,23 +255,11 @@ const Editor = forwardRef(function Editor(
       }),
       markdown({ extensions: [{ remove: ['SetextHeading'] }] }),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-      headingStyles,
-      hideMarkdownMarkers,
-      autoLinks,
-      taskCheckboxes,
-      bulletPoints,
+      livePreviewCompartment.of(initialLive),
       imagePaste({
         getActiveFilePath: () => getActiveFilePathRef?.current ?? null,
         onError: (msg) => imageErrorRef.current?.(msg),
       }),
-      imageWidgets(
-        () => getActiveFilePathRef?.current ?? null,
-        () => getVaultPathRef?.current ?? null,
-      ),
-      wikiLinks(
-        (name) => linkClickRef.current?.(name),
-        () => getPageIndexRef?.current ?? new Map(),
-      ),
       autocompletion({
         override: [completionSource],
         activateOnTyping: true,
@@ -234,6 +275,16 @@ const Editor = forwardRef(function Editor(
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !isProgrammaticRef.current) {
           changeRef.current?.();
+        }
+        if (update.docChanged) {
+          // Coalesce stats across rapid keystrokes — at most one compute per frame.
+          if (statsRafRef.current) cancelAnimationFrame(statsRafRef.current);
+          statsRafRef.current = requestAnimationFrame(() => {
+            statsRafRef.current = 0;
+            const v = viewRef.current;
+            if (!v) return;
+            statsRef.current?.(computeStats(v.state));
+          });
         }
       }),
       EditorView.theme({
@@ -259,10 +310,17 @@ const Editor = forwardRef(function Editor(
     const state = EditorState.create({ doc: '', extensions });
     const view = new EditorView({ state, parent: hostRef.current });
     viewRef.current = view;
+    statsRef.current?.({ words: 0, chars: 0 });
     return () => {
+      if (statsRafRef.current) {
+        cancelAnimationFrame(statsRafRef.current);
+        statsRafRef.current = 0;
+      }
       view.destroy();
       viewRef.current = null;
       readOnlyCompartmentRef.current = null;
+      livePreviewCompartmentRef.current = null;
+      livePreviewExtensionsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dark]);
