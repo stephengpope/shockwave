@@ -141,6 +141,7 @@ function posixRelative(fromDir, toPath) {
 }
 
 async function insertSidebarImage(view, srcAbsPath, { getActiveFilePath, ensureActiveFilePath, onError }) {
+  const wasDraft = !getActiveFilePath?.();
   let activePath = getActiveFilePath?.();
   if (!activePath && ensureActiveFilePath) {
     try {
@@ -154,6 +155,12 @@ async function insertSidebarImage(view, srcAbsPath, { getActiveFilePath, ensureA
     onError?.('Open a file before adding images.');
     return;
   }
+  // If we just promoted a draft, yield so React flushes the setTabs and the
+  // load effect runs (and skips, because freshlyPromotedPathRef matches).
+  // Otherwise our dispatch lands first, then the load effect's async readFile
+  // resolves and wipes the buffer. The finder-drop path doesn't need this
+  // because its writeImage IPC already yields.
+  if (wasDraft) await new Promise((resolve) => setTimeout(resolve, 0));
   const targetDir = dirOf(activePath);
   const rel = targetDir && srcAbsPath.startsWith(targetDir + '/')
     ? srcAbsPath.slice(targetDir.length + 1)
