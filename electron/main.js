@@ -312,8 +312,10 @@ async function createWindow() {
 }
 
 ipcMain.handle('dialog:openFolder', async () => {
+  // `createDirectory` (macOS) adds a "New Folder" button to the open dialog so
+  // users can create a fresh workspace directory in one step.
   const result = await dialog.showOpenDialog({
-    properties: ['openDirectory'],
+    properties: ['openDirectory', 'createDirectory'],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];

@@ -474,8 +474,22 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
     },
   }), [input]);
 
+  // Click anywhere in the sidebar that isn't an interactive element or active
+  // text selection -> focus the composer textarea and put the caret at the end.
+  // Matches the common chat-UI pattern (Slack, Discord, etc.).
+  const onSidebarClick = useCallback((e) => {
+    if (e.target.closest('button, a, input, textarea, select, [contenteditable]')) return;
+    const sel = window.getSelection?.();
+    if (sel && !sel.isCollapsed) return;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    const len = el.value.length;
+    try { el.setSelectionRange(len, len); } catch {}
+  }, []);
+
   return (
-    <div className="chat-sidebar" role="region" aria-label="Coding agent chat" ref={sidebarRootRef}>
+    <div className="chat-sidebar" role="region" aria-label="Coding agent chat" ref={sidebarRootRef} onClick={onSidebarClick}>
       {dragOver && (
         <div className="chat-dropzone-overlay" aria-hidden="true">
           <div className="chat-dropzone-message">Drop to attach</div>

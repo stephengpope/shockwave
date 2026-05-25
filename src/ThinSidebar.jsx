@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { PageIcon, FolderIcon, GraphIcon, CalendarIcon } from './Icons.jsx';
 
 export default function ThinSidebar({
@@ -10,15 +10,11 @@ export default function ThinSidebar({
   graphMode,
   disabled,
 }) {
-  const [today, setToday] = useState(() => new Date());
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      const now = new Date();
-      setToday((prev) => (prev.getDate() === now.getDate() ? prev : now));
-    }, 60_000);
-    return () => clearInterval(id);
-  }, []);
+  // Day-of-month is read on render — no timer. The icon refreshes whenever the
+  // parent re-renders (which happens constantly during user activity). If the
+  // app sits fully idle across midnight, the day stays stale until any
+  // interaction triggers a render. Acceptable for a glyph.
+  const todayDay = new Date().getDate();
 
   return (
     <div className="thin-sidebar">
@@ -33,15 +29,6 @@ export default function ThinSidebar({
       </button>
       <button
         className="thin-sidebar-btn"
-        onClick={onNewFolder}
-        disabled={disabled}
-        title="New folder"
-        aria-label="New folder"
-      >
-        <FolderIcon />
-      </button>
-      <button
-        className="thin-sidebar-btn"
         onClick={onOpenJournal}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -52,7 +39,16 @@ export default function ThinSidebar({
         title="Today's journal (right-click to pick a date)"
         aria-label="Today's journal"
       >
-        <CalendarIcon day={today.getDate()} />
+        <CalendarIcon day={todayDay} />
+      </button>
+      <button
+        className="thin-sidebar-btn"
+        onClick={onNewFolder}
+        disabled={disabled}
+        title="New folder"
+        aria-label="New folder"
+      >
+        <FolderIcon />
       </button>
       <button
         className={`thin-sidebar-btn ${graphMode ? 'active' : ''}`}
