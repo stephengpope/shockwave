@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createLinkIndex, normalizeTarget, parseLinks, prettyName } from '../src/linkIndex.js';
+import { createLinkIndex, normalizeTarget, parseLinks, prettyName } from '../src/renderer/linkIndex.js';
 
 test('normalizeTarget lowercases, strips .md, drops #heading and |alias', () => {
   assert.equal(normalizeTarget('Foo'), 'foo');

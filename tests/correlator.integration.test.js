@@ -8,7 +8,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { createRenameCorrelator } from '../electron/renameCorrelator.js';
+import { createRenameCorrelator } from '../src/main/renameCorrelator.js';
 
 // Hash helper used by both the seeder and the watcher path.
 async function hashFile(p) {

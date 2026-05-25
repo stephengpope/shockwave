@@ -12,11 +12,18 @@ import { listInstalled, importFromPath, removeSkill, libraryDirFor } from './ski
 import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { installLinkIndexBridge } from './linkIndexExtension.js';
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from './agentSystemPrompt.js';
+import {
+  APP_NAME,
+  FILE_ACTIONS,
+  FOLDER_ACTIONS,
+  EDITOR_ACTIONS,
+  SUPPORTED_PROVIDER_SLUGS as SUPPORTED_PROVIDER_SLUGS_LIST,
+} from '../shared/constants.js';
+
+const SUPPORTED_PROVIDER_SLUGS = new Set(SUPPORTED_PROVIDER_SLUGS_LIST);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Keep in sync with src/constants.js APP_NAME and package.json productName.
-const APP_NAME = 'Shockwave';
 app.setName(APP_NAME);
 
 // __dirname under electron-vite is `<project>/out/main/` in dev and inside the
@@ -187,34 +194,6 @@ const DEV_URL = process.env.ELECTRON_RENDERER_URL;
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ]);
-
-// Keep in sync with src/constants.js FILE_ACTIONS.
-const FILE_ACTIONS = Object.freeze({
-  NEW_TAB: 'newTab',
-  DUPLICATE: 'duplicate',
-  REVEAL: 'reveal',
-  RENAME: 'rename',
-  DELETE: 'delete',
-  TOGGLE_BOOKMARK: 'toggleBookmark',
-});
-
-// Keep in sync with src/constants.js EDITOR_ACTIONS.
-const EDITOR_ACTIONS = Object.freeze({
-  ADD_LINK: 'addLink',
-  ADD_EXTERNAL_LINK: 'addExternalLink',
-  EDIT_EXTERNAL_LINK: 'editExternalLink',
-  REMOVE_EXTERNAL_LINK: 'removeExternalLink',
-  SEND_TO_AGENT: 'sendToAgent',
-});
-
-// Keep in sync with src/constants.js FOLDER_ACTIONS.
-const FOLDER_ACTIONS = Object.freeze({
-  NEW_FILE: 'newFile',
-  NEW_FOLDER: 'newFolder',
-  REVEAL: 'reveal',
-  RENAME: 'rename',
-  DELETE: 'delete',
-});
 
 const DEFAULT_WINDOW_SIZE = { width: 1200, height: 800 };
 
@@ -949,15 +928,6 @@ ipcMain.handle('agent:getDefaultSystemPrompt', async () => DEFAULT_AGENT_SYSTEM_
 // codex) are filtered out — our settings schema only carries a single API
 // key, which is insufficient for those.
 //
-// Keep in sync with src/constants.js SUPPORTED_PROVIDER_SLUGS.
-const SUPPORTED_PROVIDER_SLUGS = new Set([
-  'anthropic', 'openai', 'google', 'openrouter', 'groq', 'cerebras',
-  'deepseek', 'xai', 'mistral', 'fireworks', 'together', 'huggingface',
-  'kimi-coding', 'minimax', 'minimax-cn', 'moonshotai', 'moonshotai-cn',
-  'opencode', 'opencode-go', 'vercel-ai-gateway', 'zai', 'xiaomi',
-  'xiaomi-token-plan-cn', 'xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp',
-]);
-
 ipcMain.handle('agent:listProviders', () => {
   return getProviders().filter((slug) => SUPPORTED_PROVIDER_SLUGS.has(slug)).sort();
 });

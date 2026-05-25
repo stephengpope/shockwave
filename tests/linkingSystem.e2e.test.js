@@ -20,10 +20,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { createRenameCorrelator } from '../electron/renameCorrelator.js';
-import { parseLinks } from '../electron/linkParser.js';
-import { createLinkIndex } from '../src/linkIndex.js';
-import { rewriteReferences } from '../src/renameOps.js';
+import { createRenameCorrelator } from '../src/main/renameCorrelator.js';
+import { parseLinks } from '../src/main/linkParser.js';
+import { createLinkIndex } from '../src/renderer/linkIndex.js';
+import { rewriteReferences } from '../src/renderer/renameOps.js';
 
 async function hashOf(p) {
   try { return crypto.createHash('sha1').update(await fs.readFile(p)).digest('hex'); }

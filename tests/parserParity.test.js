@@ -7,8 +7,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLinks as rendererParse, normalizeTarget as rendererNorm } from '../src/linkIndex.js';
-import { parseLinks as mainParse, normalizeTarget as mainNorm } from '../electron/linkParser.js';
+import { parseLinks as rendererParse, normalizeTarget as rendererNorm } from '../src/renderer/linkIndex.js';
+import { parseLinks as mainParse, normalizeTarget as mainNorm } from '../src/main/linkParser.js';
 
 const FIXTURES = [
   '',

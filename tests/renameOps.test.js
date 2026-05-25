@@ -12,8 +12,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renameWithReferences, rewriteReferences } from '../src/renameOps.js';
-import { createLinkIndex } from '../src/linkIndex.js';
+import { renameWithReferences, rewriteReferences } from '../src/renderer/renameOps.js';
+import { createLinkIndex } from '../src/renderer/linkIndex.js';
 
 // Build a small in-memory workspace + index + api stub.
 function makeWorld(files /* { path: content } */, opts = {}) {
