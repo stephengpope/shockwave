@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { TrashIcon } from '../Icons.jsx';
 
 const GLOBAL_STATES = ['enabled', 'disabled'];
@@ -44,15 +44,24 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
   const [error, setError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
 
+  // Async settings calls (reload, importPicker, importFromPath, remove) may
+  // resolve after the modal closes. Gate all state updates on this so we
+  // don't write to an unmounted component.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   const reload = useCallback(async () => {
+    if (!mountedRef.current) return;
     setLoading(true);
     try {
       const list = await window.api.skills.list();
+      if (!mountedRef.current) return;
       setInstalled(list);
     } catch (err) {
+      if (!mountedRef.current) return;
       setError(err?.message ?? String(err));
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, []);
 
@@ -65,6 +74,11 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
     onSkillsChange({ ...skills, global: nextGlobal });
   }, [skills, globalState, onSkillsChange]);
 
+  // Wrap setError so post-await calls don't write to an unmounted component.
+  const safeSetError = useCallback((msg) => {
+    if (mountedRef.current) setError(msg);
+  }, []);
+
   const onImportClick = useCallback(async () => {
     setError(null);
     try {
@@ -75,9 +89,9 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
         await reload();
       }
     } catch (err) {
-      setError(err?.message ?? String(err));
+      safeSetError(err?.message ?? String(err));
     }
-  }, [reload, skills, globalState, onSkillsChange]);
+  }, [reload, skills, globalState, onSkillsChange, safeSetError]);
 
   const onRemove = useCallback(async (skill) => {
     setError(null);
@@ -95,9 +109,9 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
       onSkillsChange({ ...skills, global: nextGlobal, workspaces: nextWorkspaces });
       await reload();
     } catch (err) {
-      setError(err?.message ?? String(err));
+      safeSetError(err?.message ?? String(err));
     }
-  }, [skills, globalState, onSkillsChange, reload]);
+  }, [skills, globalState, onSkillsChange, reload, safeSetError]);
 
   const onDrop = useCallback(async (e) => {
     e.preventDefault();
@@ -116,7 +130,7 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
         const destPath = await window.api.skills.importFromPath(srcPath);
         if (destPath) importedFolders.push(destPath.split(/[\\/]/).pop());
       } catch (err) {
-        setError(err?.message ?? String(err));
+        safeSetError(err?.message ?? String(err));
       }
     }
     if (importedFolders.length > 0) {
@@ -125,7 +139,7 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
       onSkillsChange({ ...skills, global: nextGlobal });
       await reload();
     }
-  }, [reload, skills, globalState, onSkillsChange]);
+  }, [reload, skills, globalState, onSkillsChange, safeSetError]);
 
   return (
     <div>

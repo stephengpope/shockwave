@@ -22,6 +22,7 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
+import { dirOf } from './pathUtils.js';
 
 class ImageWidget extends WidgetType {
   constructor(url, alt, linkUrl) {
@@ -82,10 +83,6 @@ function findWrappingLinkUrl(state, pos) {
   return null;
 }
 
-function dirOf(filePath) {
-  const i = filePath.lastIndexOf('/');
-  return i >= 0 ? filePath.slice(0, i) : '';
-}
 
 // Resolve a markdown image URL to a loadable src. Returns null when the path
 // resolves outside the vault — those stay as plain text rather than render

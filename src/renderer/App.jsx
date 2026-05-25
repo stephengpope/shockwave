@@ -17,6 +17,7 @@ import Dialog from './Dialog.jsx';
 import JournalDatePicker from './JournalDatePicker.jsx';
 import QuickSearch from './QuickSearch.jsx';
 import { formatDailyNote, resolveDailyNotePath } from './dailyNote.js';
+import { basenameOf, dirOf, toRelPath, toAbsPath } from './pathUtils.js';
 import { diffWordsWithSpace } from 'diff';
 import { rangesAddedFromDiff } from './diffFlash.js';
 import { prettyName } from './linkIndex.js';
@@ -33,30 +34,6 @@ function genWorkspaceId() {
   return 'ws_' + Math.random().toString(36).slice(2, 10);
 }
 
-function basenameOf(p) {
-  const i = p.lastIndexOf('/');
-  return i >= 0 ? p.slice(i + 1) : p;
-}
-
-function dirOf(p) {
-  const i = p.lastIndexOf('/');
-  return i >= 0 ? p.slice(0, i) : '';
-}
-
-// Convert an absolute file path to a workspace-relative POSIX path. Returns
-// null when the file isn't inside the workspace (so the caller can skip it).
-function toRelPath(absPath, workspacePath) {
-  if (!workspacePath || !absPath) return null;
-  if (absPath === workspacePath) return null;
-  const prefix = workspacePath.endsWith('/') ? workspacePath : workspacePath + '/';
-  if (!absPath.startsWith(prefix)) return null;
-  return absPath.slice(prefix.length);
-}
-
-function toAbsPath(relPath, workspacePath) {
-  if (!workspacePath || !relPath) return null;
-  return `${workspacePath}/${relPath}`;
-}
 
 // Prune the tree to only the bookmarked files and the folders that contain
 // them. Folders with no bookmarked descendants are removed.
@@ -214,9 +191,14 @@ export default function App() {
   }, [effectiveTheme]);
 
   // ---- error helper ----
+  const errorTimerRef = useRef(null);
   const showError = useCallback((msg) => {
     setErrorMessage(msg);
-    setTimeout(() => setErrorMessage(null), 4000);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => {
+      errorTimerRef.current = null;
+      setErrorMessage(null);
+    }, 4000);
   }, []);
 
   // ---- editor ref ----

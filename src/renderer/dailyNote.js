@@ -19,7 +19,10 @@ export function formatDailyNote(format, date = new Date()) {
   try {
     const out = dayjs(date).format(format || DEFAULT_DAILY_NOTE_FORMAT);
     return out;
-  } catch {
+  } catch (err) {
+    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+      console.warn('[formatDailyNote] invalid format', { format, error: err });
+    }
     return '';
   }
 }

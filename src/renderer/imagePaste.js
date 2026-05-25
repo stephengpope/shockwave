@@ -15,6 +15,7 @@
 //   collisions get " 1", " 2", … appended automatically.
 
 import { EditorView, ViewPlugin } from '@codemirror/view';
+import { dirOf } from './pathUtils.js';
 
 const MIME_TO_EXT = {
   'image/png': '.png',
@@ -27,11 +28,6 @@ const MIME_TO_EXT = {
 
 function extFor(file) {
   return MIME_TO_EXT[file.type] ?? null;
-}
-
-function dirOf(filePath) {
-  const i = filePath.lastIndexOf('/');
-  return i >= 0 ? filePath.slice(0, i) : '';
 }
 
 function basenameNoExt(name) {

@@ -107,22 +107,6 @@ export function CalendarIcon({ size = 20, day = null }) {
   );
 }
 
-export function ChevronLeftIcon({ size = 14 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
-      <polyline points="15 18 9 12 15 6" />
-    </svg>
-  );
-}
-
-export function ChevronRightIcon({ size = 14 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
-  );
-}
-
 export function GraphIcon({ size = 20 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
@@ -184,16 +168,6 @@ export function StopIcon({ size = 14 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
       <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" />
-    </svg>
-  );
-}
-
-export function PlusCircleIcon({ size = 14 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
-      <circle cx="12" cy="12" r="10" />
-      <line x1="12" y1="8" x2="12" y2="16" />
-      <line x1="8" y1="12" x2="16" y2="12" />
     </svg>
   );
 }

@@ -337,11 +337,11 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
     const files = [...(fileList ?? [])];
     if (files.length === 0) return;
     const added = [];
-    let lastReject = null;
+    const failures = [];
     for (const file of files) {
       const kind = classify(file);
       if (!kind) {
-        lastReject = { name: file.name, reason: 'unsupported format' };
+        failures.push({ name: file.name, reason: 'unsupported format' });
         continue;
       }
       try {
@@ -369,11 +369,19 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
           });
         }
       } catch (err) {
-        lastReject = { name: file.name, reason: err?.message ?? String(err) };
+        failures.push({ name: file.name, reason: err?.message ?? String(err) });
       }
     }
     if (added.length > 0) setAttachments((prev) => [...prev, ...added]);
-    if (lastReject) setRejected(lastReject);
+    if (failures.length === 1) {
+      setRejected(failures[0]);
+    } else if (failures.length > 1) {
+      const first = failures[0];
+      setRejected({
+        name: `${failures.length} files`,
+        reason: `${first.name}: ${first.reason} (+${failures.length - 1} more)`,
+      });
+    }
   }, []);
 
   const removeAttachment = useCallback((id) => {

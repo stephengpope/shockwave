@@ -30,6 +30,38 @@ app.setName(APP_NAME);
 // asar at runtime. Both layouts have `build/icon.png` two levels up.
 const ICON_PATH = path.join(__dirname, '..', '..', 'build', 'icon.png');
 
+// Case-insensitive markdown extension check. Single source of truth for the
+// "is this a .md file?" question across the watcher, tree walks, IPC handlers,
+// and rename logic. Previously this was written 4 different ways across 10+
+// sites in this file.
+function isMdFile(name) {
+  return typeof name === 'string' && name.toLowerCase().endsWith('.md');
+}
+
+// Pop up a native context menu and resolve with the value attached to the
+// clicked item (or null on dismiss). Items in `template` use the standard
+// Electron MenuItem shape, with one addition: `{ label, value }` items get a
+// click handler synthesized for you that records the value. Built-in role
+// items (`{ role: 'cut' }` etc.) and items with a custom `click` pass
+// through unchanged.
+function popupContextMenu(win, template) {
+  return new Promise((resolve) => {
+    let chosen = null;
+    const items = template.map((item) => {
+      if (item && typeof item === 'object' && 'value' in item && !item.click) {
+        const { value, ...rest } = item;
+        return { ...rest, click: () => { chosen = value; } };
+      }
+      return item;
+    });
+    const menu = Menu.buildFromTemplate(items);
+    menu.on('menu-will-close', () => {
+      setImmediate(() => resolve(chosen));
+    });
+    menu.popup({ window: win });
+  });
+}
+
 const DEFAULT_SETTINGS = {
   workspaces: [],
   activeWorkspaceId: null,
@@ -345,25 +377,18 @@ ipcMain.handle('fs:readTree', async (_evt, dirPath) => {
   return buildTree(dirPath);
 });
 
-async function readAllMarkdown(dirPath, out = []) {
-  const entries = await fs.readdir(dirPath, { withFileTypes: true });
-  for (const e of entries) {
-    if (e.name.startsWith('.')) continue;
-    if (e.isSymbolicLink()) continue;
-    const full = path.join(dirPath, e.name);
-    if (e.isDirectory()) {
-      await readAllMarkdown(full, out);
-    } else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
-      try {
-        const [content, stat] = await Promise.all([
-          fs.readFile(full, 'utf8'),
-          fs.stat(full),
-        ]);
-        const outgoingLinks = parseLinks(content);
-        out.push({ path: full, mtime: stat.mtimeMs, outgoingLinks });
-      } catch {
-        // swallow per-file errors so one bad file doesn't kill the vault load
-      }
+async function readAllMarkdown(dirPath) {
+  const paths = await walkMarkdownPaths(dirPath);
+  const out = [];
+  for (const full of paths) {
+    try {
+      const [content, stat] = await Promise.all([
+        fs.readFile(full, 'utf8'),
+        fs.stat(full),
+      ]);
+      out.push({ path: full, mtime: stat.mtimeMs, outgoingLinks: parseLinks(content) });
+    } catch {
+      // swallow per-file errors so one bad file doesn't kill the vault load
     }
   }
   return out;
@@ -415,7 +440,7 @@ async function collectMarkdownBasenamesLower(root, excludePaths = new Set()) {
       if (excludePaths.has(full)) continue;
       if (e.isDirectory()) {
         await walk(full);
-      } else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) {
+      } else if (e.isFile() && isMdFile(e.name)) {
         out.add(e.name.slice(0, -3).toLowerCase());
       }
     }
@@ -457,26 +482,30 @@ async function uniqueInWorkspace({ workspaceRoot, destDir, base, ext, excludePat
   }
 }
 
-// Walk a directory and return absolute paths of every .md file under it
-// (recursively). Used so callers can exclude the contents of a file/folder
-// being moved from the collision check (you can't collide with yourself).
-async function listMarkdownPathsUnder(root) {
+// Recursively collect absolute paths of every .md file under `root`. If
+// `root` is itself a .md file, returns [root]. Errors (missing dir, EACCES)
+// resolve to []. Dotfiles (.git, .obsidian, .shockwave, etc.) are skipped.
+//
+// Single helper for all "find me the markdown files under X" callers:
+// collision-check exclusion (move/rename), correlator seeding, and the
+// agent's resolve_link tool.
+async function walkMarkdownPaths(root, { skipSymlinks = true } = {}) {
   const out = [];
   async function walk(dir) {
     let entries;
     try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       if (e.name.startsWith('.')) continue;
-      if (e.isSymbolicLink()) continue;
+      if (skipSymlinks && e.isSymbolicLink()) continue;
       const full = path.join(dir, e.name);
       if (e.isDirectory()) await walk(full);
-      else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) out.push(full);
+      else if (e.isFile() && isMdFile(e.name)) out.push(full);
     }
   }
   try {
     const st = await fs.stat(root);
     if (st.isDirectory()) await walk(root);
-    else if (root.toLowerCase().endsWith('.md')) out.push(root);
+    else if (isMdFile(root)) out.push(root);
   } catch {}
   return out;
 }
@@ -503,7 +532,7 @@ async function hashFileOf(p) {
 }
 
 ipcMain.handle('fs:createFile', async (_evt, { dirPath, name, content = '' }) => {
-  const ext = name.endsWith('.md') ? '' : '.md';
+  const ext = isMdFile(name) ? '' : '.md';
   const base = ext ? name : name.slice(0, -3);
   const target = await uniquePath(dirPath, base, ext || '.md');
   await fs.writeFile(target, content, 'utf8');
@@ -599,53 +628,32 @@ function revealLabel() {
 ipcMain.handle('context:fileMenu', async (evt, opts = {}) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
   const { isMd = true, isBookmarked = false } = opts;
-  return new Promise((resolve) => {
-    let chosen = null;
-    const template = [];
-    if (isMd) {
-      template.push(
-        { label: 'Open in new tab', click: () => { chosen = FILE_ACTIONS.NEW_TAB; } },
-      );
-    }
-    template.push(
-      { label: 'Duplicate', click: () => { chosen = FILE_ACTIONS.DUPLICATE; } },
-      { type: 'separator' },
-      {
-        label: isBookmarked ? 'Remove bookmark' : 'Bookmark',
-        click: () => { chosen = FILE_ACTIONS.TOGGLE_BOOKMARK; },
-      },
-      { type: 'separator' },
-      { label: revealLabel(), click: () => { chosen = FILE_ACTIONS.REVEAL; } },
-      { type: 'separator' },
-      { label: 'Rename', click: () => { chosen = FILE_ACTIONS.RENAME; } },
-      { label: 'Delete', click: () => { chosen = FILE_ACTIONS.DELETE; } },
-    );
-    const menu = Menu.buildFromTemplate(template);
-    menu.on('menu-will-close', () => {
-      setImmediate(() => resolve(chosen));
-    });
-    menu.popup({ window: win });
-  });
+  const template = [];
+  if (isMd) template.push({ label: 'Open in new tab', value: FILE_ACTIONS.NEW_TAB });
+  template.push(
+    { label: 'Duplicate', value: FILE_ACTIONS.DUPLICATE },
+    { type: 'separator' },
+    { label: isBookmarked ? 'Remove bookmark' : 'Bookmark', value: FILE_ACTIONS.TOGGLE_BOOKMARK },
+    { type: 'separator' },
+    { label: revealLabel(), value: FILE_ACTIONS.REVEAL },
+    { type: 'separator' },
+    { label: 'Rename', value: FILE_ACTIONS.RENAME },
+    { label: 'Delete', value: FILE_ACTIONS.DELETE },
+  );
+  return popupContextMenu(win, template);
 });
 
 ipcMain.handle('context:folderMenu', async (evt) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
-  return new Promise((resolve) => {
-    let chosen = null;
-    const menu = Menu.buildFromTemplate([
-      { label: 'New file', click: () => { chosen = FOLDER_ACTIONS.NEW_FILE; } },
-      { label: 'New folder', click: () => { chosen = FOLDER_ACTIONS.NEW_FOLDER; } },
-      { type: 'separator' },
-      { label: revealLabel(), click: () => { chosen = FOLDER_ACTIONS.REVEAL; } },
-      { type: 'separator' },
-      { label: 'Rename', click: () => { chosen = FOLDER_ACTIONS.RENAME; } },
-      { label: 'Delete', click: () => { chosen = FOLDER_ACTIONS.DELETE; } },
-    ]);
-    menu.on('menu-will-close', () => {
-      setImmediate(() => resolve(chosen));
-    });
-    menu.popup({ window: win });
-  });
+  return popupContextMenu(win, [
+    { label: 'New file', value: FOLDER_ACTIONS.NEW_FILE },
+    { label: 'New folder', value: FOLDER_ACTIONS.NEW_FOLDER },
+    { type: 'separator' },
+    { label: revealLabel(), value: FOLDER_ACTIONS.REVEAL },
+    { type: 'separator' },
+    { label: 'Rename', value: FOLDER_ACTIONS.RENAME },
+    { label: 'Delete', value: FOLDER_ACTIONS.DELETE },
+  ]);
 });
 
 ipcMain.handle('fs:createFolder', async (_evt, { dirPath, name = 'New folder' }) => {
@@ -715,7 +723,7 @@ ipcMain.handle('fs:moveItem', async (_evt, { srcPath, destDir }) => {
   if (path.join(destDir, name).startsWith(srcPath + path.sep) || destDir === srcPath) {
     throw new Error('Cannot move a folder into itself.');
   }
-  const isMd = name.toLowerCase().endsWith('.md');
+  const isMd = isMdFile(name);
   let stat;
   try { stat = await fs.stat(srcPath); } catch { stat = null; }
   const isFolder = stat?.isDirectory();
@@ -735,7 +743,7 @@ ipcMain.handle('fs:moveItem', async (_evt, { srcPath, destDir }) => {
     // Folder move: same-dir uniqueness (folders don't share the link-index basename space),
     // plus workspace-wide uniqueness for every .md file the folder contains, treating its
     // own .md files as excluded (they move with it).
-    const inside = await listMarkdownPathsUnder(srcPath);
+    const inside = await walkMarkdownPaths(srcPath);
     target = path.join(destDir, name);
     // If the literal target dir already exists, append " 1", " 2", ...
     let candidate = target;
@@ -796,43 +804,35 @@ ipcMain.handle('fs:renameFolder', async (_evt, { fromPath, toName }) => {
 
 ipcMain.handle('context:editorMenu', async (evt, { hasSelection, hasFilePath, hasLink } = {}) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
-  return new Promise((resolve) => {
-    let chosen = null;
-    const template = [];
-    if (hasSelection) {
-      template.push(
-        { label: 'Add link',          click: () => { chosen = EDITOR_ACTIONS.ADD_LINK; } },
-        { label: 'Add external link', click: () => { chosen = EDITOR_ACTIONS.ADD_EXTERNAL_LINK; } },
-        { type: 'separator' },
-      );
-    }
-    if (hasLink) {
-      template.push(
-        { label: 'Edit external link',   click: () => { chosen = EDITOR_ACTIONS.EDIT_EXTERNAL_LINK; } },
-        { label: 'Remove external link', click: () => { chosen = EDITOR_ACTIONS.REMOVE_EXTERNAL_LINK; } },
-        { type: 'separator' },
-      );
-    }
-    if (hasFilePath) {
-      template.push({
-        label: 'Message Agent',
-        click: () => { chosen = EDITOR_ACTIONS.SEND_TO_AGENT; },
-      });
-      template.push({ type: 'separator' });
-    }
+  const template = [];
+  if (hasSelection) {
     template.push(
-      { role: 'cut',   enabled: hasSelection },
-      { role: 'copy',  enabled: hasSelection },
-      { role: 'paste' },
+      { label: 'Add link',          value: EDITOR_ACTIONS.ADD_LINK },
+      { label: 'Add external link', value: EDITOR_ACTIONS.ADD_EXTERNAL_LINK },
       { type: 'separator' },
-      { role: 'selectAll' },
     );
-    const menu = Menu.buildFromTemplate(template);
-    menu.on('menu-will-close', () => {
-      setImmediate(() => resolve(chosen));
-    });
-    menu.popup({ window: win });
-  });
+  }
+  if (hasLink) {
+    template.push(
+      { label: 'Edit external link',   value: EDITOR_ACTIONS.EDIT_EXTERNAL_LINK },
+      { label: 'Remove external link', value: EDITOR_ACTIONS.REMOVE_EXTERNAL_LINK },
+      { type: 'separator' },
+    );
+  }
+  if (hasFilePath) {
+    template.push(
+      { label: 'Message Agent', value: EDITOR_ACTIONS.SEND_TO_AGENT },
+      { type: 'separator' },
+    );
+  }
+  template.push(
+    { role: 'cut',   enabled: hasSelection },
+    { role: 'copy',  enabled: hasSelection },
+    { role: 'paste' },
+    { type: 'separator' },
+    { role: 'selectAll' },
+  );
+  return popupContextMenu(win, template);
 });
 
 ipcMain.handle('settings:read', async () => {
@@ -1069,8 +1069,13 @@ async function flushWatcher() {
         mtime: stat.mtimeMs,
         outgoingLinks: parseLinks(content),
       });
-    } catch {
-      // file may have been deleted between event and read
+    } catch (err) {
+      // ENOENT = file was deleted between watcher event and read (expected
+      // race). Anything else (permission denied, decode error) is worth
+      // surfacing so users can investigate why their file isn't appearing.
+      if (err?.code !== 'ENOENT') {
+        console.warn('[watcher] flush read failed', p, err?.code ?? '', err?.message ?? err);
+      }
     }
   }
 
@@ -1105,7 +1110,7 @@ function setupCorrelator() {
 }
 
 async function onChokidarAdd(p) {
-  if (!p.toLowerCase().endsWith('.md')) {
+  if (!isMdFile(p)) {
     pendingTreeOnly = true;
     scheduleFlush();
     return;
@@ -1115,7 +1120,7 @@ async function onChokidarAdd(p) {
 }
 
 async function onChokidarChange(p) {
-  if (!p.toLowerCase().endsWith('.md')) {
+  if (!isMdFile(p)) {
     pendingTreeOnly = true;
     scheduleFlush();
     return;
@@ -1129,7 +1134,7 @@ async function onChokidarChange(p) {
 }
 
 function onChokidarUnlink(p) {
-  if (!p.toLowerCase().endsWith('.md')) {
+  if (!isMdFile(p)) {
     pendingTreeOnly = true;
     scheduleFlush();
     return;
@@ -1141,7 +1146,7 @@ function onChokidarUnlink(p) {
 // workspace. Runs once on watchStart, before chokidar fires any events, so an
 // unlink right after startup can still be correlated to its prior identity.
 async function seedCorrelator(root) {
-  const paths = await listMarkdownPathsUnder(root);
+  const paths = await walkMarkdownPaths(root);
   await Promise.all(paths.map(async (p) => {
     const [ino, hash] = await Promise.all([statInoOf(p), hashFileOf(p)]);
     correlator.onPathSeen(p, ino, hash);
@@ -1235,21 +1240,6 @@ async function activeWorkspacePath() {
   return ws?.path ?? null;
 }
 
-async function walkMarkdownFiles(root) {
-  // Skip dotfiles (.git, .obsidian, etc.) — mirrors buildTree's ignore rule.
-  const out = [];
-  async function walk(dir) {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const e of entries) {
-      if (e.name.startsWith('.')) continue;
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) await walk(full);
-      else if (e.name.toLowerCase().endsWith('.md')) out.push(full);
-    }
-  }
-  await walk(root);
-  return out;
-}
 
 installLinkIndexBridge({
   async resolve(basename) {
@@ -1257,7 +1247,7 @@ installLinkIndexBridge({
     if (!ws) return { path: null, backlinks: [] };
     const target = (basename ?? '').replace(/\.md$/i, '').trim().toLowerCase();
     if (!target) return { path: null, backlinks: [] };
-    const files = await walkMarkdownFiles(ws);
+    const files = await walkMarkdownPaths(ws);
     let matched = null;
     const backlinks = [];
     for (const filePath of files) {

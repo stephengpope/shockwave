@@ -34,22 +34,19 @@ export default function SortBar({
 }) {
   const rootRef = useRef(null);
   const bookmarkBtnRef = useRef(null);
-  const [open, setOpen] = useState(false);
-  const [bmPickerOpen, setBmPickerOpen] = useState(false);
+  // Only one menu can be open at a time: 'sort' | 'bookmarks' | null.
+  const [openMenu, setOpenMenu] = useState(null);
+  const open = openMenu === 'sort';
+  const bmPickerOpen = openMenu === 'bookmarks';
 
   useEffect(() => {
-    if (!open && !bmPickerOpen) return;
+    if (!openMenu) return;
+    const close = () => setOpenMenu(null);
     const onDown = (e) => {
-      if (rootRef.current && !rootRef.current.contains(e.target)) {
-        setOpen(false);
-        setBmPickerOpen(false);
-      }
+      if (rootRef.current && !rootRef.current.contains(e.target)) close();
     };
     const onKey = (e) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        setBmPickerOpen(false);
-      }
+      if (e.key === 'Escape') close();
     };
     window.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onKey);
@@ -57,7 +54,7 @@ export default function SortBar({
       window.removeEventListener('mousedown', onDown);
       window.removeEventListener('keydown', onKey);
     };
-  }, [open, bmPickerOpen]);
+  }, [openMenu]);
 
   // Compose [{abs, rel, name}] sorted by name for the picker. Workspace-
   // relative path renders below the basename so users can disambiguate two
@@ -87,7 +84,7 @@ export default function SortBar({
         onContextMenu={(e) => {
           e.preventDefault();
           if (disabled) return;
-          setBmPickerOpen((v) => !v);
+          setOpenMenu((m) => (m === 'bookmarks' ? null : 'bookmarks'));
         }}
         disabled={disabled}
         title={bookmarkFilterActive ? 'Show all files (right-click to pick)' : 'Show bookmarks only (right-click to pick)'}
@@ -108,7 +105,7 @@ export default function SortBar({
                 className="bookmark-picker-item"
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  setBmPickerOpen(false);
+                  setOpenMenu(null);
                   onPickBookmark?.(row.abs);
                 }}
               >
@@ -134,7 +131,7 @@ export default function SortBar({
           <button
             type="button"
             className="sort-bar-icon-btn"
-            onClick={() => setOpen((o) => !o)}
+            onClick={() => setOpenMenu((m) => (m === 'sort' ? null : 'sort'))}
             disabled={disabled}
             title={`Sort: ${TREE_SORT_LABELS[value] || TREE_SORT_LABELS[TREE_SORT_ORDERS.NAME_ASC]}`}
             aria-haspopup="listbox"
@@ -164,7 +161,7 @@ export default function SortBar({
                 role="option"
                 aria-selected={id === value}
                 className={`sort-bar-item ${id === value ? 'is-active' : ''}`}
-                onMouseDown={(e) => { e.preventDefault(); onChange(id); setOpen(false); }}
+                onMouseDown={(e) => { e.preventDefault(); onChange(id); setOpenMenu(null); }}
               >
                 {TREE_SORT_LABELS[id]}
               </li>
