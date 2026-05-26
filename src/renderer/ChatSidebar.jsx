@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { PaperclipIcon, PlayIcon, StopIcon, RotateCcwIcon, XIcon, FileTextIcon } from './Icons.jsx';
@@ -104,6 +104,40 @@ function AttachmentRow({ attachments, onRemove, readOnly }) {
     </div>
   );
 }
+
+// One rendered chat row. Memoized so typing in the composer (which re-renders
+// the parent ChatSidebar) does NOT walk every message and call ReactMarkdown
+// again. Every message object is referentially stable across non-mutating
+// updates (see setMessages callers), so the default shallow-prop compare
+// returns true for un-touched rows. Only the actively-streaming message gets a
+// new reference and re-renders.
+const MessageRow = memo(function MessageRow({ message: m }) {
+  if (m.kind === 'user') {
+    return (
+      <div className="chat-message chat-user">
+        <div className="chat-bubble">
+          {m.attachments && m.attachments.length > 0 && (
+            <AttachmentRow attachments={m.attachments} readOnly />
+          )}
+          {m.text && <div className="chat-user-text">{m.text}</div>}
+        </div>
+      </div>
+    );
+  }
+  if (m.kind === 'assistant') {
+    return (
+      <div className="chat-message chat-assistant">
+        <div className="chat-bubble chat-markdown">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+        </div>
+      </div>
+    );
+  }
+  if (m.kind === 'tool') {
+    return <div className="chat-message chat-tool-row"><ToolEntry entry={m} /></div>;
+  }
+  return null;
+});
 
 function ToolEntry({ entry }) {
   const [open, setOpen] = useState(false);
@@ -537,33 +571,7 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
       </div>
 
       <div ref={scrollRef} className="chat-messages">
-        {messages.map((m) => {
-          if (m.kind === 'user') {
-            return (
-              <div key={m.id} className="chat-message chat-user">
-                <div className="chat-bubble">
-                  {m.attachments && m.attachments.length > 0 && (
-                    <AttachmentRow attachments={m.attachments} readOnly />
-                  )}
-                  {m.text && <div className="chat-user-text">{m.text}</div>}
-                </div>
-              </div>
-            );
-          }
-          if (m.kind === 'assistant') {
-            return (
-              <div key={m.id} className="chat-message chat-assistant">
-                <div className="chat-bubble chat-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
-                </div>
-              </div>
-            );
-          }
-          if (m.kind === 'tool') {
-            return <div key={m.id} className="chat-message chat-tool-row"><ToolEntry entry={m} /></div>;
-          }
-          return null;
-        })}
+        {messages.map((m) => <MessageRow key={m.id} message={m} />)}
         {running && (
           <div className="chat-thinking">
             <svg
