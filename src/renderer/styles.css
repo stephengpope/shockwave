@@ -2046,7 +2046,7 @@ html, body, #root {
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 4px;
   padding: 6px 10px;
   flex-shrink: 0;
@@ -2079,12 +2079,12 @@ html, body, #root {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
+  border: 1px solid var(--border);
   background: transparent;
   color: var(--fg-secondary);
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
+  width: 28px;
+  height: 26px;
+  border-radius: 6px;
   cursor: pointer;
   padding: 0;
 }
@@ -2269,7 +2269,7 @@ html, body, #root {
 }
 
 .chat-tool {
-  font-size: 12px;
+  font-size: 13px;
   background: transparent;
   border: none;
 }
@@ -2294,6 +2294,8 @@ html, body, #root {
 
 .chat-tool-caret { width: 12px; flex-shrink: 0; }
 .chat-tool-status { width: 12px; text-align: center; flex-shrink: 0; }
+.chat-tool-status-ok { color: var(--fg-secondary); }
+.chat-tool-status-error { color: var(--fg-error); }
 .chat-tool-name { color: var(--fg-accent); font-weight: 500; flex-shrink: 0; }
 .chat-tool-arg {
   color: var(--fg-secondary);
@@ -2305,21 +2307,51 @@ html, body, #root {
 }
 
 .chat-tool-detail {
-  padding: 4px 0 4px 18px;
+  padding: 10px 0 4px 18px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
-.chat-tool-text {
+.chat-tool-args {
   margin: 0;
-  font-size: 11px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-secondary);
+}
+.chat-tool-args-shell { color: var(--fg-primary); }
+.chat-tool-shell-prompt { color: var(--fg-muted); user-select: none; }
+.chat-tool-arg-path { color: var(--fg-accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.chat-tool-arg-row { font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chat-tool-arg-key { color: var(--fg-muted); margin-right: 6px; }
+.chat-tool-edit-block { margin-top: 4px; border-left: 2px solid var(--border); padding-left: 6px; }
+.chat-tool-edit-del { color: var(--fg-error); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; white-space: pre-wrap; }
+.chat-tool-edit-add { color: var(--fg-success, #2da44e); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; white-space: pre-wrap; }
+
+.chat-tool-output {
+  position: relative;
+  margin: 0;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  font-size: 13px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--fg-secondary);
   max-height: 240px;
   overflow: auto;
+}
+.chat-tool-output-text { white-space: pre-wrap; }
+.chat-tool-cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--fg-accent);
+  animation: chat-tool-cursor-blink 1s steps(2, start) infinite;
+}
+@keyframes chat-tool-cursor-blink {
+  to { visibility: hidden; }
 }
 
 .chat-thinking {
@@ -2474,6 +2506,102 @@ html, body, #root {
   color: var(--fg-primary);
 }
 .chat-attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---------- Voice (mic) button + bars ---------- */
+
+.chat-voice-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-secondary);
+  border-radius: 6px;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.chat-voice-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.chat-voice-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.chat-voice-btn[data-state="connecting"] {
+  animation: chat-voice-pulse 1s ease-in-out infinite;
+}
+
+.chat-voice-btn[data-state="recording"] {
+  background: #000;
+  border-color: #000;
+  color: #fff;
+}
+
+.chat-voice-btn[data-state="recording"]:hover:not(:disabled) {
+  background: #000;
+  color: #fff;
+  filter: brightness(1.4);
+}
+
+@keyframes chat-voice-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.chat-voice-bars {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 16px;
+  height: 16px;
+}
+
+.chat-voice-bar {
+  display: block;
+  width: 2px;
+  height: 3px;
+  border-radius: 1px;
+  background: currentColor;
+  transition: height 80ms ease-out;
+}
+
+/* ---------- Transcription settings page ---------- */
+
+.transcription-test {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.transcription-result {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  min-height: 60px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.transcription-result-placeholder {
+  color: var(--fg-secondary);
+  font-style: italic;
+}
+
+.transcription-result-text {
+  color: var(--fg-primary);
+}
+
+.transcription-partial {
+  color: var(--fg-secondary);
+  font-style: italic;
+}
 
 .chat-attachments {
   display: flex;

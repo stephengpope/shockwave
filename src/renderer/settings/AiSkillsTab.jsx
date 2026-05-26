@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { TrashIcon } from '../Icons.jsx';
+import ConfirmDialog from '../ConfirmDialog.jsx';
 
 const GLOBAL_STATES = ['enabled', 'disabled'];
 
@@ -43,6 +44,7 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(null);
 
   // Async settings calls (reload, importPicker, importFromPath, remove) may
   // resolve after the modal closes. Gate all state updates on this so we
@@ -196,7 +198,7 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
                   <button
                     type="button"
                     className="icon-btn"
-                    onClick={() => onRemove(skill)}
+                    onClick={() => setConfirmRemove(skill)}
                     title="Remove skill"
                     aria-label={`Remove ${skill.name}`}
                     style={{ marginLeft: 'auto' }}
@@ -211,6 +213,20 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
       <p className="settings-field-hint">
         Changes take effect on the next chat session. Use the chat sidebar's Clear button to start a new session.
       </p>
+
+      <ConfirmDialog
+        open={!!confirmRemove}
+        title="Remove skill"
+        message={confirmRemove ? `Remove "${confirmRemove.name}"? Its files will be deleted from the skill library.` : ''}
+        confirmLabel="Remove"
+        destructive
+        onConfirm={() => {
+          const target = confirmRemove;
+          setConfirmRemove(null);
+          if (target) onRemove(target);
+        }}
+        onClose={() => setConfirmRemove(null)}
+      />
     </div>
   );
 }

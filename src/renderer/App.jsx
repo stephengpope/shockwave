@@ -145,6 +145,9 @@ export default function App() {
   // Tokens come from main already decrypted; persisted via the standard settings flow.
   const [agentSecrets, setAgentSecrets] = useState([]);
   const agentSecretsRef = useSyncRef(agentSecrets);
+  // AssemblyAI streaming transcription config. apiKey arrives decrypted from main.
+  const [transcription, setTranscription] = useState({ provider: 'assemblyai', apiKey: '' });
+  const transcriptionRef = useSyncRef(transcription);
   const [systemPrefersDark, setSystemPrefersDark] = useState(false);
   const [bootDone, setBootDone] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -388,6 +391,7 @@ export default function App() {
       treeSortOrder: next.treeSortOrder ?? treeSortOrderRef.current,
       codingAgent: next.codingAgent ?? codingAgentSettingsRef.current,
       agentSecrets: next.agentSecrets ?? agentSecretsRef.current,
+      transcription: next.transcription ?? transcriptionRef.current,
       sidebarWidth: next.sidebarWidth ?? sidebarWidthRef.current,
       viewMode: next.viewMode ?? viewModeRef.current,
       chatSidebarOpen: next.chatSidebarOpen ?? chatSidebarOpenRef.current,
@@ -598,6 +602,12 @@ export default function App() {
     setAgentSecrets(next);
     agentSecretsRef.current = next;
     await persistSettings({ workspaces, activeWorkspaceId, themeMode, agentSecrets: next });
+  }, [persistSettings, workspaces, activeWorkspaceId, themeMode]);
+
+  const onTranscriptionChange = useCallback(async (next) => {
+    setTranscription(next);
+    transcriptionRef.current = next;
+    await persistSettings({ workspaces, activeWorkspaceId, themeMode, transcription: next });
   }, [persistSettings, workspaces, activeWorkspaceId, themeMode]);
 
   // ---- title commit (rename existing or promote draft) ----
@@ -1027,6 +1037,14 @@ export default function App() {
       if (Array.isArray(settings.agentSecrets)) {
         setAgentSecrets(settings.agentSecrets);
         agentSecretsRef.current = settings.agentSecrets;
+      }
+      if (settings.transcription) {
+        const t = {
+          provider: settings.transcription.provider || 'assemblyai',
+          apiKey: settings.transcription.apiKey || '',
+        };
+        setTranscription(t);
+        transcriptionRef.current = t;
       }
       if (typeof settings.sidebarWidth === 'number') {
         setSidebarWidth(settings.sidebarWidth);
@@ -1505,9 +1523,6 @@ export default function App() {
         title="Send to Agent"
         footer={
           <>
-            <button className="dialog-button" onClick={() => setSendToAgentPending(null)}>
-              Cancel
-            </button>
             <button
               className="dialog-button"
               onClick={() => {
@@ -1527,6 +1542,9 @@ export default function App() {
               }}
             >
               Replace
+            </button>
+            <button className="dialog-button" onClick={() => setSendToAgentPending(null)}>
+              Cancel
             </button>
           </>
         }
@@ -1555,6 +1573,8 @@ export default function App() {
           onCodingAgentChange={onCodingAgentChange}
           agentSecrets={agentSecrets}
           onAgentSecretsChange={onAgentSecretsChange}
+          transcription={transcription}
+          onTranscriptionChange={onTranscriptionChange}
           saveStatus={saveStatus}
         />
       )}

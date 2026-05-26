@@ -80,6 +80,11 @@ const DEFAULT_SETTINGS = {
   // `name` is the unique identifier (case-insensitive). `token` is encrypted on disk
   // via safeStorage (see encryptSecret).
   agentSecrets: [],
+  // Voice transcription. `apiKey` is the AssemblyAI key, encrypted on disk via
+  // safeStorage. The renderer never sees the key — it requests short-lived (60s)
+  // streaming tokens via the `voice:getToken` IPC, which is what the WebSocket
+  // to AssemblyAI authenticates with.
+  transcription: { provider: 'assemblyai', apiKey: '' },
   chatSidebarOpen: false,
   chatSidebarWidth: 360,
   // File-tree sort order. One of: 'name-asc' | 'name-desc' | 'modified-desc' |
@@ -152,6 +157,10 @@ async function readSettings() {
         },
       },
       agentSecrets: Array.isArray(parsed.agentSecrets) ? parsed.agentSecrets : [],
+      transcription: {
+        ...DEFAULT_SETTINGS.transcription,
+        ...(parsed.transcription ?? {}),
+      },
     };
     // Decrypt secret-bearing fields. Legacy plaintext values pass through
     // unchanged via decryptSecret's no-prefix branch and get re-encrypted on
@@ -161,6 +170,7 @@ async function readSettings() {
       ...s,
       token: decryptSecret(s.token ?? ''),
     }));
+    merged.transcription.apiKey = decryptSecret(merged.transcription.apiKey);
     return merged;
   } catch {
     return { ...DEFAULT_SETTINGS, agentSecrets: [] };
@@ -201,6 +211,7 @@ async function doWriteSettings(patch) {
       token: encryptSecret(s.token ?? ''),
     }));
   }
+  if (out.transcription) out.transcription.apiKey = encryptSecret(out.transcription.apiKey ?? '');
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8');
   await fs.rename(tmp, file);
@@ -729,6 +740,27 @@ ipcMain.handle('settings:read', async () => {
 
 ipcMain.handle('settings:write', async (_evt, obj) => {
   await writeSettings(obj);
+});
+
+// Mint a short-lived AssemblyAI streaming token. The long-lived API key sits
+// encrypted in settings and never crosses to the renderer — only the 60s temp
+// token does, which is just the WebSocket session credential.
+ipcMain.handle('voice:getToken', async () => {
+  const settings = await readSettings();
+  const apiKey = settings.transcription?.apiKey;
+  if (!apiKey) return { error: 'Voice transcription not configured' };
+  try {
+    const res = await fetch(
+      'https://streaming.assemblyai.com/v3/token?expires_in_seconds=60',
+      { headers: { Authorization: apiKey } },
+    );
+    if (!res.ok) return { error: 'Failed to get voice token' };
+    const data = await res.json();
+    return { token: data.token };
+  } catch (err) {
+    console.warn('[voice] token request failed:', err.message);
+    return { error: 'Voice token request failed' };
+  }
 });
 
 // ---- Coding agent (pi) ----

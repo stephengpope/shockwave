@@ -1,7 +1,7 @@
 import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { PaperclipIcon, PlayIcon, StopIcon, RotateCcwIcon, XIcon, FileTextIcon } from './Icons.jsx';
+import { PaperclipIcon, PlayIcon, StopIcon, RotateCcwIcon, XIcon, FileTextIcon, MicIcon } from './Icons.jsx';
 import {
   classify,
   readAsBase64,
@@ -11,6 +11,8 @@ import {
   composePromptText,
   toImageContents,
 } from './chatAttachments.js';
+import { useVoiceInput } from './voice/useVoiceInput.js';
+import { VoiceBars } from './voice/VoiceBars.jsx';
 
 // Build a short, human-readable summary line for a tool call.
 function toolSummary(toolName, args) {
@@ -33,15 +35,70 @@ function toolSummary(toolName, args) {
   }
 }
 
+// Pi tool results are shaped { content: [{type:'text', text}, ...], details? }.
+// Concat text items; ignore non-text (images). Fall back to JSON for unknowns.
 function formatToolResult(result) {
   if (result == null) return '';
   if (typeof result === 'string') return result;
   if (typeof result === 'object') {
+    if (Array.isArray(result.content)) {
+      return result.content
+        .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
+        .map((c) => c.text)
+        .join('');
+    }
     if (typeof result.output === 'string') return result.output;
     if (typeof result.text === 'string') return result.text;
     try { return JSON.stringify(result, null, 2); } catch { return String(result); }
   }
   return String(result);
+}
+
+// Per-tool detail rendering for the expanded view header (above the output).
+// Keep these terse — the collapsed-summary line already shows the headline arg.
+function ToolArgsDetail({ toolName, args }) {
+  const a = args ?? {};
+  if (toolName === 'bash') {
+    return (
+      <pre className="chat-tool-args chat-tool-args-shell">
+        <span className="chat-tool-shell-prompt">$ </span>{a.command ?? ''}
+      </pre>
+    );
+  }
+  if (toolName === 'edit' && Array.isArray(a.edits)) {
+    return (
+      <div className="chat-tool-args chat-tool-args-edit">
+        <div className="chat-tool-arg-path">{a.path ?? ''}</div>
+        {a.edits.map((e, i) => (
+          <div key={i} className="chat-tool-edit-block">
+            {String(e?.oldText ?? '').split('\n').map((ln, j) => (
+              <div key={`o${j}`} className="chat-tool-edit-del">- {ln}</div>
+            ))}
+            {String(e?.newText ?? '').split('\n').map((ln, j) => (
+              <div key={`n${j}`} className="chat-tool-edit-add">+ {ln}</div>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (toolName === 'write') {
+    return <div className="chat-tool-args chat-tool-arg-path">{a.path ?? ''}</div>;
+  }
+  if (toolName === 'read' || toolName === 'ls') {
+    return <div className="chat-tool-args chat-tool-arg-path">{a.path ?? ''}</div>;
+  }
+  if (toolName === 'grep' || toolName === 'find') {
+    return (
+      <div className="chat-tool-args">
+        <div className="chat-tool-arg-row"><span className="chat-tool-arg-key">pattern</span> {a.pattern ?? ''}</div>
+        {a.path && <div className="chat-tool-arg-row"><span className="chat-tool-arg-key">path</span> {a.path}</div>}
+      </div>
+    );
+  }
+  let block = '';
+  try { block = JSON.stringify(a, null, 2); } catch { block = String(a); }
+  return <pre className="chat-tool-args">{block}</pre>;
 }
 
 // Xs under 60s, Ym Xs over.
@@ -141,23 +198,27 @@ const MessageRow = memo(function MessageRow({ message: m }) {
 
 function ToolEntry({ entry }) {
   const [open, setOpen] = useState(false);
-  const status = entry.done ? (entry.isError ? '✗' : '✓') : '…';
-  let argsBlock = '';
-  if (entry.args) {
-    try { argsBlock = JSON.stringify(entry.args, null, 2); } catch { argsBlock = String(entry.args); }
-  }
+  const running = !entry.done;
+  const statusClass = entry.isError ? 'chat-tool-status-error' : 'chat-tool-status-ok';
   return (
     <div className={`chat-tool ${entry.isError ? 'chat-tool-error' : ''}`}>
       <button type="button" className="chat-tool-summary" onClick={() => setOpen((v) => !v)}>
         <span className="chat-tool-caret">{open ? '▾' : '▸'}</span>
-        <span className="chat-tool-status">{status}</span>
+        <span className={`chat-tool-status ${statusClass}`}>
+          {running ? '' : entry.isError ? '✗' : '✓'}
+        </span>
         <span className="chat-tool-name">{entry.toolName}</span>
         <span className="chat-tool-arg">{toolSummary(entry.toolName, entry.args)}</span>
       </button>
       {open && (
         <div className="chat-tool-detail">
-          {argsBlock ? <div className="chat-tool-text">{argsBlock}</div> : null}
-          {entry.output ? <div className="chat-tool-text">{entry.output}</div> : null}
+          <ToolArgsDetail toolName={entry.toolName} args={entry.args} />
+          {(entry.output || running) && (
+            <div className="chat-tool-output">
+              <span className="chat-tool-output-text">{entry.output}</span>
+              {running && <span className="chat-tool-cursor" aria-hidden="true">▌</span>}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -174,6 +235,10 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
   const [attachments, setAttachments] = useState([]);
   const [rejected, setRejected] = useState(null); // { name, reason }
   const [dragOver, setDragOver] = useState(false);
+  // Voice input — partialText is the in-flight AssemblyAI partial transcript
+  // (replaced as the model refines, then committed into `input` on end_of_turn).
+  const [partialText, setPartialText] = useState('');
+  const voiceVolumeRef = useRef(0);
   const currentAssistantIdRef = useRef(null);
   const idCounterRef = useRef(0);
   const scrollRef = useRef(null);
@@ -219,6 +284,22 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
+
+  // Voice input hook. Mounts on sidebar mount (always, even while the sidebar
+  // is collapsed to a 28px strip) so the token prefetch runs early — every
+  // mic click after the first ~200ms uses the cached token, zero round-trip.
+  const { voiceAvailable, isConnecting: voiceConnecting, isRecording: voiceRecording, startRecording: startVoice, stopRecording: stopVoice } = useVoiceInput({
+    getToken: () => window.api.voice.getToken(),
+    onTranscript: (finalText) => {
+      setInput((prev) => {
+        const sep = prev && !prev.endsWith(' ') ? ' ' : '';
+        return prev + sep + finalText;
+      });
+    },
+    onPartialTranscript: setPartialText,
+    onError: (msg) => setError(msg),
+    onVolumeChange: (rms) => { voiceVolumeRef.current = rms; },
+  });
 
   const handleAgentEvent = useCallback((evt) => {
     if (!evt || !evt.type) return;
@@ -315,7 +396,16 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
   }, []);
 
   const onSend = useCallback(async () => {
-    const typed = input.trim();
+    // Commit any in-flight partial transcript before submitting. The textarea
+    // displays input+partial as one string, so the user expects the partial
+    // they just said to be part of what gets sent.
+    let typed = input.trim();
+    if (partialText) {
+      const sep = input && !input.endsWith(' ') ? ' ' : '';
+      typed = (input + sep + partialText).trim();
+      setInput(input + sep + partialText);
+      setPartialText('');
+    }
     if (!typed && attachments.length === 0) return;
     if (running) return;
     if (!workspacePath) {
@@ -347,7 +437,7 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
       setRunning(false);
       setError(err?.message ?? String(err));
     }
-  }, [input, attachments, running, workspacePath]);
+  }, [input, partialText, attachments, running, workspacePath]);
 
   const onStop = useCallback(async () => {
     try { await window.api.agent.abort(); } catch {}
@@ -538,6 +628,13 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
         </div>
       )}
       <div className="chat-sidebar-header">
+        <button
+          type="button"
+          className="chat-sidebar-clear"
+          onClick={onClear}
+          title="Start a new session (clears the chat, picks up new skills)"
+          aria-label="New session"
+        ><RotateCcwIcon size={14} /></button>
         <span className="chat-sidebar-title">
           <svg
             className="chat-sidebar-icon"
@@ -612,9 +709,9 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
         <textarea
           ref={textareaRef}
           className="chat-input"
-          value={input}
+          value={input + (partialText ? (input && !input.endsWith(' ') ? ' ' : '') + partialText : '')}
           placeholder="Ask the agent…"
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => { setInput(e.target.value); setPartialText(''); }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           rows={2}
@@ -636,13 +733,21 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
             title="Attach images or text files"
             aria-label="Attach files"
           ><PaperclipIcon size={14} /></button>
-          <button
-            type="button"
-            className="chat-sidebar-clear"
-            onClick={onClear}
-            title="Start a new session (clears the chat, picks up new skills)"
-            aria-label="New session"
-          ><RotateCcwIcon size={14} /></button>
+          {voiceAvailable && (
+            <button
+              type="button"
+              className="chat-voice-btn"
+              data-state={voiceRecording ? 'recording' : voiceConnecting ? 'connecting' : 'idle'}
+              onClick={voiceRecording ? stopVoice : startVoice}
+              disabled={running || voiceConnecting}
+              title={voiceRecording ? 'Stop recording' : voiceConnecting ? 'Connecting…' : 'Voice input'}
+              aria-label={voiceRecording ? 'Stop recording' : 'Start voice input'}
+            >
+              {voiceRecording
+                ? <VoiceBars volumeRef={voiceVolumeRef} isRecording={voiceRecording} />
+                : <MicIcon size={14} />}
+            </button>
+          )}
           {running ? (
             <button
               type="button"
@@ -656,7 +761,7 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
               type="button"
               className="chat-send-btn"
               onClick={onSend}
-              disabled={(!input.trim() && attachments.length === 0) || !workspacePath}
+              disabled={(!input.trim() && !partialText.trim() && attachments.length === 0) || !workspacePath}
               title="Send"
               aria-label="Send"
             ><PlayIcon size={14} /></button>

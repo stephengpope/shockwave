@@ -265,4 +265,16 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('agent:error', listener);
     },
   },
+
+  // ---- Voice transcription (AssemblyAI streaming) ------------------------
+  //
+  // The long-lived AssemblyAI API key sits encrypted in settings and never
+  // crosses this bridge. The renderer only ever asks for a 60s temp token
+  // that authenticates the WebSocket connection to AssemblyAI's /v3/ws.
+
+  voice: {
+    /** Mint a fresh 60-second AssemblyAI streaming token using the configured key.
+     *  @returns {Promise<{ token?: string, error?: string }>} */
+    getToken: () => ipcRenderer.invoke('voice:getToken'),
+  },
 });

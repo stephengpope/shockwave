@@ -13,6 +13,7 @@ export const SETTINGS_SECTIONS = Object.freeze({
   APPEARANCE: 'appearance',
   WORKSPACES: 'workspaces',
   DAILY_NOTE: 'daily-note',
+  TRANSCRIPTION: 'transcription',
   AGENT_LLM: 'agent-llm',
   AGENT_SKILLS: 'agent-skills',
   AGENT_WORKSPACE_SKILLS: 'agent-workspace-skills',
