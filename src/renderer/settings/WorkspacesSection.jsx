@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import ConfirmDialog from '../ConfirmDialog.jsx';
 import { TrashIcon } from '../Icons.jsx';
+import WorkspaceSyncDialog from './WorkspaceSyncDialog.jsx';
 
 export default function WorkspacesSection({
   workspaces,
@@ -8,9 +9,13 @@ export default function WorkspacesSection({
   onAdd,
   onSwitch,
   onRemove,
+  syncPat,
+  pullIntervalSeconds,
 }) {
   const [confirmRemoveId, setConfirmRemoveId] = useState(null);
+  const [syncWorkspaceId, setSyncWorkspaceId] = useState(null);
   const target = workspaces.find((w) => w.id === confirmRemoveId) ?? null;
+  const syncTarget = workspaces.find((w) => w.id === syncWorkspaceId) ?? null;
   return (
     <div className="settings-section">
       <h2 className="settings-section-title">Workspaces</h2>
@@ -34,6 +39,12 @@ export default function WorkspacesSection({
                 <div className="workspace-path" title={ws.path}>{ws.path}</div>
               </div>
               <div className="workspace-actions">
+                <button
+                  onClick={() => setSyncWorkspaceId(ws.id)}
+                  title={syncPat ? `Configure sync for ${ws.name}` : 'Set a PAT in GitHub Sync settings first'}
+                >
+                  Sync…
+                </button>
                 <button
                   onClick={() => onSwitch(ws.id)}
                   disabled={ws.id === activeWorkspaceId}
@@ -64,6 +75,15 @@ export default function WorkspacesSection({
         destructive
         onConfirm={() => { onRemove(confirmRemoveId); setConfirmRemoveId(null); }}
         onClose={() => setConfirmRemoveId(null)}
+      />
+
+      <WorkspaceSyncDialog
+        open={!!syncTarget}
+        workspace={syncTarget}
+        syncPat={syncPat}
+        activeWorkspaceId={activeWorkspaceId}
+        pullIntervalSeconds={pullIntervalSeconds}
+        onClose={() => setSyncWorkspaceId(null)}
       />
     </div>
   );

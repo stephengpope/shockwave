@@ -149,6 +149,11 @@ export default function App() {
   // AssemblyAI streaming transcription config. apiKey arrives decrypted from main.
   const [transcription, setTranscription] = useState({ provider: 'assemblyai', apiKey: '' });
   const transcriptionRef = useSyncRef(transcription);
+  // GitHub sync config. PAT arrives decrypted from main and is sent back as
+  // plaintext on every save (main re-encrypts via safeStorage's idempotent
+  // encryptSecret).
+  const [sync, setSync] = useState({ pat: '', pullIntervalSeconds: 10 });
+  const syncRef = useSyncRef(sync);
   const [systemPrefersDark, setSystemPrefersDark] = useState(false);
   const [bootDone, setBootDone] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -164,6 +169,9 @@ export default function App() {
   // Pending "Send to Agent" payload waiting on the Replace/Append decision.
   // Non-null only while the collision dialog is open.
   const [sendToAgentPending, setSendToAgentPending] = useState(null);
+  // Sync engine status pushed from main via `sync:status` events.
+  // status: 'disabled' | 'idle' | 'syncing' | 'paused' | 'error'.
+  const [syncStatus, setSyncStatus] = useState({ status: 'disabled', detail: '', lastSyncAt: null });
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || null;
   const workspacePath = activeWorkspace?.path ?? null;
@@ -177,6 +185,26 @@ export default function App() {
   // ---- app title ----
   useEffect(() => {
     document.title = APP_NAME;
+  }, []);
+
+  // Sync engine bridge — once on mount, no workspace dep. The engine asks us
+  // to flush dirty editor tabs before each tick; we writeNow then ack with
+  // the same token. Status events update the status-bar icon.
+  useEffect(() => {
+    const unsubFlush = window.api.sync.onFlushRequest(async (token) => {
+      try { await writeNowRef.current(); } catch {}
+      window.api.sync.flushDone(token).catch(() => {});
+    });
+    const unsubStatus = window.api.sync.onStatus((s) => setSyncStatus(s));
+    // Seed the current status so the icon doesn't flash 'disabled' on reload
+    // when the engine is already running.
+    window.api.sync.engineStatus().then((s) => { if (s) setSyncStatus(s); }).catch(() => {});
+    return () => {
+      unsubFlush();
+      unsubStatus();
+      // Stop the engine when the renderer goes away (full reload, window close).
+      window.api.sync.engineStop().catch(() => {});
+    };
   }, []);
 
   // ---- effective theme ----
@@ -236,6 +264,7 @@ export default function App() {
 
   // Returns the absolute path that was saved (the new path for a draft, or the
   // existing path for a real file), or null if nothing was dirty / save failed.
+  // (writeNowRef declared after the useCallback below.)
   const writeNow = useCallback(async () => {
     const tabId = dirtyTabIdRef.current;
     if (!tabId) return null;
@@ -284,6 +313,11 @@ export default function App() {
       writeInFlightRef.current.delete(tabId);
     }
   }, [linkIndex, showError]);
+
+  // Ref to writeNow so the sync engine's flush-request handler can call it
+  // without depending on writeNow's identity (which changes when its deps
+  // change).
+  const writeNowRef = useSyncRef(writeNow);
 
   // ---- tabs (drafts live here) ----
   const onAfterSwitch = useCallback(() => {
@@ -431,6 +465,7 @@ export default function App() {
       codingAgent: next.codingAgent ?? codingAgentSettingsRef.current,
       agentSecrets: next.agentSecrets ?? agentSecretsRef.current,
       transcription: next.transcription ?? transcriptionRef.current,
+      sync: next.sync ?? syncRef.current,
       sidebarWidth: next.sidebarWidth ?? sidebarWidthRef.current,
       viewMode: next.viewMode ?? viewModeRef.current,
       chatSidebarOpen: next.chatSidebarOpen ?? chatSidebarOpenRef.current,
@@ -491,6 +526,13 @@ export default function App() {
       window.api.bookmarks.write(workspace.path, cleaned).catch(() => {});
     }
     await window.api.watchStart(workspace.path);
+    // Kick the sync engine. It self-checks whether the workspace has an
+    // origin and what the PAT is, so we don't gate on those here. Status
+    // events flow back via `onStatus` (subscribed once on mount).
+    window.api.sync.engineStart({
+      workspacePath: workspace.path,
+      intervalSeconds: syncRef.current?.pullIntervalSeconds,
+    }).catch(() => {});
   }, [writeNow, resetTabs, linkIndex]);
 
   const switchWorkspace = useCallback(async (id) => {
@@ -718,6 +760,21 @@ export default function App() {
     setTranscription(next);
     transcriptionRef.current = next;
     await persistSettings({ workspaces, activeWorkspaceId, themeMode, transcription: next });
+  }, [persistSettings, workspaces, activeWorkspaceId, themeMode]);
+
+  const onSyncChange = useCallback(async (next) => {
+    setSync(next);
+    syncRef.current = next;
+    await persistSettings({ workspaces, activeWorkspaceId, themeMode, sync: next });
+    // Restart the engine so PAT / interval changes take effect immediately.
+    // engineStart no-ops cleanly when there's no active workspace.
+    const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+    if (ws) {
+      window.api.sync.engineStart({
+        workspacePath: ws.path,
+        intervalSeconds: next.pullIntervalSeconds,
+      }).catch(() => {});
+    }
   }, [persistSettings, workspaces, activeWorkspaceId, themeMode]);
 
   // ---- title commit (rename existing or save draft with this name) ----
@@ -1154,6 +1211,17 @@ export default function App() {
         setTranscription(t);
         transcriptionRef.current = t;
       }
+      if (settings.sync) {
+        const s = {
+          pat: settings.sync.pat || '',
+          pullIntervalSeconds:
+            typeof settings.sync.pullIntervalSeconds === 'number' && settings.sync.pullIntervalSeconds > 0
+              ? settings.sync.pullIntervalSeconds
+              : 10,
+        };
+        setSync(s);
+        syncRef.current = s;
+      }
       if (typeof settings.sidebarWidth === 'number') {
         setSidebarWidth(settings.sidebarWidth);
         sidebarWidthRef.current = settings.sidebarWidth;
@@ -1584,6 +1652,7 @@ export default function App() {
                 canRedo={editorHistory.canRedo}
                 onUndo={onUndo}
                 onRedo={onRedo}
+                syncStatus={syncStatus}
               />
             )}
           </>
@@ -1715,6 +1784,8 @@ export default function App() {
           onAgentSecretsChange={onAgentSecretsChange}
           transcription={transcription}
           onTranscriptionChange={onTranscriptionChange}
+          sync={sync}
+          onSyncChange={onSyncChange}
           saveStatus={saveStatus}
         />
       )}

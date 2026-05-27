@@ -2003,6 +2003,76 @@ html, body, #root {
   color: var(--fg-muted);
 }
 
+/* ---------- Per-workspace sync setup dialog ---------- */
+
+.sync-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sync-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-primary);
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sync-choice:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.sync-choice:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sync-choice-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sync-choice-desc {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* ---------- GitHub sync status icon ---------- */
+
+.editor-status-bar .status-cloud {
+  color: var(--fg-muted);
+}
+
+.editor-status-bar .status-cloud-idle {
+  color: var(--fg-secondary);
+}
+
+.editor-status-bar .status-cloud-syncing {
+  color: var(--fg-secondary);
+  animation: status-cloud-spin 1.2s linear infinite;
+}
+
+.editor-status-bar .status-cloud-error {
+  color: #e02d2d;
+}
+
+[data-theme="dark"] .editor-status-bar .status-cloud-error {
+  color: #f87171;
+}
+
+@keyframes status-cloud-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 /* ---------- AI diff-flash decoration ---------- */
 
 .cm-ai-stream-done {

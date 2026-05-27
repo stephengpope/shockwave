@@ -284,4 +284,74 @@ contextBridge.exposeInMainWorld('api', {
      *  @returns {Promise<{ token?: string, error?: string }>} */
     getToken: () => ipcRenderer.invoke('voice:getToken'),
   },
+
+  // ---- GitHub sync --------------------------------------------------------
+  //
+  // PAT lives encrypted in settings and is never sent across this bridge.
+  // verifyPat is the one exception: the renderer passes the in-form draft PAT
+  // (e.g. when the user clicks "Verify" before saving) so main can probe
+  // GitHub with it. The PAT round-trip is one-way (renderer → main), then
+  // discarded; main never echoes it back.
+
+  sync: {
+    /** Verify a PAT against GitHub's /user endpoint.
+     *  @param {string} pat
+     *  @returns {Promise<{ ok: boolean, login?: string, id?: number, name?: string|null, error?: string }>} */
+    verifyPat: (pat) => ipcRenderer.invoke('sync:verifyPat', pat),
+    /** Check whether `git` is on PATH and return its version.
+     *  @returns {Promise<{ ok: boolean, version?: string, error?: string, platform: NodeJS.Platform }>} */
+    checkGit: () => ipcRenderer.invoke('sync:checkGit'),
+    /** Inspect sync state of a workspace folder.
+     *  @param {string} workspacePath
+     *  @returns {Promise<{ hasGit: boolean, hasOrigin: boolean, originUrl: string|null }>} */
+    workspaceStatus: (workspacePath) => ipcRenderer.invoke('sync:workspaceStatus', workspacePath),
+    /** Clone an existing GitHub repo into an empty workspace folder. PAT pulled from settings.
+     *  @param {{ workspacePath: string, remoteUrl: string }} opts
+     *  @returns {Promise<{ ok: boolean, remoteUrl?: string, error?: string }>} */
+    setupClone: (opts) => ipcRenderer.invoke('sync:setupClone', opts),
+    /** Create a new GitHub repo and wire the workspace to it. PAT pulled from settings.
+     *  @param {{ workspacePath: string, repoName: string, private?: boolean }} opts
+     *  @returns {Promise<{ ok: boolean, remoteUrl?: string, full_name?: string, html_url?: string, error?: string }>} */
+    setupInitAndCreate: (opts) => ipcRenderer.invoke('sync:setupInitAndCreate', opts),
+    /** Adopt a workspace that already has .git/origin set up locally.
+     *  @param {{ workspacePath: string }} opts
+     *  @returns {Promise<{ ok: boolean, remoteUrl?: string, error?: string }>} */
+    setupExistingLocal: (opts) => ipcRenderer.invoke('sync:setupExistingLocal', opts),
+    /** Remove origin from the workspace (leaves .git/ in place).
+     *  @param {{ workspacePath: string }} opts
+     *  @returns {Promise<{ ok: boolean, error?: string }>} */
+    teardown: (opts) => ipcRenderer.invoke('sync:teardown', opts),
+
+    /** Start the sync engine for `workspacePath`. Stops any previous instance.
+     *  @param {{ workspacePath: string, intervalSeconds?: number }} opts
+     *  @returns {Promise<void>} */
+    engineStart: (opts) => ipcRenderer.invoke('sync:engineStart', opts),
+    /** Stop the sync engine. Awaits the in-flight tick if any.
+     *  @returns {Promise<void>} */
+    engineStop: () => ipcRenderer.invoke('sync:engineStop'),
+    /** Fetch the engine's current status. Useful on mount before the first
+     *  push event would arrive.
+     *  @returns {Promise<{ status: string, detail: string, lastSyncAt: number|null }>} */
+    engineStatus: () => ipcRenderer.invoke('sync:engineStatus'),
+    /** Reply to a `onFlushRequest` with the same token. The engine waits
+     *  on this before committing.
+     *  @param {number} token @returns {Promise<void>} */
+    flushDone: (token) => ipcRenderer.invoke('sync:flushDone', token),
+    /** Subscribe to flush-dirty-tabs requests from the engine.
+     *  Handler must call writeNow() then `flushDone(token)`.
+     *  @param {(token: number) => void} cb @returns {Unsubscribe} */
+    onFlushRequest: (cb) => {
+      const listener = (_evt, token) => cb(token);
+      ipcRenderer.on('sync:flushRequest', listener);
+      return () => ipcRenderer.removeListener('sync:flushRequest', listener);
+    },
+    /** Subscribe to engine status changes (for the status-bar icon).
+     *  @param {(status: { status: string, detail: string, lastSyncAt: number|null }) => void} cb
+     *  @returns {Unsubscribe} */
+    onStatus: (cb) => {
+      const listener = (_evt, payload) => cb(payload);
+      ipcRenderer.on('sync:status', listener);
+      return () => ipcRenderer.removeListener('sync:status', listener);
+    },
+  },
 });

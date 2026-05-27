@@ -1,9 +1,36 @@
 import React from 'react';
-import { PencilIcon, CodeIcon, CheckCircleIcon, DotCircleIcon, RotateCcwIcon, RotateCwIcon } from './Icons.jsx';
+import { PencilIcon, CodeIcon, CheckCircleIcon, DotCircleIcon, RotateCcwIcon, RotateCwIcon, CloudCheckIcon, RefreshIcon, CloudAlertIcon } from './Icons.jsx';
 import { VIEW_MODES, SAVE_STATES } from './constants.js';
 
 function formatNum(n) {
   return n.toLocaleString();
+}
+
+// Map sync engine status → icon + color + animation + tooltip.
+// 'disabled' returns null so the icon vanishes when the active workspace
+// isn't sync-configured.
+function renderSyncIcon(syncStatus) {
+  if (!syncStatus || syncStatus.status === 'disabled') return null;
+  const { status, detail, lastSyncAt } = syncStatus;
+  let icon = <CloudCheckIcon size={12} />;
+  let cls = 'status-cloud-idle';
+  let title = lastSyncAt
+    ? `Synced ${Math.max(1, Math.round((Date.now() - lastSyncAt) / 1000))}s ago`
+    : 'Synced';
+  if (status === 'syncing') {
+    icon = <RefreshIcon size={12} />;
+    cls = 'status-cloud-syncing';
+    title = detail || 'Syncing…';
+  } else if (status === 'paused' || status === 'error') {
+    icon = <CloudAlertIcon size={12} />;
+    cls = 'status-cloud-error';
+    title = detail || (status === 'paused' ? 'Sync paused' : 'Sync error');
+  }
+  return (
+    <span className={`status-icon status-cloud ${cls}`} title={title} aria-label={title}>
+      {icon}
+    </span>
+  );
 }
 
 /**
@@ -29,6 +56,7 @@ export default function EditorStatusBar({
   canRedo,
   onUndo,
   onRedo,
+  syncStatus,
 }) {
   const isLive = viewMode === VIEW_MODES.LIVE;
   const isSaved = saveState === SAVE_STATES.SAVED;
@@ -84,6 +112,7 @@ export default function EditorStatusBar({
       >
         {isSaved ? <CheckCircleIcon size={12} /> : <DotCircleIcon size={12} />}
       </span>
+      {renderSyncIcon(syncStatus)}
     </div>
   );
 }

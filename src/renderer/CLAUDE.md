@@ -155,6 +155,41 @@ Three modes (`light` / `dark` / `system`) stored in settings; system mode listen
 - `ConfirmDialog.jsx` — Dialog variant for confirms.
 - `ErrorMessage.jsx` — inline error banner used by app-level toasts and form-level warnings.
 
+## UI conventions (read before building any new dialog / settings page)
+
+The convention is **"look at the nearest similar component and copy its class usage"** — there's no separate styling guide doc. The CSS classes are already in `styles.css`; new dialogs and settings pages should compose them, not invent one-off `style={{}}` blocks.
+
+**Templates:**
+- New settings section → copy `settings/AgentSecretsSection.jsx` (form + list pattern) or `settings/TranscriptionSection.jsx` (single-field-plus-test pattern). Wire into `SettingsModal.jsx`'s NAV and add an entry to `SETTINGS_SECTIONS` in `constants.js`.
+- New modal dialog → use `Dialog.jsx`. Buttons go in the `footer` slot using `dialog-button` / `dialog-button-primary` / `dialog-button-destructive`. Body fields use the settings-* classes below.
+
+**Standard class palette:**
+
+| Class | Use |
+|---|---|
+| `dialog-button` | Footer button (secondary / Cancel) |
+| `dialog-button-primary` | Footer button (primary action) |
+| `dialog-button-destructive` | Footer button (delete / disconnect) |
+| `settings-section` / `settings-section-title` / `settings-section-desc` | Top-level container + heading + intro paragraph for a settings page |
+| `settings-subsection-title` | Sub-heading within a section |
+| `settings-field` / `settings-field-label` / `settings-field-hint` | Form-field wrapper + label + helper-text underneath |
+| `settings-input` | Text / number input. Standard width, focus ring already wired. |
+| `settings-input-row` | Flex row when an input pairs with a button (e.g. Show/Hide, Verify) |
+| `settings-input-toggle` | The trailing button inside an `settings-input-row` |
+| `settings-input-mono` | Monospace variant for paths / URLs |
+| `settings-button` | Standalone button in a settings body (not footer) |
+| `workspace-list` / `workspace-row` / `workspace-meta` / `workspace-name` / `workspace-path` | List-of-entities pattern (workspaces, secrets) |
+| `icon-btn` | Small icon-only button (trash, edit, etc.) |
+
+**Errors / hints:**
+- Validation or operation error → `<ErrorMessage>{msg}</ErrorMessage>`. Don't use inline `style={{ color: 'red' }}`.
+- Field-level help text → `<p className="settings-field-hint">…</p>` (muted color).
+- Success / status note → `settings-field-hint` with `color: var(--accent)` is acceptable when nothing else fits.
+
+**When to add a new CSS class** (instead of reusing): only when the new shape genuinely has no existing analog. Example: the choice-card picker in `WorkspaceSyncDialog` (`.sync-choice` — title + description as a clickable action card) is distinct from `workspace-row` (entity list). Drop the new rules in `styles.css` under a clearly-labeled section comment, not inline.
+
+**Inline `style={{}}` is a smell.** Acceptable for one-off layout tweaks (`marginTop: 12` to separate two blocks). Not acceptable for colors, borders, fonts, button shapes — those should be classes.
+
 ## Path helpers (`pathUtils.js`)
 
 POSIX-only helpers: `basenameOf`, `dirOf`, `toRelPath`, `toAbsPath`. The renderer always uses forward slashes regardless of OS (workspace paths come in this form from main, and we keep them that way for link parsing, sidebar drag-drop, etc.). **Do not import `node:path`** — it's unavailable behind contextIsolation.

@@ -9,6 +9,7 @@ import WorkspaceSkillsTab from './settings/WorkspaceSkillsTab.jsx';
 import AgentSecretsSection from './settings/AgentSecretsSection.jsx';
 import DailyNoteSection from './settings/DailyNoteSection.jsx';
 import TranscriptionSection from './settings/TranscriptionSection.jsx';
+import SyncSection from './settings/SyncSection.jsx';
 
 // Sidebar layout: section headers group related items. Header rows are
 // non-interactive labels; item rows are the actual nav buttons. To add a new
@@ -18,6 +19,7 @@ const NAV = [
   { kind: 'item', id: SETTINGS_SECTIONS.APPEARANCE, label: 'Appearance' },
   { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
   { kind: 'item', id: SETTINGS_SECTIONS.DAILY_NOTE, label: 'Daily Notes' },
+  { kind: 'item', id: SETTINGS_SECTIONS.SYNC, label: 'GitHub Sync' },
   { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
   { kind: 'header', label: 'AI' },
   { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
@@ -50,6 +52,8 @@ export default function SettingsModal({
   onAgentSecretsChange,
   transcription,
   onTranscriptionChange,
+  sync,
+  onSyncChange,
   saveStatus,
 }) {
   const [active, setActive] = useState(initialSection || DEFAULT_SECTION);
@@ -120,6 +124,8 @@ export default function SettingsModal({
               onAdd={onAddWorkspace}
               onSwitch={(id) => { onSwitchWorkspace(id); onClose(); }}
               onRemove={onRemoveWorkspace}
+              syncPat={sync?.pat}
+              pullIntervalSeconds={sync?.pullIntervalSeconds}
             />
           )}
           {active === SETTINGS_SECTIONS.DAILY_NOTE && (
@@ -128,6 +134,12 @@ export default function SettingsModal({
               onDailyNoteChange={onDailyNoteChange}
               tree={tree}
               workspacePath={workspacePath}
+            />
+          )}
+          {active === SETTINGS_SECTIONS.SYNC && (
+            <SyncSection
+              sync={sync}
+              onSyncChange={onSyncChange}
             />
           )}
           {active === SETTINGS_SECTIONS.TRANSCRIPTION && (

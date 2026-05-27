@@ -174,6 +174,41 @@ export function DotCircleIcon({ size = 14 }) {
   );
 }
 
+// Cloud sync status icons. Single base cloud silhouette with state-specific
+// decoration (check, alert, refresh arrows). Color comes from the host
+// element via currentColor.
+export function CloudCheckIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
+      <path d="M17.5 19a4.5 4.5 0 1 0-.94-8.9 6 6 0 1 0-11.56 2.4A4 4 0 0 0 7 19h10.5z" />
+      <polyline points="9 14 11 16 15 12" />
+    </svg>
+  );
+}
+
+// Classic two-arrows-in-a-circle "refresh" / "syncing" icon. Used by the
+// editor status bar while a sync tick is in progress (spins via CSS).
+// Lucide refresh-cw paths.
+export function RefreshIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
+      <polyline points="23 4 23 10 17 10" />
+      <polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </svg>
+  );
+}
+
+export function CloudAlertIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
+      <path d="M17.5 19a4.5 4.5 0 1 0-.94-8.9 6 6 0 1 0-11.56 2.4A4 4 0 0 0 7 19h10.5z" />
+      <line x1="12" y1="11" x2="12" y2="14" />
+      <circle cx="12" cy="16.5" r="0.6" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function PlayIcon({ size = 14 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">

@@ -13,6 +13,22 @@ import { listInstalled, importFromPath, removeSkill, libraryDirFor } from './ski
 import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from './agentSystemPrompt.js';
 import {
+  verifyPat as syncVerifyPat,
+  checkGit as syncCheckGit,
+  workspaceStatus as syncWorkspaceStatus,
+  setupClone as syncSetupClone,
+  setupInitAndCreate as syncSetupInitAndCreate,
+  setupExistingLocal as syncSetupExistingLocal,
+  teardown as syncTeardown,
+} from './sync.js';
+import {
+  start as engineStart,
+  stop as engineStop,
+  drainBeforeQuit as engineDrainBeforeQuit,
+  handleFlushDone as engineHandleFlushDone,
+  getCurrentStatus as engineGetCurrentStatus,
+} from './syncEngine.js';
+import {
   APP_NAME,
   FILE_ACTIONS,
   FOLDER_ACTIONS,
@@ -85,6 +101,11 @@ const DEFAULT_SETTINGS = {
   // streaming tokens via the `voice:getToken` IPC, which is what the WebSocket
   // to AssemblyAI authenticates with.
   transcription: { provider: 'assemblyai', apiKey: '' },
+  // GitHub sync. `pat` is a GitHub Personal Access Token, encrypted on disk
+  // via safeStorage. Decrypted only into the env of git child processes (via
+  // GIT_ASKPASS helper); never written to .git/config or any other on-disk
+  // location. `pullIntervalSeconds` is the tick cadence for the sync loop.
+  sync: { pat: '', pullIntervalSeconds: 10 },
   chatSidebarOpen: false,
   chatSidebarWidth: 360,
   // File-tree sort order. One of: 'name-asc' | 'name-desc' | 'modified-desc' |
@@ -161,6 +182,10 @@ async function readSettings() {
         ...DEFAULT_SETTINGS.transcription,
         ...(parsed.transcription ?? {}),
       },
+      sync: {
+        ...DEFAULT_SETTINGS.sync,
+        ...(parsed.sync ?? {}),
+      },
     };
     // Decrypt secret-bearing fields. Legacy plaintext values pass through
     // unchanged via decryptSecret's no-prefix branch and get re-encrypted on
@@ -171,6 +196,7 @@ async function readSettings() {
       token: decryptSecret(s.token ?? ''),
     }));
     merged.transcription.apiKey = decryptSecret(merged.transcription.apiKey);
+    merged.sync.pat = decryptSecret(merged.sync.pat);
     return merged;
   } catch {
     return { ...DEFAULT_SETTINGS, agentSecrets: [] };
@@ -212,6 +238,7 @@ async function doWriteSettings(patch) {
     }));
   }
   if (out.transcription) out.transcription.apiKey = encryptSecret(out.transcription.apiKey ?? '');
+  if (out.sync) out.sync.pat = encryptSecret(out.sync.pat ?? '');
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8');
   await fs.rename(tmp, file);
@@ -819,6 +846,98 @@ ipcMain.handle('voice:getToken', async () => {
   }
 });
 
+// ---- GitHub sync ----
+//
+// PAT-bearing operations all happen in main; the renderer never receives the
+// PAT. `sync:verifyPat` runs the PAT through GET /user as a sanity check on
+// settings save. `sync:checkGit` reports whether the git CLI is available so
+// the UI can show install instructions before the user gets to "configure
+// sync".
+
+ipcMain.handle('sync:verifyPat', async (_evt, pat) => {
+  // The renderer passes the PAT explicitly (the value sitting in its draft
+  // settings form) — we don't read from settings here because the user might
+  // be verifying a token they haven't saved yet.
+  return syncVerifyPat(pat);
+});
+
+ipcMain.handle('sync:checkGit', async () => {
+  return syncCheckGit();
+});
+
+// Per-workspace status — does it have .git, does it have an origin, what URL?
+// Drives the "Configure sync" UI's button enablement.
+ipcMain.handle('sync:workspaceStatus', async (_evt, workspacePath) => {
+  return syncWorkspaceStatus(workspacePath);
+});
+
+// Helper: load the decrypted PAT from settings for sync setup IPCs that need
+// it. We don't accept PAT from the renderer for these flows — the user has
+// already saved one (otherwise the UI gates them out) so we read straight
+// from disk. Returns null + an error result if PAT isn't set.
+async function readSyncPat() {
+  const settings = await readSettings();
+  const pat = settings.sync?.pat || '';
+  if (!pat) return { ok: false, error: 'GitHub Sync not configured. Set a PAT in Settings → GitHub Sync.' };
+  return { ok: true, pat };
+}
+
+ipcMain.handle('sync:setupClone', async (_evt, { workspacePath, remoteUrl }) => {
+  const auth = await readSyncPat();
+  if (!auth.ok) return auth;
+  return syncSetupClone({ workspacePath, remoteUrl, pat: auth.pat });
+});
+
+ipcMain.handle('sync:setupInitAndCreate', async (_evt, { workspacePath, repoName, private: isPrivate = true }) => {
+  const auth = await readSyncPat();
+  if (!auth.ok) return auth;
+  return syncSetupInitAndCreate({ workspacePath, repoName, private: isPrivate, pat: auth.pat });
+});
+
+ipcMain.handle('sync:setupExistingLocal', async (_evt, { workspacePath }) => {
+  const auth = await readSyncPat();
+  if (!auth.ok) return auth;
+  return syncSetupExistingLocal({ workspacePath, pat: auth.pat });
+});
+
+ipcMain.handle('sync:teardown', async (_evt, { workspacePath }) => {
+  return syncTeardown({ workspacePath });
+});
+
+// ---- Sync engine lifecycle ----
+//
+// Engine is bound to the renderer's active workspace. The renderer calls
+// start/stop as workspaces load/unload. Status events are pushed back via
+// `sync:status` and consumed by the status-bar icon.
+
+ipcMain.handle('sync:engineStart', async (evt, { workspacePath, intervalSeconds }) => {
+  const settings = await readSettings();
+  const pat = settings.sync?.pat || '';
+  const win = BrowserWindow.fromWebContents(evt.sender);
+  await engineStart({
+    workspacePath,
+    pat,
+    intervalSeconds: intervalSeconds ?? settings.sync?.pullIntervalSeconds ?? 10,
+    windowId: win?.id ?? null,
+  });
+});
+
+ipcMain.handle('sync:engineStop', async () => {
+  await engineStop();
+});
+
+// Renderer's ack of the flush-dirty-tabs request. The engine waits on this
+// before proceeding with the rest of the tick.
+ipcMain.handle('sync:flushDone', async (_evt, token) => {
+  engineHandleFlushDone(token);
+});
+
+// One-shot status read (renderer asks for current state on mount before the
+// next push event would arrive).
+ipcMain.handle('sync:engineStatus', async () => {
+  return engineGetCurrentStatus();
+});
+
 // ---- Coding agent (pi) ----
 //
 // One pi AgentSession at a time. The renderer sends `agent:send` with the prompt
@@ -1179,12 +1298,17 @@ app.on('before-quit', () => { stopWatcher(); agentReset().catch(() => {}); });
 // Drain any pending settings writes (notably the window-bounds save fired
 // from each window's `close` handler) before the process exits. Without this
 // step a fast Cmd+Q can race the async tmp+rename and lose the last bounds.
+// Also drain the sync engine — let any in-flight git push/pull finish so we
+// don't leave a partial commit on the remote.
 let cleanQuitting = false;
 app.on('will-quit', (event) => {
   if (cleanQuitting) return;
   event.preventDefault();
   cleanQuitting = true;
-  settingsWriteQueue.finally(() => app.exit());
+  Promise.allSettled([
+    settingsWriteQueue,
+    engineDrainBeforeQuit(),
+  ]).finally(() => app.exit());
 });
 
 ipcMain.handle('theme:getInitial', () => ({
