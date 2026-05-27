@@ -228,6 +228,16 @@ export function XIcon({ size = 14 }) {
   );
 }
 
+export function PanelRightCloseIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
+      <rect width={18} height={18} x={3} y={3} rx={2} />
+      <path d="M15 3v18" />
+      <path d="m8 9 3 3-3 3" />
+    </svg>
+  );
+}
+
 export function PlusIcon({ size = 14 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>

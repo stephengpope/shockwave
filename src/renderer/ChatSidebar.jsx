@@ -1,7 +1,7 @@
 import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { PaperclipIcon, PlayIcon, StopIcon, RotateCcwIcon, XIcon, FileTextIcon, MicIcon } from './Icons.jsx';
+import { PaperclipIcon, PlayIcon, StopIcon, RotateCcwIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon } from './Icons.jsx';
 import {
   classify,
   readAsBase64,
@@ -685,9 +685,9 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
           type="button"
           className="chat-sidebar-close"
           onClick={onClose}
-          title="Close coding agent"
-          aria-label="Close coding agent"
-        ><XIcon size={14} /></button>
+          title="Collapse coding agent"
+          aria-label="Collapse coding agent"
+        ><PanelRightCloseIcon size={14} /></button>
       </div>
 
       <div ref={scrollRef} className="chat-messages">
