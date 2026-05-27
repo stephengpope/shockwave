@@ -1,4 +1,5 @@
 import React from 'react';
+import { ArrowLeftIcon, ArrowRightIcon } from './Icons.jsx';
 
 export default function EditorNav({ onBack, onForward, canGoBack, canGoForward }) {
   return (
@@ -11,7 +12,7 @@ export default function EditorNav({ onBack, onForward, canGoBack, canGoForward }
         title="Back"
         aria-label="Back"
       >
-        <span aria-hidden="true">←</span>
+        <ArrowLeftIcon size={16} />
       </button>
       <button
         type="button"
@@ -21,7 +22,7 @@ export default function EditorNav({ onBack, onForward, canGoBack, canGoForward }
         title="Forward"
         aria-label="Forward"
       >
-        <span aria-hidden="true">→</span>
+        <ArrowRightIcon size={16} />
       </button>
     </div>
   );
