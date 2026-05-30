@@ -35,7 +35,7 @@ import {
   FOLDER_ACTIONS,
   EDITOR_ACTIONS,
   SUPPORTED_PROVIDER_SLUGS as SUPPORTED_PROVIDER_SLUGS_LIST,
-} from '../shared/constants.js';
+} from '../shared/constants';
 
 const SUPPORTED_PROVIDER_SLUGS = new Set(SUPPORTED_PROVIDER_SLUGS_LIST);
 
@@ -109,6 +109,11 @@ const DEFAULT_SETTINGS = {
   sync: { pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] },
   chatSidebarOpen: false,
   chatSidebarWidth: 360,
+  // Left sidebar (file tree) width in px, and the editor view mode. Both are
+  // persisted by the renderer; they must be declared here so a fresh install
+  // has a default and readSettings can surface them. (See src/shared/settings.ts.)
+  sidebarWidth: 260,
+  viewMode: 'live',
   // File-tree sort order. One of: 'name-asc' | 'name-desc' | 'modified-desc' |
   // 'modified-asc' | 'created-desc' | 'created-asc'. Folders are always pinned
   // to the top in A→Z order; this setting only re-orders files.

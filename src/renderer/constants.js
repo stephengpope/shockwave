@@ -1,5 +1,7 @@
-// Cross-process constants live in src/shared/constants.js (single source of truth).
-// Renderer-only constants stay here.
+// Cross-process constants live in src/shared/constants.ts (single source of truth).
+// Renderer-only constants stay here. Extensionless import so it resolves to the
+// .ts in the Vite dev server, the esbuild build, and tsc alike (an explicit
+// `.js` is NOT rewritten to `.ts` by Vite's dev server).
 export {
   APP_NAME,
   FILE_ACTIONS,
@@ -7,7 +9,7 @@ export {
   EDITOR_ACTIONS,
   SUPPORTED_PROVIDER_SLUGS,
   DEFAULT_PROVIDER_SLUG,
-} from '../shared/constants.js';
+} from '../shared/constants';
 
 export const SETTINGS_SECTIONS = Object.freeze({
   APPEARANCE: 'appearance',
