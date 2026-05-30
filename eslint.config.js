@@ -13,16 +13,18 @@ import js from '@eslint/js';
 import react from 'eslint-plugin-react';
 import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
 
 export default [
   { ignores: ['node_modules/**', 'out/**', 'dist/**', 'build/**', '.git/**'] },
 
   js.configs.recommended,
 
-  // Main process, shared constants, tests — Node, ESM.
+  // Main process, shared constants, tests — Node, ESM (JS or TS).
   {
-    files: ['src/main/**/*.js', 'src/shared/**/*.js', 'tests/**/*.js'],
+    files: ['src/main/**/*.{js,ts}', 'src/shared/**/*.{js,ts}', 'tests/**/*.js'],
     languageOptions: {
+      parser: tseslint.parser,
       ecmaVersion: 'latest',
       sourceType: 'module',
       globals: { ...globals.node },
@@ -39,11 +41,12 @@ export default [
     },
   },
 
-  // Renderer — browser + JSX + React.
+  // Renderer — browser + JSX + React (JS or TS).
   {
-    files: ['src/renderer/**/*.{js,jsx}'],
+    files: ['src/renderer/**/*.{js,jsx,ts,tsx}'],
     plugins: { react, 'react-hooks': reactHooks },
     languageOptions: {
+      parser: tseslint.parser,
       ecmaVersion: 'latest',
       sourceType: 'module',
       parserOptions: { ecmaFeatures: { jsx: true } },
@@ -60,6 +63,16 @@ export default [
       // Classic react-hooks rules only (see header note).
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
+    },
+  },
+
+  // TS source files: drop core no-undef (TypeScript handles undefined names,
+  // and no-undef flags type-only globals). tsc --noEmit is the type gate.
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    rules: {
+      'no-undef': 'off',
+      'no-unused-vars': 'off',
     },
   },
 ];

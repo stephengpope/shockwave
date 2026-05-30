@@ -9,7 +9,8 @@ export const FILE_ACTIONS = Object.freeze({
   RENAME: 'rename',
   DELETE: 'delete',
   TOGGLE_BOOKMARK: 'toggleBookmark',
-});
+} as const);
+export type FileAction = (typeof FILE_ACTIONS)[keyof typeof FILE_ACTIONS];
 
 export const FOLDER_ACTIONS = Object.freeze({
   NEW_FILE: 'newFile',
@@ -17,7 +18,8 @@ export const FOLDER_ACTIONS = Object.freeze({
   REVEAL: 'reveal',
   RENAME: 'rename',
   DELETE: 'delete',
-});
+} as const);
+export type FolderAction = (typeof FOLDER_ACTIONS)[keyof typeof FOLDER_ACTIONS];
 
 export const EDITOR_ACTIONS = Object.freeze({
   ADD_LINK: 'addLink',
@@ -25,7 +27,8 @@ export const EDITOR_ACTIONS = Object.freeze({
   EDIT_EXTERNAL_LINK: 'editExternalLink',
   REMOVE_EXTERNAL_LINK: 'removeExternalLink',
   SEND_TO_AGENT: 'sendToAgent',
-});
+} as const);
+export type EditorAction = (typeof EDITOR_ACTIONS)[keyof typeof EDITOR_ACTIONS];
 
 // Pi-ai providers that authenticate via a single bearer API key. Cloud/OAuth
 // providers (bedrock, vertex, azure, cloudflare, github-copilot, openai-codex)
@@ -56,6 +59,6 @@ export const SUPPORTED_PROVIDER_SLUGS = Object.freeze([
   'xiaomi-token-plan-cn',
   'xiaomi-token-plan-ams',
   'xiaomi-token-plan-sgp',
-]);
+] as const);
 
 export const DEFAULT_PROVIDER_SLUG = 'anthropic';
