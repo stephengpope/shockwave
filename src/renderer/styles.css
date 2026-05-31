@@ -228,12 +228,14 @@ html, body, #root {
   line-height: 1;
 }
 
-/* View-only image/video preview (non-editable files opened from the tree). */
+/* View-only image/video preview (non-editable files opened from the tree).
+   Aligns to the same left edge (--text-col-left) as the markdown title + text
+   column, and mirrors it on the right, so media sits where an .md file would. */
 .media-view {
   display: flex;
   align-items: flex-start;
-  justify-content: center;
-  padding: 24px;
+  justify-content: flex-start;
+  padding: 16px var(--text-col-left) 24px var(--text-col-left);
 }
 .media-view-el {
   max-width: 100%;
