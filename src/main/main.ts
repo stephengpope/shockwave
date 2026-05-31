@@ -627,9 +627,8 @@ ipcMain.handle('context:fileMenu', async (evt, opts = {}) => {
   // whole-repo escape hatch, Reset to Remote (discard local, take GitHub).
   if (conflictMode) {
     return popupContextMenu(win, [
-      { label: 'Resolve', value: FILE_ACTIONS.RESOLVE },
-      { type: 'separator' },
-      { label: 'Reset to Remote (discard local)', value: FILE_ACTIONS.RESET_TO_REMOTE },
+      { label: 'Resolved', value: FILE_ACTIONS.RESOLVE },
+      { label: 'Reset', value: FILE_ACTIONS.RESET_TO_REMOTE },
     ]);
   }
   const multi = selectionCount > 1;

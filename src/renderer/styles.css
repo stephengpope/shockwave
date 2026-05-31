@@ -209,7 +209,6 @@ html, body, #root {
   width: auto;
   gap: 3px;
   padding: 0 5px;
-  margin-left: auto; /* push to the far right of the sort bar */
 }
 [data-theme="dark"] .sort-bar-conflict-btn,
 [data-theme="dark"] .sort-bar-conflict-btn:hover:not(:disabled) {
@@ -227,6 +226,26 @@ html, body, #root {
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
+}
+
+/* View-only image/video preview (non-editable files opened from the tree). */
+.media-view {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px;
+}
+.media-view-el {
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: 6px;
+  background: var(--bg-hover);
+}
+.media-view-empty {
+  color: var(--fg-muted);
+  font-size: 13px;
+  padding: 24px;
 }
 
 /* Bookmark quick-pick popover (right-click on the bookmark icon). */

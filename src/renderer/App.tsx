@@ -3,6 +3,7 @@ import FileTree from './FileTree.jsx';
 import Editor from './Editor.jsx';
 import BacklinksPanel from './BacklinksPanel.jsx';
 import GraphView from './GraphView.jsx';
+import MediaView, { mediaKind } from './MediaView';
 import TabStrip from './TabStrip.jsx';
 import EditorTitle from './EditorTitle.jsx';
 import EditorNav from './EditorNav.jsx';
@@ -407,6 +408,10 @@ export default function App() {
     activeFilePathRef.current = activeIsDraft ? null : activeFile;
   }, [activeFile, activeIsDraft]);
 
+  // Image/video active file → render a MediaView preview instead of the text
+  // editor. null for .md and any other text (those open in the editor).
+  const activeMediaKind = activeIsDraft ? null : mediaKind(activeFile);
+
   const onBack = useCallback(() => { if (activeTabId) goBack(activeTabId); }, [activeTabId, goBack]);
   const onForward = useCallback(() => { if (activeTabId) goForward(activeTabId); }, [activeTabId, goForward]);
 
@@ -497,12 +502,10 @@ export default function App() {
       return;
     }
     setSelectedFolderPath(null);
-    // Conflict view may list non-.md / hidden files; allow opening those so
-    // they can be resolved. Otherwise keep the .md-only rule.
-    if (!conflictFilterActive && !node.data.name.toLowerCase().endsWith('.md')) return;
+    // Any file opens: .md/text in the editor, images/video in MediaView.
     if (graphMode) setGraphMode(false);
     await openInActiveTab(node.id);
-  }, [openInActiveTab, graphMode, conflictFilterActive]);
+  }, [openInActiveTab, graphMode]);
 
   // ---- workspace operations ----
 
@@ -1057,6 +1060,12 @@ export default function App() {
   const lastLoadRef = useRef<any>({ tabId: null, path: null, isDark: null });
   useEffect(() => {
     if (!workspacePath) return;
+    // Media tabs render a MediaView (no editor mounted) — nothing to load, and
+    // reading binary as text would be garbage.
+    if (activeMediaKind) {
+      lastLoadRef.current = { tabId: activeTabId, path: activeFile, isDark };
+      return;
+    }
     const editor = editorRef.current;
     if (!editor) return;
     const last = lastLoadRef.current;
@@ -1089,7 +1098,7 @@ export default function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [activeFile, activeIsDraft, activeTabId, workspacePath, isDark, tabsApi.viewStateByPath, showError]);
+  }, [activeFile, activeIsDraft, activeTabId, workspacePath, isDark, tabsApi.viewStateByPath, showError, activeMediaKind]);
 
   // ---- backlinks for active file ----
   const activeBacklinks = useMemo(
@@ -1338,7 +1347,7 @@ export default function App() {
                   </ErrorMessage>
                 )}
               </div>
-              <div className={activeTab ? '' : 'editor-zone-hidden'}>
+              <div className={activeTab ? '' : 'editor-zone-hidden'} style={activeMediaKind ? { display: 'none' } : undefined}>
                 <Editor
                   ref={editorRef}
                   onLinkClick={fileOps.onLinkClick}
@@ -1357,6 +1366,9 @@ export default function App() {
                   hideLineNumbers={hideLineNumbers}
                 />
               </div>
+              {activeMediaKind && activeFile && (
+                <MediaView path={activeFile} workspacePath={workspacePath} kind={activeMediaKind} />
+              )}
               {activeTab ? (
                 <BacklinksPanel
                   groups={activeBacklinks}
@@ -1375,8 +1387,8 @@ export default function App() {
             {activeTab && (
               <EditorStatusBar
                 backlinkCount={activeBacklinks.length}
-                words={editorStats.words}
-                chars={editorStats.chars}
+                words={activeMediaKind ? 0 : editorStats.words}
+                chars={activeMediaKind ? 0 : editorStats.chars}
                 viewMode={viewMode}
                 onToggleViewMode={onToggleViewMode}
                 saveState={saveState}
