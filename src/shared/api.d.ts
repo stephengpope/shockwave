@@ -150,6 +150,8 @@ export interface ShockwaveApi {
     getDefaultSystemPrompt(): Promise<string>;
     listProviders(): Promise<Array<{ slug: string; label: string }>>;
     listModels(provider: string): Promise<Array<{ id: string; label: string }>>;
+    validateConnection(opts: { provider: string; baseUrl?: string; apiKey?: string }): Promise<{ ok: boolean; error?: string; models?: string[] }>;
+
     onEvent(cb: (evt: unknown) => void): Unsubscribe;
     onError(cb: (payload: { message: string }) => void): Unsubscribe;
   };

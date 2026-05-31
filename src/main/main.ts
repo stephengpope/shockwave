@@ -83,6 +83,7 @@ const DEFAULT_SETTINGS = {
     provider: 'anthropic',
     model: 'claude-sonnet-4-5',
     apiKey: '',
+    baseUrl: '',
     // Pre-filled with the default on first install so users can read + edit.
     // "Reset to default" in the UI writes the current default back into here.
     systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -1030,7 +1031,7 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
     const settings = await readSettings();
     const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
     const workspacePath = ws?.path ?? null;
-    const { provider, model, apiKey, skills, systemPrompt } = settings.codingAgent ?? {};
+    const { provider, model, apiKey, baseUrl, contextWindow, skills, systemPrompt } = settings.codingAgent ?? {};
 
     await agentSend(
       {
@@ -1040,6 +1041,8 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
         provider,
         model,
         apiKey,
+        baseUrl,
+        contextWindow,
         systemPrompt,
         userDataDir: app.getPath('userData'),
         skillsState: skills,
@@ -1095,14 +1098,52 @@ ipcMain.handle('agent:getDefaultSystemPrompt', async () => DEFAULT_AGENT_SYSTEM_
 // multi-credential providers (bedrock, vertex, azure, cloudflare, copilot,
 // codex) are filtered out — our settings schema only carries a single API
 // key, which is insufficient for those.
+// Local providers (ollama, lm-studio) are not in pi-ai's registry; we inject
+// them here so they appear in the Settings UI.
 //
+const INJECTED_PROVIDERS = ['openai-compatible', 'ollama', 'lm-studio'];
 ipcMain.handle('agent:listProviders', () => {
-  return getProviders().filter((slug) => SUPPORTED_PROVIDER_SLUGS.has(slug as any)).sort();
+  const fromPi = getProviders().filter((slug) => SUPPORTED_PROVIDER_SLUGS.has(slug as any));
+  return [...new Set([...fromPi, ...INJECTED_PROVIDERS])].sort();
 });
 
 ipcMain.handle('agent:listModels', (_evt, provider) => {
   if (!provider) return [];
   return getModels(provider).map((m) => m.id).sort();
+});
+
+ipcMain.handle('agent:validateConnection', async (_evt, { provider, baseUrl, apiKey }) => {
+  try {
+    if (!provider) return { ok: false, error: 'Provider is required' };
+
+    // Ollama — uses /api/tags (not /v1/models)
+    if (provider === 'ollama') {
+      if (!baseUrl) return { ok: false, error: 'Base URL is required' };
+      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/tags`);
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${res.statusText}` };
+      const body: any = await res.json();
+      const modelNames = (body.models ?? []).map((m: any) => m.name);
+      return { ok: true, models: modelNames.length ? modelNames : undefined };
+    }
+
+    // Generic /v1/models endpoint (lm-studio, OpenAI-compatible, etc.)
+    if (!baseUrl) return { ok: false, error: 'Base URL is required' };
+    const base = baseUrl.replace(/\/+$/, '');
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `HTTP ${res.status} ${res.statusText}${text ? ': ' + text.slice(0, 200) : ''}` };
+    }
+    const body: any = await res.json();
+    const models = (body.data ?? body.models ?? []).map((m: any) => m.id ?? m.name).filter(Boolean);
+    return { ok: true, models: models.length ? models : undefined };
+  } catch (err: any) {
+    if (err?.name === 'TimeoutError') return { ok: false, error: 'Connection timed out' };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 });
 
 function timestampForFilename(d = new Date()) {

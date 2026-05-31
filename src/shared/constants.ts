@@ -55,6 +55,8 @@ export const SUPPORTED_PROVIDER_SLUGS = Object.freeze([
   'opencode-go',
   'vercel-ai-gateway',
   'zai',
+  'ollama',
+  'lm-studio',
   'xiaomi',
   'xiaomi-token-plan-cn',
   'xiaomi-token-plan-ams',

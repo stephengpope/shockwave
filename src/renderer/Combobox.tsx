@@ -28,11 +28,13 @@ export default function Combobox({
 
   useEffect(() => { setDraft(value ?? ''); }, [value]);
 
+  // Show all options when the dropdown first opens (draft === value).
+  // Only filter when the user actively types something different.
   const filtered = useMemo(() => {
     const q = (draft ?? '').trim().toLowerCase();
-    if (!q) return options;
+    if (!q || draft === value) return options;
     return options.filter((o) => o.toLowerCase().includes(q));
-  }, [draft, options]);
+  }, [draft, options, value]);
 
   useEffect(() => { setHighlight(0); }, [draft, open]);
 

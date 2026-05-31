@@ -16,18 +16,17 @@ import { agentDirFor, ensureDirs, listInstalled, computeEffectivePaths, writePiS
 import { ensureAgentTokensExtension } from './agentTokensExtension.js';
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from './agentSystemPrompt.js';
 
+const LOCAL_PROVIDERS = new Set(['ollama', 'lm-studio', 'openai-compatible']);
+
 const state: any = {
   session: null,
   unsubscribe: null,
   key: null,
 };
 
-function makeKey({ workspacePath, provider, model, apiKey, systemPrompt }) {
-  // systemPrompt is part of the key so changing it forces a fresh session
-  // (pi's system prompt is baked at session boot).
-  return [workspacePath, provider, model, apiKey, systemPrompt ?? ''].join(' ');
+function makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt }) {
+  return [workspacePath, provider, model, apiKey, baseUrl ?? '', contextWindow ?? '', systemPrompt ?? ''].join(' ');
 }
-
 async function teardown() {
   if (state.unsubscribe) {
     try { state.unsubscribe(); } catch { /* already unsubscribed */ }
@@ -40,9 +39,9 @@ async function teardown() {
   }
 }
 
-async function ensureSession({ workspacePath, provider, model, apiKey, systemPrompt, userDataDir, skillsState, workspaceId }, emitEvent) {
+async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt, userDataDir, skillsState, workspaceId }, emitEvent) {
   const effectiveSystemPrompt = (systemPrompt ?? '').trim() || DEFAULT_AGENT_SYSTEM_PROMPT;
-  const key = makeKey({ workspacePath, provider, model, apiKey, systemPrompt: effectiveSystemPrompt });
+  const key = makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt: effectiveSystemPrompt });
   // We always recompute the effective skill list before session create so the
   // skills array reflects the current global+workspace state. If the session
   // is already up but the skill set has changed, the user can hit Clear in the
@@ -65,7 +64,27 @@ async function ensureSession({ workspacePath, provider, model, apiKey, systemPro
   const authStorage = AuthStorage.inMemory();
   authStorage.setRuntimeApiKey(provider, apiKey);
   const modelRegistry = ModelRegistry.create(authStorage);
-  const modelObj = getModel(provider, model);
+let modelObj;
+  if (LOCAL_PROVIDERS.has(provider)) {
+    modelRegistry.registerProvider(provider, {
+      baseUrl,
+      apiKey: apiKey || 'local',
+      api: 'openai-completions',
+      models: [{
+        id: model,
+        name: model,
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: contextWindow || 128000,
+        maxTokens: 16384,
+      }],
+    });
+    modelObj = modelRegistry.find(provider, model);
+  } else {
+    authStorage.setRuntimeApiKey(provider, apiKey);
+    modelObj = getModel(provider, model);
+  }
 
   // Custom resource loader so we can override pi's default coding-agent system
   // prompt with ours (see DEFAULT_AGENT_SYSTEM_PROMPT). Still uses the standard
@@ -94,11 +113,12 @@ async function ensureSession({ workspacePath, provider, model, apiKey, systemPro
 }
 
 export async function agentSend(opts, emitEvent) {
-  const { text, images, workspacePath, provider, model, apiKey } = opts;
+  const { text, images, workspacePath, provider, model, apiKey, baseUrl, contextWindow } = opts;
   if (!workspacePath) throw new Error('Open a workspace first.');
   if (!provider) throw new Error('Coding agent provider not configured.');
   if (!model) throw new Error('Coding agent model not configured.');
-  if (!apiKey) throw new Error('Coding agent API key not configured. Open Settings → LLM / Agent.');
+  // Local providers don't require an API key.
+  if (!LOCAL_PROVIDERS.has(provider) && !apiKey) throw new Error('Coding agent API key not configured. Open Settings → LLM / Agent.');
 
   // Wrap the renderer's event listener so we can intercept the failure
   // assistant message that pi emits on any provider-side error (bad API key,

@@ -88,3 +88,19 @@ This is a deliberate simplification — Obsidian allows duplicate basenames and 
 ## Tests
 
 `npm test` runs everything via `node:test` (no install). See **`tests/CLAUDE.md`** for the per-file coverage table and what's not covered by automated tests.
+
+
+## Development Timeline
+
+### Recent Commits (Last 10)
+
+- **1c80605** (2026-05-31): Editor + chat + sync polish; start TS doc refresh - CLAUDE.md, CLAUDE.md, codingAgent.ts (+8 more)
+- **56e62b0** (2026-05-30): build: publish releases directly (skip draft step) - package.json
+- **c38e7d1** (2026-05-30): docs: correct the renderer-side mtime story in CLAUDE.md - CLAUDE.md, CLAUDE.md
+- **3613ca2** (2026-05-30): Release v1.0.1 + fix sync clobbering typed edits - package-lock.json, package.json, App.tsx (+3 more)
+- **26e075b** (2026-05-30): TS: convert main process to .ts (main, sync, syncEngine, codingAgent, skillLibrary, pathResolver, agentSystemPrompt, agentTokensExtension) - electron.vite.config.js, agentSystemPrompt.js, agentSystemPrompt.ts (+14 more)
+- **30db15f** (2026-05-30): TS: convert all 35 renderer components .jsx -> .tsx (incl App.tsx) - App.jsx, App.tsx, BacklinksPanel.jsx (+71 more)
+- **5d0d2af** (2026-05-30): TS: convert renderer hooks (useTabs/useLinkIndex/useFileOps) to .ts - useFileOps.js, useFileOps.ts, useLinkIndex.js (+3 more)
+- **eae7347** (2026-05-30): TS: convert renderer logic modules to .ts (CM decorations, image paste/widgets, voice, autolinks, etc.) - autoLinks.js, autoLinks.ts, bulletPoints.js (+19 more)
+- **5f1f5e8** (2026-05-30): TS: noImplicitAny off (migration posture) + convert dailyNote/diffFlash/chatAttachments/constants + vite-env - chatAttachments.js, chatAttachments.ts, constants.js (+7 more)
+- **2393ac7** (2026-05-30): TS: add Vite extensionAlias (.js->.ts dev resolution) + convert pathUtils - electron.vite.config.js, App.jsx, useBookmarks.ts (+4 more)
