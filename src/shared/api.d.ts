@@ -95,6 +95,8 @@ export interface ShockwaveApi {
   writeFile(filePath: string, content: string): Promise<number>;
   createFile(dirPath: string, name: string, content?: string): Promise<{ path: string; mtime: number }>;
   renameFile(fromPath: string, toName: string): Promise<string>;
+  /** Literal file-browser rename — `toName` verbatim, no `.md` forcing; throws on collision. */
+  renameFileLiteral(fromPath: string, toName: string): Promise<string>;
   duplicateFile(filePath: string): Promise<string>;
   writeImage(dirPath: string, bytes: ArrayBuffer | Uint8Array, ext: string, baseName: string): Promise<string>;
   trashFile(filePath: string): Promise<boolean>;

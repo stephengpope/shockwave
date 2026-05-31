@@ -4,6 +4,7 @@ import Editor from './Editor.jsx';
 import BacklinksPanel from './BacklinksPanel.jsx';
 import GraphView from './GraphView.jsx';
 import MediaView, { mediaKind } from './MediaView';
+import { rewriteReferences } from './renameOps.js';
 import TabStrip from './TabStrip.jsx';
 import EditorTitle from './EditorTitle.jsx';
 import EditorNav from './EditorNav.jsx';
@@ -124,6 +125,32 @@ function findNameConflict({ tree, currentPath, newName }) {
     if (node.name.slice(0, -3).toLowerCase() === clean) return node.id;
   }
   return null;
+}
+
+const isMdName = (n: string) => /\.md$/i.test(n);
+
+// Live collision check for the file-browser rename (literal names). Returns
+// true if `newName` would collide and the rename must be blocked:
+//   - `.md` target → workspace-wide basename collision (link index is keyed by
+//     basename, so two `.md` sharing one break it).
+//   - other files → same-folder exact-name collision.
+// Empty names also count as "can't save". Folders aren't checked here (the
+// folder rename path keeps its own behavior).
+function findTreeRenameConflict({ tree, currentPath, newName }: { tree: any[]; currentPath: string; newName: string }) {
+  const name = (newName ?? '').trim();
+  const oldName = currentPath.slice(currentPath.lastIndexOf('/') + 1);
+  if (!name) return true;
+  if (name === oldName) return false;
+  const files = flattenAll(tree).filter((n) => !n.children && n.id !== currentPath);
+  if (isMdName(name)) {
+    const base = name.slice(0, -3).toLowerCase();
+    return files.some((n) => isMdName(n.name) && n.name.slice(0, -3).toLowerCase() === base);
+  }
+  const dir = currentPath.slice(0, currentPath.lastIndexOf('/'));
+  return files.some((n) => {
+    const nd = n.id.slice(0, n.id.lastIndexOf('/'));
+    return nd === dir && n.name.toLowerCase() === name.toLowerCase();
+  });
 }
 
 export default function App() {
@@ -865,7 +892,10 @@ export default function App() {
   // every nested file, and any open tab inside the renamed folder would
   // point at a nonexistent path.
   const onTreeRename = useCallback(async ({ id, name }) => {
-    const isFolder = !id.toLowerCase().endsWith('.md');
+    // Folder vs file by the actual tree node, not by extension — non-.md files
+    // (images, etc.) are still files and must not take the folder path.
+    const treeNode = flattenAll(tree).find((n) => n.id === id);
+    const isFolder = treeNode ? !!treeNode.children : !id.toLowerCase().endsWith('.md');
     if (isFolder) {
       try {
         // Capture nested .md paths from the index BEFORE renaming.
@@ -897,8 +927,44 @@ export default function App() {
       }
       return;
     }
-    return fileOps.performRename(id, name);
-  }, [fileOps, linkIndex, renameTabsPath, selectedFolderPath, showError, writeNow]);
+    // File: literal rename (name verbatim, no `.md` forcing). The link index
+    // is updated per the extension transition: md→md re-keys + rewrites refs,
+    // md→non-md drops it (its backlinks dangle, by design), non-md→md adds it.
+    const literal = (name ?? '').trim();
+    const oldName = id.slice(id.lastIndexOf('/') + 1);
+    if (!literal || literal === oldName) return;
+    if (findTreeRenameConflict({ tree, currentPath: id, newName: literal })) {
+      showError(`"${literal}" already exists.`);
+      return;
+    }
+    try {
+      await writeNow();
+      const oldIsMd = isMdName(oldName);
+      const newIsMd = isMdName(literal);
+      const finalPath = await window.api.renameFileLiteral(id, literal);
+      const finalName = finalPath.slice(finalPath.lastIndexOf('/') + 1);
+      const idx = linkIndex.linkIndexRef.current;
+      if (oldIsMd && newIsMd) {
+        idx.renameFile(id, finalPath);
+        await rewriteReferences({
+          api: window.api,
+          linkIndex: idx,
+          oldBaseName: oldName.replace(/\.md$/i, ''),
+          newBaseName: finalName.replace(/\.md$/i, ''),
+          selfPath: finalPath,
+        });
+        try { const c = await window.api.readFile(finalPath); idx.updateFile(finalPath, c); } catch { /* best effort */ }
+      } else if (oldIsMd && !newIsMd) {
+        idx.removeFile(id); // left markdown → drop from the index
+      } else if (!oldIsMd && newIsMd) {
+        try { const c = await window.api.readFile(finalPath); idx.updateFile(finalPath, c); } catch { /* best effort */ }
+      }
+      renameTabsPath(id, finalPath);
+      await fileOps.treeAndIndexChanged();
+    } catch (err: any) {
+      showError(err.message ?? String(err));
+    }
+  }, [tree, fileOps, linkIndex, renameTabsPath, selectedFolderPath, showError, writeNow]);
 
   // ---- URL prompt (used by editor "Add" / "Edit" external link) ----
   // Always resolves to { url, text } | null. `text` is undefined in Add mode.
@@ -1272,6 +1338,7 @@ export default function App() {
               onMoveItems={onMoveItems}
               disableDrop={disableDrop || conflictFilterActive}
               conflictMode={conflictFilterActive}
+              checkRenameConflict={(name, id) => findTreeRenameConflict({ tree, currentPath: id, newName: name })}
               bookmarkedPaths={bookmarks}
             />
           ) : (

@@ -4,7 +4,7 @@ import { FILE_ACTIONS } from './constants.js';
 import { SIDEBAR_IMAGE_MIME } from './imagePaste.js';
 
 const FileTree = forwardRef<any, any>(function FileTree(
-  { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, bookmarkedPaths, conflictMode },
+  { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, bookmarkedPaths, conflictMode, checkRenameConflict },
   ref,
 ) {
   const wrapRef = useRef<any>(null);
@@ -72,6 +72,7 @@ const FileTree = forwardRef<any, any>(function FileTree(
               getIsBookmarked={getIsBookmarked}
               isBookmarked={bookmarkedPaths?.has(props.node.id)}
               conflictMode={conflictMode}
+              checkRenameConflict={checkRenameConflict}
             />
           )}
         </Tree>
@@ -84,7 +85,31 @@ export default FileTree;
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 
-function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, getIsBookmarked, isBookmarked, conflictMode }: any) {
+// Rename input. Files show the FULL literal name (incl. extension) — no `.md`
+// hiding. Live collision check turns the field red (like the title bar) and
+// blocks Enter; blur/Escape revert. Folders keep their plain behavior.
+function RenameInput({ node, isFolder, checkRenameConflict }: any) {
+  const [val, setVal] = useState(node.data.name);
+  const conflict = !isFolder && checkRenameConflict ? checkRenameConflict(val, node.id) : false;
+  return (
+    <input
+      autoFocus
+      className={`tree-rename-input ${conflict ? 'has-conflict' : ''}`}
+      value={val}
+      onChange={(e) => setVal(e.target.value)}
+      onBlur={() => node.reset()}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') node.reset();
+        if (e.key === 'Enter') {
+          if (conflict) node.reset();
+          else node.submit(e.currentTarget.value);
+        }
+      }}
+    />
+  );
+}
+
+function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, getIsBookmarked, isBookmarked, conflictMode, checkRenameConflict }: any) {
   const isFolder = node.isInternal;
   const isImage = !isFolder && IMAGE_EXT_RE.test(node.data.name);
   const willReceiveDrop = isFolder && node.willReceiveDrop;
@@ -194,16 +219,7 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, get
       </span>
       <span className="tree-icon">{isFolder ? '📁' : '📄'}</span>
       {node.isEditing ? (
-        <input
-          autoFocus
-          defaultValue={node.data.name.replace(/\.md$/i, '')}
-          onBlur={() => node.reset()}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') node.reset();
-            if (e.key === 'Enter') node.submit(e.currentTarget.value);
-          }}
-          className="tree-rename-input"
-        />
+        <RenameInput node={node} isFolder={isFolder} checkRenameConflict={checkRenameConflict} />
       ) : (
         <span className="tree-name">{node.data.name}</span>
       )}

@@ -532,6 +532,32 @@ ipcMain.handle('fs:renameFile', async (_evt, { fromPath, toName }) => {
   return target;
 });
 
+// Literal rename (file-browser): the new name is used verbatim — no `.md`
+// stripping or forcing. A name ending in `.md` stays markdown; anything else
+// is a plain file. Rejects (throws) on collision instead of auto-disambiguating
+// — for `.md` targets the link index is basename-keyed so uniqueness is
+// workspace-wide; for other files it's same-folder. The renderer blocks
+// collisions live; this is the backstop.
+ipcMain.handle('fs:renameFileLiteral', async (_evt, { fromPath, toName }) => {
+  const dir = path.dirname(fromPath);
+  const name = (toName ?? '').trim();
+  if (!name) throw new Error('Name cannot be empty');
+  if (name.includes('/') || name.includes('\\')) throw new Error('Name cannot contain a path separator');
+  const target = path.join(dir, name);
+  if (target === fromPath) return fromPath;
+  if (isMdFile(name)) {
+    const baseLower = name.slice(0, -3).toLowerCase();
+    const taken = await collectMarkdownBasenamesLower(watcherRootDir, new Set([fromPath]));
+    if (taken.has(baseLower)) throw new Error(`A file named "${name}" already exists in the workspace.`);
+  } else {
+    let exists = true;
+    try { await fs.access(target); } catch { exists = false; }
+    if (exists) throw new Error(`"${name}" already exists in this folder.`);
+  }
+  await fs.rename(fromPath, target);
+  return target;
+});
+
 ipcMain.handle('fs:duplicateFile', async (_evt, filePath) => {
   const dir = path.dirname(filePath);
   const ext = path.extname(filePath);

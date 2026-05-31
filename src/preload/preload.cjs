@@ -118,6 +118,10 @@ contextBridge.exposeInMainWorld('api', {
    */
   renameFile: (fromPath, toName) =>
     ipcRenderer.invoke('fs:renameFile', { fromPath, toName }),
+  /** Literal rename used by the file browser — `toName` is verbatim (no `.md`
+   *  forcing). Throws on collision. @param {string} fromPath @param {string} toName @returns {Promise<string>} */
+  renameFileLiteral: (fromPath, toName) =>
+    ipcRenderer.invoke('fs:renameFileLiteral', { fromPath, toName }),
   /** @param {string} filePath @returns {Promise<string>} Path of the new duplicate. */
   duplicateFile: (filePath) => ipcRenderer.invoke('fs:duplicateFile', filePath),
   /**

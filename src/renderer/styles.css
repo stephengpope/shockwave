@@ -458,6 +458,13 @@ html, body, #root {
   color: var(--fg-primary);
 }
 
+/* Name collides with an existing file → red, and Enter won't save. */
+.tree-rename-input.has-conflict {
+  border-color: #e02d2d;
+  background: var(--bg-error);
+  color: #e02d2d;
+}
+
 /* ---------- Workspace selector (bottom of sidebar) ---------- */
 
 .workspace-selector {
