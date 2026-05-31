@@ -1,4 +1,4 @@
-import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
+import { Decoration, ViewPlugin, WidgetType, KeyBinding } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
 
 // A task item: list marker (`- `, `* `, `+ `) followed by `[ ]` or `[x]`.
@@ -6,6 +6,9 @@ import { RangeSetBuilder } from '@codemirror/state';
 // `bullet [ ]` range is replaced with the widget so `- [ ] foo` collapses to
 // `☐ foo`. Group 1: leading whitespace. Group 2: bullet + space. Group 3: state.
 const TASK_RE = /^(\s*)([-*+]\s+)\[([ xX])\]/;
+
+// Match the whole task line so we can read the content after `[ ]`.
+const TASK_LINE_RE = /^(\s*)([-*+]\s+)\[([ xX])\]\s*(.*)$/;
 
 class CheckboxWidget extends WidgetType {
   checked; prefixLength;
@@ -73,6 +76,42 @@ function buildDecorations(view) {
   }
   return builder.finish();
 }
+
+// Enter handler for task list items. Runs BEFORE markdownKeymap so we own the
+// `- [ ]` continuation logic (markdownKeymap continues `- ` bullets but doesn't
+// know about the `[ ]` part, so without this you'd get a bare `- ` on the next
+// line and the empty-task escape never works). Only acts when the cursor is at
+// the end of a task line; everything else falls through.
+//   non-empty task + Enter at end  →  new `- [ ] ` line below (Obsidian/Notion)
+//   empty task + Enter             →  clear the empty `- [ ]` (escape the list)
+export const taskEnterKeymap: KeyBinding[] = [{
+  key: 'Enter',
+  run: (view) => {
+    const { state } = view;
+    const sel = state.selection.main;
+    if (!sel.empty) return false;
+    const line = state.doc.lineAt(sel.head);
+    if (sel.head !== line.to) return false;
+    const m = line.text.match(TASK_LINE_RE);
+    if (!m) return false;
+    const [, indent, bullet, , content] = m;
+    if (content.trim() === '') {
+      view.dispatch({
+        changes: { from: line.from, to: line.to, insert: '' },
+        selection: { anchor: line.from },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+    const insert = `\n${indent}${bullet}[ ] `;
+    view.dispatch({
+      changes: { from: sel.head, insert },
+      selection: { anchor: sel.head + insert.length },
+      scrollIntoView: true,
+    });
+    return true;
+  },
+}];
 
 export const taskCheckboxes = ViewPlugin.fromClass(
   class {

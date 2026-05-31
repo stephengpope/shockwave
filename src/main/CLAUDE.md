@@ -4,16 +4,16 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 
 ## Files
 
-- `main.js` — entry point. Window lifecycle, every IPC handler, watcher orchestration, settings I/O, `app://` protocol, secret encryption.
-- `pathResolver.js` — `isMdFile`, `uniquePath` (same-dir uniqueness), `uniqueInWorkspace` (workspace-wide basename uniqueness for `.md` files), `walkMarkdownPaths`, `collectMarkdownBasenamesLower`. The link index is keyed by basename, so two `.md` files sharing one breaks it; `uniqueInWorkspace` is what `fs:renameFile`, `fs:moveItem`, and `fs:createFile` call to auto-disambiguate. Folder renames stay same-folder-unique because folders aren't part of the link index.
-- `linkParser.js` — ESM mirror of the wiki-link parser in `src/renderer/linkIndex.js`. See parser-parity rule in root.
+- `main.ts` — entry point. Window lifecycle, every IPC handler, watcher orchestration, settings I/O, `app://` protocol, secret encryption.
+- `pathResolver.ts` — `isMdFile`, `uniquePath` (same-dir uniqueness), `uniqueInWorkspace` (workspace-wide basename uniqueness for `.md` files), `walkMarkdownPaths`, `collectMarkdownBasenamesLower`. The link index is keyed by basename, so two `.md` files sharing one breaks it; `uniqueInWorkspace` is what `fs:renameFile`, `fs:moveItem`, and `fs:createFile` call to auto-disambiguate. Folder renames stay same-folder-unique because folders aren't part of the link index.
+- `linkParser.js` — ESM mirror of the wiki-link parser in `src/renderer/linkIndex.js` (intentionally kept as `.js` so both processes load the exact same module bytes — see parser-parity rule in root).
 - `renameCorrelator.js` — pairs unlink+add events into rename events. See below.
-- `codingAgent.js` — pi `AgentSession` lifecycle, system-prompt override, emit-callback wrapping for the failed-image splice.
-- `agentSystemPrompt.js` — exports `DEFAULT_AGENT_SYSTEM_PROMPT`.
-- `agentTokensExtension.js` — pi extension exposing `list_agent_secrets` + `get_agent_secret`; installed via `installAgentTokensBridge` at startup.
-- `skillLibrary.js` — on-disk skill library under `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` and the workspace-override resolution.
-- `sync.js` — GitHub sync support: REST helpers (`verifyPat`, `probeWrite`, `createRepo`), URL parsing, the `gitSpawn` wrapper that injects a PAT via `GIT_ASKPASS`, git-presence check, per-workspace status, and the four setup flows (clone / init+create / adopt-existing / teardown).
-- `syncEngine.js` — singleton per-workspace tick engine. Sequential ticks (flush → commit → pull --rebase → push), status state machine, flush-renderer-dirty bridge, drain-on-quit hook.
+- `codingAgent.ts` — pi `AgentSession` lifecycle, system-prompt override, emit-callback wrapping for the failed-image splice.
+- `agentSystemPrompt.ts` — exports `DEFAULT_AGENT_SYSTEM_PROMPT`.
+- `agentTokensExtension.ts` — pi extension exposing `list_agent_secrets` + `get_agent_secret`; installed via `installAgentTokensBridge` at startup.
+- `skillLibrary.ts` — on-disk skill library under `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` and the workspace-override resolution.
+- `sync.ts` — GitHub sync support: REST helpers (`verifyPat`, `probeWrite`, `createRepo`), URL parsing, the `gitSpawn` wrapper that injects a PAT via `GIT_ASKPASS`, git-presence check, per-workspace status, and the four setup flows (clone / init+create / adopt-existing / teardown).
+- `syncEngine.ts` — singleton per-workspace tick engine. Sequential ticks (flush → commit → pull --rebase → push), status state machine, flush-renderer-dirty bridge, drain-on-quit hook.
 
 ## File watcher
 
@@ -86,9 +86,9 @@ The correlator buffers unlinks and pairs them with subsequent adds:
 
 ## Settings persistence + secrets encryption
 
-`settings.json` lives at `app.getPath('userData')/settings.json`. `DEFAULT_SETTINGS` in `main.js` is the schema. Top-level keys: `workspaces`, `activeWorkspaceId`, `appearance` (`themeMode`, `hideLineNumbers`), `dailyNote` (`format`, `folder`), `codingAgent` (`provider`, `model`, `apiKey`, `systemPrompt`, `skills.{global,workspaces}`), `agentSecrets[]`, `transcription` (`provider`, `apiKey`), `sync` (`pat`, `pullIntervalSeconds`), `chatSidebarOpen`, `chatSidebarWidth`, `treeSortOrder`, `windowBounds`.
+`settings.json` lives at `app.getPath('userData')/settings.json`. `DEFAULT_SETTINGS` + the `Settings` type live in `src/shared/settings.ts` (single source of truth). Top-level keys: `workspaces`, `activeWorkspaceId`, `appearance` (`themeMode`, `hideLineNumbers`), `dailyNote` (`format`, `folder`), `codingAgent` (`provider`, `model`, `apiKey`, `systemPrompt`, `skills.{global,workspaces}`), `agentSecrets[]`, `transcription` (`provider`, `apiKey`), `sync` (`pat`, `pullIntervalSeconds`), `chatSidebarOpen`, `chatSidebarWidth`, `treeSortOrder`, `windowBounds`.
 
-Adding a persisted field means: extend `DEFAULT_SETTINGS`, extend `readSettings`'s deep merge, and update every `persistSettings()` call site in `App.jsx` (which passes the whole object on each write).
+Adding a persisted field means: extend the `Settings` type + `DEFAULT_SETTINGS` in `src/shared/settings.ts`, extend `readSettings`'s deep merge in `main.ts`, and add a slice + setter in the renderer's `useSettings` hook (which owns the canonical in-memory copy and is the only `persistSettings` caller).
 
 `writeSettings` is serialized through `settingsWriteQueue` so concurrent writers (renderer-side `persistSettings` vs. main-side `persistWindowBounds`) can't race a partial overwrite. Writes go through tmp+rename for atomicity.
 
@@ -112,11 +112,11 @@ The agent runs with the **active workspace as `cwd`**, and uses an in-memory `Au
 
 `agentSystemPrompt.js` exports `DEFAULT_AGENT_SYSTEM_PROMPT`, pre-filled into `codingAgent.systemPrompt` on first install and writable from Settings → Agent Chat. An empty/whitespace value falls back to the default at session boot. Pi's default coding-agent prompt is overridden via a custom `DefaultResourceLoader` with `systemPromptOverride`. The renderer fetches the current default via `agent:getDefaultSystemPrompt` for the "Reset to default" button.
 
-### Skills (`skillLibrary.js`)
+### Skills (`skillLibrary.ts`)
 
 On-disk library at `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` (one folder per skill). Pi never auto-discovers this directory. Each session boot we recompute the effective enabled list (`computeEffectivePaths`: workspace override wins over global; `inherit` falls back to global) and write it as `skills: []` to `<userData>/pi-agent/settings.json` via `writePiSettings`. Pi reads `skills` only at session boot — the user can hit Clear in the chat to apply a changed set.
 
-### Agent-tokens extension (`agentTokensExtension.js`)
+### Agent-tokens extension (`agentTokensExtension.ts`)
 
 Exposes `list_agent_secrets` + `get_agent_secret` tools so the agent can look up user-managed API tokens. The on-disk extension file is plain JS with no imports — it talks back to main through a process-global bridge (`global.__SHOCKWAVE_AGENT_TOKENS`) installed by `installAgentTokensBridge` at startup. The bridge re-reads settings on every call so user-side edits to secrets are picked up mid-conversation.
 
@@ -124,15 +124,15 @@ The extension source string is materialized fresh on every session boot via `ens
 
 ### Failed-image guard
 
-Pi pushes a user message into `state.messages` before the API call and a failure assistant message after, so a provider error (e.g. image too large) leaves both stuck in context to re-poison every subsequent turn. `codingAgent.js`'s `agentSend` wraps the emit callback to detect the failure on `agent_end`, splices the bad pair out of pi's in-memory state, and emits a synthetic `agent_send_failed` event so the renderer can drop the matching transcript entry from its UI.
+Pi pushes a user message into `state.messages` before the API call and a failure assistant message after, so a provider error (e.g. image too large) leaves both stuck in context to re-poison every subsequent turn. `codingAgent.ts`'s `agentSend` wraps the emit callback to detect the failure on `agent_end`, splices the bad pair out of pi's in-memory state, and emits a synthetic `agent_send_failed` event so the renderer can drop the matching transcript entry from its UI.
 
 ### Provider/model discovery
 
-`agent:listProviders` and `agent:listModels` return pi-ai's provider/model lists filtered against `SUPPORTED_PROVIDER_SLUGS` (the bearer-key providers we support; cloud/OAuth providers like bedrock/vertex/azure/copilot are filtered out because our settings schema only carries a single API key). The list lives in `src/shared/constants.js`.
+`agent:listProviders` and `agent:listModels` return pi-ai's provider/model lists filtered against `SUPPORTED_PROVIDER_SLUGS` (the bearer-key providers we support; cloud/OAuth providers like bedrock/vertex/azure/copilot are filtered out because our settings schema only carries a single API key). The list lives in `src/shared/constants.ts`.
 
 ## GitHub sync
 
-Per-workspace background sync to GitHub. Two files: `sync.js` (one-shot helpers + setup) and `syncEngine.js` (the singleton tick loop).
+Per-workspace background sync to GitHub. Two files: `sync.ts` (one-shot helpers + setup) and `syncEngine.ts` (the singleton tick loop).
 
 ### Auth model
 

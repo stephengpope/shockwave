@@ -2,12 +2,12 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
-import { markdown } from '@codemirror/lang-markdown';
+import { markdown, markdownKeymap } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, defaultHighlightStyle, indentOnInput } from '@codemirror/language';
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import { oneDark } from '@codemirror/theme-one-dark';
-import { taskCheckboxes } from './taskCheckboxes.js';
+import { taskCheckboxes, taskEnterKeymap } from './taskCheckboxes.js';
 import { bulletPoints } from './bulletPoints.js';
 import { wikiLinks } from './wikiLinks.js';
 import { wikiLinkCompletions } from './wikiCompletions.js';
@@ -346,6 +346,8 @@ const Editor = forwardRef<any, any>(function Editor(
       keymap.of([
         indentWithTab,
         ...completionKeymap,
+        ...taskEnterKeymap,
+        ...markdownKeymap,
         ...defaultKeymap,
         ...historyKeymap,
       ]),

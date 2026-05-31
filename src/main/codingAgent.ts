@@ -101,12 +101,12 @@ export async function agentSend(opts, emitEvent) {
   if (!apiKey) throw new Error('Coding agent API key not configured. Open Settings → LLM / Agent.');
 
   // Wrap the renderer's event listener so we can intercept the failure
-  // assistant message that pi emits on a provider-side error (image too
-  // large, etc). Pi pushes the failed user msg into state.messages BEFORE
-  // the API call (see pi-agent-core/dist/agent-loop.js:42-52) and pushes
-  // the failure assistant after; both stay in context and re-poison every
-  // subsequent turn. We splice them out and tell the renderer to drop the
-  // matching transcript entries.
+  // assistant message that pi emits on any provider-side error (bad API key,
+  // image too large, rate limit, etc). Pi pushes the failed user msg into
+  // state.messages BEFORE the API call (see pi-agent-core/dist/agent-loop.js:42-52)
+  // and pushes the failure assistant after; both stay in context and re-poison
+  // every subsequent turn. session.prompt() resolves normally in this case —
+  // pi does not throw — so without this we'd never surface the error.
   let lastFailureError: any = null;
   const wrappedEmit = (event) => {
     if (event?.type === 'agent_end' && Array.isArray(event.messages)) {
@@ -122,8 +122,9 @@ export async function agentSend(opts, emitEvent) {
   const hasImages = Array.isArray(images) && images.length > 0;
   await session.prompt(text, hasImages ? { images } : undefined);
 
-  if (lastFailureError && hasImages) {
-    // Drop the failure assistant + the user message we just sent.
+  if (lastFailureError) {
+    // Drop the failure assistant + the user message we just sent so pi's
+    // context isn't poisoned for the next turn.
     const msgs = session.state?.messages;
     if (Array.isArray(msgs) && msgs.length >= 2) {
       const last = msgs[msgs.length - 1];
@@ -136,8 +137,8 @@ export async function agentSend(opts, emitEvent) {
         msgs.splice(msgs.length - 2, 2);
       }
     }
-    // Tell the renderer to drop the corresponding transcript entries so the
-    // UI matches pi's now-clean state.
+    // Tell the renderer to drop the corresponding transcript entries and
+    // surface the provider error in the chat banner.
     emitEvent({ type: 'agent_send_failed', errorMessage: lastFailureError });
   }
 }

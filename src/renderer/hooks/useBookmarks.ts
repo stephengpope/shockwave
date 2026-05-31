@@ -3,20 +3,18 @@ import { useSyncRef } from './useSyncRef';
 import { toRelPath, toAbsPath } from '../pathUtils';
 import type { TreeNode } from '../../shared/api';
 
-// Prune the tree to only the bookmarked files and the folders that contain
-// them. Folders with no bookmarked descendants are removed.
-export function filterTreeToBookmarks(nodes: TreeNode[], bookmarkedSet: Set<string>): TreeNode[] {
+// Collect every bookmarked file from the tree as a flat list (no folders).
+// Bookmark filter mode renders bookmarks as a single sorted list rather than
+// preserving the folder hierarchy.
+export function flattenBookmarkedFiles(nodes: TreeNode[], bookmarkedSet: Set<string>): TreeNode[] {
   const out: TreeNode[] = [];
-  for (const n of nodes) {
-    if (n.children) {
-      const filteredChildren = filterTreeToBookmarks(n.children, bookmarkedSet);
-      if (filteredChildren.length > 0) {
-        out.push({ ...n, children: filteredChildren });
-      }
-    } else if (bookmarkedSet.has(n.id)) {
-      out.push(n);
+  const walk = (ns: TreeNode[]) => {
+    for (const n of ns) {
+      if (n.children) walk(n.children);
+      else if (bookmarkedSet.has(n.id)) out.push(n);
     }
-  }
+  };
+  walk(nodes);
   return out;
 }
 

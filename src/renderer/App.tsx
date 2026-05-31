@@ -25,7 +25,7 @@ import { useLinkIndex } from './hooks/useLinkIndex.js';
 import { useTabs } from './hooks/useTabs.js';
 import { useFileOps } from './hooks/useFileOps.js';
 import { useSyncRef } from './hooks/useSyncRef';
-import { useBookmarks, filterTreeToBookmarks } from './hooks/useBookmarks';
+import { useBookmarks, flattenBookmarkedFiles } from './hooks/useBookmarks';
 import { useDailyNote } from './hooks/useDailyNote';
 import { useSendToAgent } from './hooks/useSendToAgent';
 import { useFsWatcher } from './hooks/useFsWatcher';
@@ -151,19 +151,56 @@ export default function App() {
   // Sync engine bridge — once on mount, no workspace dep. The engine asks us
   // to flush dirty editor tabs before each tick; we writeNow then ack with
   // the same token. Status events update the status-bar icon.
+  //
+  // Minimum SYNCING visibility: a fast push/pull can flip `syncing` → `idle`
+  // in well under one render frame, so the spinning icon never reaches the
+  // screen. Hold any SYNCING state for at least SYNC_MIN_DISPLAY_MS before
+  // letting a subsequent IDLE/ERROR through. PAUSED is never delayed (user
+  // action required). The hold is per-status-event, not cumulative — back-
+  // to-back ticks just keep extending the SYNCING window.
   useEffect(() => {
+    const SYNC_MIN_DISPLAY_MS = 400;
+    let syncingShownAt = 0;
+    let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingStatus: any = null;
+    const apply = (s: any) => {
+      if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+      if (s.status === 'syncing') {
+        syncingShownAt = Date.now();
+        setSyncStatus(s);
+        return;
+      }
+      if (s.status === 'paused') {
+        setSyncStatus(s);
+        return;
+      }
+      // idle | error | disabled — defer if SYNCING hasn't been on-screen long enough
+      const elapsed = Date.now() - syncingShownAt;
+      if (syncingShownAt && elapsed < SYNC_MIN_DISPLAY_MS) {
+        pendingStatus = s;
+        pendingTimer = setTimeout(() => {
+          pendingTimer = null;
+          setSyncStatus(pendingStatus);
+          pendingStatus = null;
+        }, SYNC_MIN_DISPLAY_MS - elapsed);
+        return;
+      }
+      setSyncStatus(s);
+    };
+
     const unsubFlush = window.api.sync.onFlushRequest(async (token) => {
       // Best-effort flush before sync acks; log so a failed save isn't silent.
       try { await writeNowRef.current(); } catch (e: any) { console.warn('sync flush save failed:', e); }
       window.api.sync.flushDone(token).catch(() => {});
     });
-    const unsubStatus = window.api.sync.onStatus((s) => setSyncStatus(s));
+    const unsubStatus = window.api.sync.onStatus(apply);
     // Seed the current status so the icon doesn't flash 'disabled' on reload
     // when the engine is already running.
     window.api.sync.engineStatus().then((s) => { if (s) setSyncStatus(s); }).catch(() => {});
     return () => {
       unsubFlush();
       unsubStatus();
+      if (pendingTimer) clearTimeout(pendingTimer);
       // Stop the engine when the renderer goes away (full reload, window close).
       window.api.sync.engineStop().catch(() => {});
     };
@@ -205,7 +242,7 @@ export default function App() {
   } = useBookmarks({ workspacePath, showError });
 
   const sortedTree = useMemo(() => {
-    const base = bookmarkFilterActive ? filterTreeToBookmarks(tree, bookmarks) : tree;
+    const base = bookmarkFilterActive ? flattenBookmarkedFiles(tree, bookmarks) : tree;
     return sortTreeNodes(base, treeSortOrder);
   }, [tree, treeSortOrder, bookmarkFilterActive, bookmarks]);
 

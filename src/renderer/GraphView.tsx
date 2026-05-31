@@ -24,15 +24,31 @@ export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVe
   const hostRef = useRef<any>(null);
   const fgRef = useRef<any>(null);
   const colorsRef = useRef(readThemeColors());
+  // Cache node objects by id across rebuilds. force-graph mutates x/y/vx/vy
+  // onto each node; reusing the same object reference keeps positions and
+  // velocities intact when other files change, so the layout doesn't reshuffle.
+  const nodeCacheRef = useRef(new Map<string, any>());
 
   const graphData = useMemo(() => {
+    const nodeCache = nodeCacheRef.current;
     const nodes: any[] = [];
-    const seen = new Set();
+    const seen = new Set<string>();
     for (const f of flatten(tree)) {
       if (!f.name.toLowerCase().endsWith('.md')) continue;
       if (seen.has(f.id)) continue;
       seen.add(f.id);
-      nodes.push({ id: f.id, name: f.name.replace(/\.md$/i, '') });
+      const displayName = f.name.replace(/\.md$/i, '');
+      let node = nodeCache.get(f.id);
+      if (node) {
+        if (node.name !== displayName) node.name = displayName;
+      } else {
+        node = { id: f.id, name: displayName };
+        nodeCache.set(f.id, node);
+      }
+      nodes.push(node);
+    }
+    for (const id of [...nodeCache.keys()]) {
+      if (!seen.has(id)) nodeCache.delete(id);
     }
     const links: any[] = [];
     for (const [source, targets] of outgoingByFile.entries()) {

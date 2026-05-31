@@ -1,7 +1,7 @@
 import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { PaperclipIcon, PlayIcon, StopIcon, RotateCcwIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon } from './Icons.jsx';
+import { PaperclipIcon, PlayIcon, StopIcon, RotateCcwIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon, CopyIcon, CheckIcon } from './Icons.jsx';
 import {
   classify,
   readAsBase64,
@@ -185,6 +185,32 @@ function AttachmentRow({ attachments, onRemove, readOnly }: any) {
   );
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<any>(null);
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+  const onClick = useCallback(async (e: any) => {
+    e.stopPropagation();
+    const value = text ?? '';
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setCopied(false), 1200);
+    } catch { /* clipboard write is best-effort */ }
+  }, [text]);
+  return (
+    <button
+      type="button"
+      className="chat-copy-btn"
+      onClick={onClick}
+      aria-label={copied ? 'Copied' : 'Copy message'}
+      title={copied ? 'Copied' : 'Copy message'}
+    >{copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}</button>
+  );
+}
+
 // One rendered chat row. Memoized so typing in the composer (which re-renders
 // the parent ChatSidebar) does NOT walk every message and call ReactMarkdown
 // again. Every message object is referentially stable across non-mutating
@@ -201,6 +227,7 @@ const MessageRow = memo(function MessageRow({ message: m }: any) {
           )}
           {m.text && <div className="chat-user-text">{m.text}</div>}
         </div>
+        {m.text && <CopyButton text={m.text} />}
       </div>
     );
   }
@@ -210,6 +237,7 @@ const MessageRow = memo(function MessageRow({ message: m }: any) {
         <div className="chat-bubble chat-markdown">
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS as any}>{m.text}</ReactMarkdown>
         </div>
+        {m.text && <CopyButton text={m.text} />}
       </div>
     );
   }
