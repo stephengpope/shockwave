@@ -94,6 +94,12 @@ export function createLinkIndex() {
     }
   }
 
+  // Updates outgoing-link entries for `path`. If `mtime` is omitted, the
+  // existing stored mtime is preserved — use that variant only when you're
+  // re-parsing without a known new mtime (e.g. the rename-echo path, which
+  // already preserved the mtime via renameFile). Otherwise pass the real
+  // file mtime from fs.stat — never Date.now(), which loses fractional ms
+  // and breaks the watcher's self-echo guard.
   function updateFile(path, content, mtime) {
     const oldTargets = outgoingByFile.get(path);
     if (oldTargets && oldTargets.length > 0) {
@@ -106,7 +112,7 @@ export function createLinkIndex() {
       addEntry(target, path, lineNumber, lineText, contextLines);
     }
     outgoingByFile.set(path, newTargets);
-    mtimes.set(path, mtime ?? Date.now());
+    if (mtime !== undefined) mtimes.set(path, mtime);
   }
 
   function removeFile(path) {
@@ -144,7 +150,7 @@ export function createLinkIndex() {
       addEntry(target, path, lineNumber, lineText, contextLines);
     }
     outgoingByFile.set(path, newTargets);
-    mtimes.set(path, mtime ?? Date.now());
+    if (mtime !== undefined) mtimes.set(path, mtime);
   }
 
   function rebuild(files) {

@@ -36,11 +36,11 @@ export async function rewriteReferences({ api, linkIndex, oldBaseName, newBaseNa
     const content = await api.readFile(src);
     const next = content.replace(linkPattern, `[[${newBaseName}$2]]`);
     if (next !== content) {
-      await api.writeFile(src, next);
+      const mtime = await api.writeFile(src, next);
       // For the file being renamed (selfPath), don't update the link index
       // here — the caller will rename it, which will re-key everything.
       // For other files, refresh their outgoing links now.
-      if (src !== selfPath) linkIndex.updateFile(src, next);
+      if (src !== selfPath) linkIndex.updateFile(src, next, mtime);
       rewritten.push(src);
     }
   }

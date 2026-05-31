@@ -34,8 +34,8 @@ export function useLinkIndex(tree: any): any {
   const pageIndexRef = useRef(pageIndex);
   useEffect(() => { pageIndexRef.current = pageIndex; }, [pageIndex]);
 
-  const updateFile = useCallback((path, content) => {
-    linkIndexRef.current.updateFile(path, content);
+  const updateFile = useCallback((path, content, mtime) => {
+    linkIndexRef.current.updateFile(path, content, mtime);
     bump();
   }, [bump]);
 

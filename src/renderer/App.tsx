@@ -813,9 +813,9 @@ export default function App() {
   // other files would break silently when something moves outside the app.
   //
   // Self-echo guard: every renderer-initiated write triggers a watcher event ~350ms
-  // later. The renderer has already called linkIndex.updateFile with a Date.now()
-  // mtime, so the echo's stat.mtimeMs will be <= the stored mtime. We compare and
-  // skip stale events so the echo can't clobber fresh in-memory state.
+  // later. The renderer has already called linkIndex.updateFile with the file's
+  // real stat.mtimeMs (returned by main from fs:writeFile), so the echo's
+  // stat.mtimeMs will equal the stored mtime and we skip it.
   // Stable refs so the watcher subscription below depends ONLY on workspacePath
   // and never tears down on re-render. Critical: `linkIndex.bump()` (called by
   // `applyParsedLinks` / `removeFile` / `renameFile`) triggers a re-render; if
