@@ -39,9 +39,9 @@ function shortDescription(text) {
 // UI stays compact regardless of workspace count. Defaults to the active
 // workspace if one is open.
 export default function WorkspaceSkillsTab({ skills, onSkillsChange, workspaces, activeWorkspaceId }) {
-  const [installed, setInstalled] = useState([]);
+  const [installed, setInstalled] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<any>(null);
 
   // Local picker state — defaults to active workspace, falls back to first.
   const initialId = activeWorkspaceId ?? workspaces?.[0]?.id ?? '';
@@ -60,7 +60,7 @@ export default function WorkspaceSkillsTab({ skills, onSkillsChange, workspaces,
       try {
         const list = await window.api.skills.list();
         if (!cancelled) setInstalled(list);
-      } catch (err) {
+      } catch (err: any) {
         if (!cancelled) setError(err?.message ?? String(err));
       } finally {
         if (!cancelled) setLoading(false);

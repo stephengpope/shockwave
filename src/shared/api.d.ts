@@ -120,7 +120,7 @@ export interface ShockwaveApi {
   onFsChanged(cb: (evt: FsChangedEvent) => void): Unsubscribe;
 
   bookmarks: {
-    read(workspacePath: string): Promise<{ version: number; paths: string[] }>;
+    read(workspacePath: string): Promise<string[]>;
     write(workspacePath: string, paths: string[]): Promise<void>;
   };
 

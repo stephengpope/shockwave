@@ -12,7 +12,7 @@ export default function UrlPromptModal({ onSubmit, onCancel, initialUrl, initial
   const isEdit = initialText !== undefined;
   const [url, setUrl] = useState(initialUrl ?? '');
   const [text, setText] = useState(initialText ?? '');
-  const inputRef = useRef(null);
+  const inputRef = useRef<any>(null);
 
   useEffect(() => {
     inputRef.current?.focus();

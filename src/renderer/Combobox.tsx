@@ -20,8 +20,8 @@ export default function Combobox({
   id,
   className = '',
 }) {
-  const rootRef = useRef(null);
-  const inputRef = useRef(null);
+  const rootRef = useRef<any>(null);
+  const inputRef = useRef<any>(null);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value ?? '');
   const [highlight, setHighlight] = useState(0);

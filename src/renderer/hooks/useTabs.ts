@@ -19,7 +19,7 @@ const makeTabId = () => `t${nextTabId++}`;
  *   writeNow          — flushes any pending debounced save
  *   onAfterSwitch?    — optional, fires after any tab op completes (e.g., turn off graph mode)
  */
-export function useTabs({ editorRef, writeNow, onAfterSwitch }) {
+export function useTabs({ editorRef, writeNow, onAfterSwitch }: any): any {
   const [tabs, setTabs] = useState<any[]>([]);
   const [activeTabId, setActiveTabId] = useState<any>(null);
   const viewStateByPath = useRef(new Map());

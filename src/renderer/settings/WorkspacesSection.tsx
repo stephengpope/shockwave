@@ -14,8 +14,8 @@ export default function WorkspacesSection({
   disabledWorkspaceIds,
   onSyncDisabledChange,
 }) {
-  const [confirmRemoveId, setConfirmRemoveId] = useState(null);
-  const [syncWorkspaceId, setSyncWorkspaceId] = useState(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<any>(null);
+  const [syncWorkspaceId, setSyncWorkspaceId] = useState<any>(null);
   const target = workspaces.find((w) => w.id === confirmRemoveId) ?? null;
   const syncTarget = workspaces.find((w) => w.id === syncWorkspaceId) ?? null;
   return (

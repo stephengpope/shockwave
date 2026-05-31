@@ -6,7 +6,7 @@ const stroke = {
   strokeWidth: 2,
   strokeLinecap: 'round',
   strokeLinejoin: 'round',
-};
+} as const;
 
 export function PaperclipIcon({ size = 16 }) {
   return (
@@ -100,7 +100,7 @@ export function SearchIcon({ size = 20 }) {
   );
 }
 
-export function CalendarIcon({ size = 20, day = null }) {
+export function CalendarIcon({ size = 20, day = null }: any) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
       <rect x="3" y="4.5" width="18" height="17" rx="2" />

@@ -45,15 +45,15 @@ function computeStats(state) {
  *   getViewState()                 — { cursor, scrollTop } snapshot
  *   clear()                        — empties the doc, resets cursor
  */
-const Editor = forwardRef(function Editor(
+const Editor = forwardRef<any, any>(function Editor(
   { onLinkClick, onChange, getPageIndexRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, dark, viewMode, hideLineNumbers },
   ref,
 ) {
-  const hostRef = useRef(null);
-  const viewRef = useRef(null);
-  const readOnlyCompartmentRef = useRef(null);
-  const livePreviewCompartmentRef = useRef(null);
-  const livePreviewExtensionsRef = useRef(null);
+  const hostRef = useRef<any>(null);
+  const viewRef = useRef<any>(null);
+  const readOnlyCompartmentRef = useRef<any>(null);
+  const livePreviewCompartmentRef = useRef<any>(null);
+  const livePreviewExtensionsRef = useRef<any>(null);
   const linkClickRef = useRef(onLinkClick);
   const changeRef = useRef(onChange);
   const requestUrlRef = useRef(onRequestUrl);

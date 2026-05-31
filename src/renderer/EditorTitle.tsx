@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 
 export default function EditorTitle({ value, onChange, onCommit, conflict }) {
-  const inputRef = useRef(null);
+  const inputRef = useRef<any>(null);
   const lastCommittedRef = useRef(value);
 
   // Only refresh the baseline when the value changes externally — e.g. the

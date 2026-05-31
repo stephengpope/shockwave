@@ -3,12 +3,12 @@ import { Tree } from 'react-arborist';
 import { FILE_ACTIONS } from './constants.js';
 import { SIDEBAR_IMAGE_MIME } from './imagePaste.js';
 
-const FileTree = forwardRef(function FileTree(
+const FileTree = forwardRef<any, any>(function FileTree(
   { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, bookmarkedPaths },
   ref,
 ) {
-  const wrapRef = useRef(null);
-  const treeRef = useRef(null);
+  const wrapRef = useRef<any>(null);
+  const treeRef = useRef<any>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
@@ -83,7 +83,7 @@ export default FileTree;
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 
-function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, getIsBookmarked, isBookmarked }) {
+function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, getIsBookmarked, isBookmarked }: any) {
   const isFolder = node.isInternal;
   const isImage = !isFolder && IMAGE_EXT_RE.test(node.data.name);
   const willReceiveDrop = isFolder && node.willReceiveDrop;

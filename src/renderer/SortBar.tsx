@@ -32,10 +32,10 @@ export default function SortBar({
   onPickBookmark,
   disabled,
 }) {
-  const rootRef = useRef(null);
-  const bookmarkBtnRef = useRef(null);
+  const rootRef = useRef<any>(null);
+  const bookmarkBtnRef = useRef<any>(null);
   // Only one menu can be open at a time: 'sort' | 'bookmarks' | null.
-  const [openMenu, setOpenMenu] = useState(null);
+  const [openMenu, setOpenMenu] = useState<any>(null);
   const open = openMenu === 'sort';
   const bmPickerOpen = openMenu === 'bookmarks';
 
@@ -62,7 +62,7 @@ export default function SortBar({
   const bookmarkRows = (() => {
     const arr = bookmarks ? Array.from(bookmarks) : [];
     return arr
-      .map((abs) => {
+      .map((abs: any) => {
         const rel = (workspacePath && abs.startsWith(workspacePath + '/'))
           ? abs.slice(workspacePath.length + 1)
           : abs;
@@ -156,7 +156,7 @@ export default function SortBar({
         <ul className="sort-bar-menu" role="listbox">
           {ORDER.map((id) => (
             <React.Fragment key={id}>
-              {SEPARATOR_BEFORE.has(id) && <li className="sort-bar-divider" role="separator" />}
+              {SEPARATOR_BEFORE.has(id as any) && <li className="sort-bar-divider" role="separator" />}
               <li
                 role="option"
                 aria-selected={id === value}

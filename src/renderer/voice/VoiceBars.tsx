@@ -6,8 +6,8 @@ const MULTIPLIERS = [0.7, 1.0, 0.85, 0.6];
 // Volume-driven mic indicator. Driven by RMS through a ref so we don't
 // re-render every frame.
 export function VoiceBars({ volumeRef, isRecording }) {
-  const barsRef = useRef(null);
-  const rafRef = useRef(null);
+  const barsRef = useRef<any>(null);
+  const rafRef = useRef<any>(null);
 
   useEffect(() => {
     if (!isRecording) return;

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import ForceGraph from 'force-graph';
 
-function flatten(nodes, out = []) {
+function flatten(nodes, out: any[] = []) {
   for (const n of nodes) {
     if (n.children) flatten(n.children, out);
     else out.push(n);
@@ -21,12 +21,12 @@ function readThemeColors() {
 }
 
 export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVersion, onOpenFile, dark }) {
-  const hostRef = useRef(null);
-  const fgRef = useRef(null);
+  const hostRef = useRef<any>(null);
+  const fgRef = useRef<any>(null);
   const colorsRef = useRef(readThemeColors());
 
   const graphData = useMemo(() => {
-    const nodes = [];
+    const nodes: any[] = [];
     const seen = new Set();
     for (const f of flatten(tree)) {
       if (!f.name.toLowerCase().endsWith('.md')) continue;
@@ -34,7 +34,7 @@ export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVe
       seen.add(f.id);
       nodes.push({ id: f.id, name: f.name.replace(/\.md$/i, '') });
     }
-    const links = [];
+    const links: any[] = [];
     for (const [source, targets] of outgoingByFile.entries()) {
       if (!seen.has(source)) continue;
       for (const t of targets) {
@@ -50,7 +50,7 @@ export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVe
 
   useEffect(() => {
     if (!hostRef.current) return;
-    const fg = ForceGraph()(hostRef.current)
+    const fg = (ForceGraph as any)()(hostRef.current)
       .graphData(graphData)
       .nodeLabel('name')
       .nodeRelSize(5)

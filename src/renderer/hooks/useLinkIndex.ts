@@ -22,7 +22,7 @@ function buildPageIndex(treeData) {
   return map;
 }
 
-export function useLinkIndex(tree) {
+export function useLinkIndex(tree: any): any {
   const linkIndexRef = useRef<any>(null);
   if (linkIndexRef.current === null) {
     linkIndexRef.current = createLinkIndex();

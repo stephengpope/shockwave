@@ -23,11 +23,11 @@ const MODES = {
 };
 
 export default function WorkspaceSyncDialog({ open, workspace, syncPat, activeWorkspaceId, pullIntervalSeconds, disabledWorkspaceIds, onSyncDisabledChange, onClose }) {
-  const [status, setStatus] = useState(null);  // { hasGit, hasOrigin, originUrl }
+  const [status, setStatus] = useState<any>(null);  // { hasGit, hasOrigin, originUrl }
   const [mode, setMode] = useState(MODES.PICK);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const [okMsg, setOkMsg] = useState(null);
+  const [error, setError] = useState<any>(null);
+  const [okMsg, setOkMsg] = useState<any>(null);
 
   const [remoteUrl, setRemoteUrl] = useState('');
   const [repoName, setRepoName] = useState('');
@@ -35,9 +35,9 @@ export default function WorkspaceSyncDialog({ open, workspace, syncPat, activeWo
 
   // Repo picker state for CLONE mode. Fetched lazily when the user enters
   // that mode so opening the dialog itself doesn't hit GitHub.
-  const [repos, setRepos] = useState(null);     // null = not loaded yet, [] = loaded empty
+  const [repos, setRepos] = useState<any>(null);     // null = not loaded yet, [] = loaded empty
   const [reposLoading, setReposLoading] = useState(false);
-  const [reposError, setReposError] = useState(null);
+  const [reposError, setReposError] = useState<any>(null);
   const [repoFilter, setRepoFilter] = useState('');
 
   useEffect(() => {

@@ -13,7 +13,7 @@ export function useFileOps({
   renameTabsPath,
   showError,
   refreshTree,
-}) {
+}: any): any {
   const treeAndIndexChanged = useCallback(async () => {
     await refreshTree();
     linkIndex.bump();

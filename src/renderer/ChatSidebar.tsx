@@ -140,7 +140,7 @@ function formatTokens(n) {
   return k < 10 ? `${k.toFixed(1).replace(/\.0$/, '')}k` : `${Math.round(k)}k`;
 }
 
-function AttachmentChip({ att, onRemove }) {
+function AttachmentChip({ att, onRemove }: any) {
   const handleClick = () => {
     if (att.kind === 'image' && att.dataUrl) {
       window.api.openExternal(att.dataUrl);
@@ -175,7 +175,7 @@ function AttachmentChip({ att, onRemove }) {
   );
 }
 
-function AttachmentRow({ attachments, onRemove, readOnly }) {
+function AttachmentRow({ attachments, onRemove, readOnly }: any) {
   return (
     <div className={`chat-attachments ${readOnly ? 'chat-attachments-readonly' : ''}`}>
       {attachments.map((a) => (
@@ -191,7 +191,7 @@ function AttachmentRow({ attachments, onRemove, readOnly }) {
 // updates (see setMessages callers), so the default shallow-prop compare
 // returns true for un-touched rows. Only the actively-streaming message gets a
 // new reference and re-renders.
-const MessageRow = memo(function MessageRow({ message: m }) {
+const MessageRow = memo(function MessageRow({ message: m }: any) {
   if (m.kind === 'user') {
     return (
       <div className="chat-message chat-user">
@@ -208,7 +208,7 @@ const MessageRow = memo(function MessageRow({ message: m }) {
     return (
       <div className="chat-message chat-assistant">
         <div className="chat-bubble chat-markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>{m.text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS as any}>{m.text}</ReactMarkdown>
         </div>
       </div>
     );
@@ -248,29 +248,29 @@ function ToolEntry({ entry }) {
   );
 }
 
-const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, ref) {
-  const [messages, setMessages] = useState([]);
+const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath }, ref) {
+  const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<any>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [tokens, setTokens] = useState(0);
-  const [attachments, setAttachments] = useState([]);
-  const [rejected, setRejected] = useState(null); // { name, reason }
+  const [attachments, setAttachments] = useState<any[]>([]);
+  const [rejected, setRejected] = useState<any>(null); // { name, reason }
   const [dragOver, setDragOver] = useState(false);
   // Voice input — partialText is the in-flight AssemblyAI partial transcript
   // (replaced as the model refines, then committed into `input` on end_of_turn).
   const [partialText, setPartialText] = useState('');
   const voiceVolumeRef = useRef(0);
-  const currentAssistantIdRef = useRef(null);
+  const currentAssistantIdRef = useRef<any>(null);
   const idCounterRef = useRef(0);
-  const scrollRef = useRef(null);
-  const textareaRef = useRef(null);
-  const fileInputRef = useRef(null);
-  const sidebarRootRef = useRef(null);
-  const lastSentUserIdRef = useRef(null);
+  const scrollRef = useRef<any>(null);
+  const textareaRef = useRef<any>(null);
+  const fileInputRef = useRef<any>(null);
+  const sidebarRootRef = useRef<any>(null);
+  const lastSentUserIdRef = useRef<any>(null);
   const runStartRef = useRef(0);
-  const tickerRef = useRef(null);
+  const tickerRef = useRef<any>(null);
   const dragCounterRef = useRef(0);
 
   const nextId = () => `m${++idCounterRef.current}`;
@@ -456,7 +456,7 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
     setRunning(true);
     try {
       await window.api.agent.send(promptText, images);
-    } catch (err) {
+    } catch (err: any) {
       setRunning(false);
       setError(err?.message ?? String(err));
     }
@@ -483,8 +483,8 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
   const ingestFiles = useCallback(async (fileList) => {
     const files = [...(fileList ?? [])];
     if (files.length === 0) return;
-    const added = [];
-    const failures = [];
+    const added: any[] = [];
+    const failures: any[] = [];
     for (const file of files) {
       const kind = classify(file);
       if (!kind) {
@@ -515,7 +515,7 @@ const ChatSidebar = forwardRef(function ChatSidebar({ onClose, workspacePath }, 
             content,
           });
         }
-      } catch (err) {
+      } catch (err: any) {
         failures.push({ name: file.name, reason: err?.message ?? String(err) });
       }
     }

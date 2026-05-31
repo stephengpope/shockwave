@@ -40,11 +40,11 @@ function shortDescription(text) {
 }
 
 export default function AiSkillsTab({ skills, onSkillsChange }) {
-  const [installed, setInstalled] = useState([]);
+  const [installed, setInstalled] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<any>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(null);
+  const [confirmRemove, setConfirmRemove] = useState<any>(null);
 
   // Async settings calls (reload, importPicker, importFromPath, remove) may
   // resolve after the modal closes. Gate all state updates on this so we
@@ -59,7 +59,7 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
       const list = await window.api.skills.list();
       if (!mountedRef.current) return;
       setInstalled(list);
-    } catch (err) {
+    } catch (err: any) {
       if (!mountedRef.current) return;
       setError(err?.message ?? String(err));
     } finally {
@@ -72,7 +72,7 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
   const globalState = skills?.global ?? {};
 
   const setGlobal = useCallback((folderName, value) => {
-    const nextGlobal = { ...globalState, [folderName]: value };
+    const nextGlobal = { ...globalState, [folderName!]: value };
     onSkillsChange({ ...skills, global: nextGlobal });
   }, [skills, globalState, onSkillsChange]);
 
@@ -87,10 +87,10 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
       const destPath = await window.api.skills.importPicker();
       if (destPath) {
         const folderName = destPath.split(/[\\/]/).pop();
-        onSkillsChange({ ...skills, global: { ...globalState, [folderName]: 'enabled' } });
+        onSkillsChange({ ...skills, global: { ...globalState, [folderName!]: 'enabled' } });
         await reload();
       }
-    } catch (err) {
+    } catch (err: any) {
       safeSetError(err?.message ?? String(err));
     }
   }, [reload, skills, globalState, onSkillsChange, safeSetError]);
@@ -104,13 +104,13 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
       delete nextGlobal[skill.folderName];
       const nextWorkspaces = {};
       for (const [wsId, m] of Object.entries(skills?.workspaces ?? {})) {
-        const copy = { ...m };
+        const copy = { ...(m as any) };
         delete copy[skill.folderName];
         nextWorkspaces[wsId] = copy;
       }
       onSkillsChange({ ...skills, global: nextGlobal, workspaces: nextWorkspaces });
       await reload();
-    } catch (err) {
+    } catch (err: any) {
       safeSetError(err?.message ?? String(err));
     }
   }, [skills, globalState, onSkillsChange, reload, safeSetError]);
@@ -121,7 +121,7 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
     setError(null);
     const files = e.dataTransfer?.files;
     if (!files || files.length === 0) return;
-    const importedFolders = [];
+    const importedFolders: any[] = [];
     for (const file of files) {
       const srcPath = window.api.skills.pathForFile(file);
       if (!srcPath) {
@@ -131,7 +131,7 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
       try {
         const destPath = await window.api.skills.importFromPath(srcPath);
         if (destPath) importedFolders.push(destPath.split(/[\\/]/).pop());
-      } catch (err) {
+      } catch (err: any) {
         safeSetError(err?.message ?? String(err));
       }
     }

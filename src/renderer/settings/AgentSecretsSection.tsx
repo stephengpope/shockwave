@@ -22,7 +22,7 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
   const [description, setDescription] = useState('');
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<any>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -135,8 +135,8 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
 
 export default function AgentSecretsSection({ secrets, onChange }) {
   // null = dialog closed. {} = Add mode. {name,...} = Edit mode for that secret.
-  const [dialogTarget, setDialogTarget] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [dialogTarget, setDialogTarget] = useState<any>(null);
+  const [confirmDelete, setConfirmDelete] = useState<any>(null);
 
   const dialogOpen = dialogTarget !== null;
   const editing = dialogTarget && dialogTarget.name ? dialogTarget : null;

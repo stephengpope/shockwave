@@ -6,7 +6,7 @@ const DEFAULT_LIMIT = 10;
 
 // Flatten the (already-sorted) tree to a flat list of files. Folders are
 // dropped — we only want files in the quick-search results.
-function flattenFiles(nodes, out = []) {
+function flattenFiles(nodes, out: any[] = []) {
   for (const n of nodes) {
     if (n.children) flattenFiles(n.children, out);
     else out.push(n);
@@ -36,7 +36,7 @@ function sortFiles(files, order) {
 // chars collapse into a single <strong>.
 function segmentsFromIndexes(text, indexes) {
   if (!indexes || indexes.length === 0) return [{ match: false, value: text }];
-  const segs = [];
+  const segs: any[] = [];
   let cursor = 0;
   for (let i = 0; i < indexes.length;) {
     const start = indexes[i];
@@ -55,8 +55,8 @@ function segmentsFromIndexes(text, indexes) {
 // matching, with bonuses for contiguous runs, word boundaries, and matches at
 // the start of the basename), and all matches are scrollable.
 export default function QuickSearch({ open, tree, sortOrder, workspacePath, onPick, onClose }) {
-  const inputRef = useRef(null);
-  const listRef = useRef(null);
+  const inputRef = useRef<any>(null);
+  const listRef = useRef<any>(null);
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
 
@@ -90,7 +90,7 @@ export default function QuickSearch({ open, tree, sortOrder, workspacePath, onPi
       return indexedFiles.slice(0, DEFAULT_LIMIT).map((f) => ({ file: f, relPath: f.relPath, indexes: null }));
     }
     const ranked = fuzzysort.go(query, indexedFiles, { key: 'relPath', limit: 200 });
-    return ranked.map((r) => ({ file: r.obj, relPath: r.obj.relPath, indexes: r.indexes }));
+    return ranked.map((r) => ({ file: (r.obj as any), relPath: (r.obj as any).relPath, indexes: r.indexes }));
   }, [indexedFiles, q]);
 
   useEffect(() => { setActive(0); }, [q]);

@@ -24,7 +24,7 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
   const volumeRef = useRef(0);
   const [partial, setPartial] = useState('');
   const [finalText, setFinalText] = useState('');
-  const [testError, setTestError] = useState(null);
+  const [testError, setTestError] = useState<any>(null);
 
   const { voiceAvailable, isConnecting, isRecording, startRecording, stopRecording } = useVoiceInput({
     getToken: () => window.api.voice.getToken(),

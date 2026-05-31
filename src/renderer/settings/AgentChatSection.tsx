@@ -4,8 +4,8 @@ import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
 
 function ProviderModelKey({ idPrefix, provider, model, apiKey, onChange }) {
   const [showKey, setShowKey] = useState(false);
-  const [providers, setProviders] = useState([]);
-  const [models, setModels] = useState([]);
+  const [providers, setProviders] = useState<any[]>([]);
+  const [models, setModels] = useState<any[]>([]);
 
   // Providers come from pi-ai's registry (intersected with our supported set
   // in main). Fetched once on mount.

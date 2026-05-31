@@ -9,7 +9,7 @@ export default function WorkspaceSelector({
   onOpenSettings,
 }) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef(null);
+  const rootRef = useRef<any>(null);
   const active = workspaces.find((w) => w.id === activeWorkspaceId) || null;
 
   useEffect(() => {

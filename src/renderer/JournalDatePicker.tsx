@@ -5,8 +5,8 @@ import 'react-day-picker/style.css';
 // Anchored popover wrapping react-day-picker. Lets the underlying lib handle
 // all the calendar math (timezones, DST, locale-first-day-of-week, etc).
 // Closes on Esc or outside click. `anchor` is a {x, y} client-coords point.
-export default function JournalDatePicker({ open, anchor, initialDate, onPick, onClose }) {
-  const ref = useRef(null);
+export default function JournalDatePicker({ open, anchor, initialDate, onPick, onClose }: any) {
+  const ref = useRef<any>(null);
   const [month, setMonth] = useState(() => initialDate ?? new Date());
   const [pos, setPos] = useState({ left: 0, top: 0 });
 

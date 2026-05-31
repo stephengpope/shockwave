@@ -17,9 +17,9 @@ import React, { useEffect, useRef } from 'react';
 //   footer       — buttons / actions row at the bottom (typically <button>s)
 //   labelledBy   — optional id of the element that labels the dialog (overrides title)
 
-export default function Dialog({ open, onClose, title, children, footer, labelledBy }) {
-  const panelRef = useRef(null);
-  const previousFocusRef = useRef(null);
+export default function Dialog({ open, onClose, title, children, footer, labelledBy }: any) {
+  const panelRef = useRef<any>(null);
+  const previousFocusRef = useRef<any>(null);
 
   useEffect(() => {
     if (!open) return undefined;

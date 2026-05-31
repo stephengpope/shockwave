@@ -33,8 +33,8 @@ export default function FolderCombobox({
   placeholder = 'Example: folder 1/folder',
   id,
 }) {
-  const rootRef = useRef(null);
-  const inputRef = useRef(null);
+  const rootRef = useRef<any>(null);
+  const inputRef = useRef<any>(null);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(() => toDisplay(value));
 
@@ -54,7 +54,7 @@ export default function FolderCombobox({
     return () => window.removeEventListener('mousedown', onDown);
   }, [open, draft, value, onChange]);
 
-  const folders = useMemo(() => collectFolders(tree, workspacePath), [tree, workspacePath]);
+  const folders = useMemo(() => collectFolders(tree), [tree, workspacePath]);
   const filtered = useMemo(() => {
     const q = draft.trim().toLowerCase();
     if (!q || q === ROOT_DISPLAY) return folders;

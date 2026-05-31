@@ -42,8 +42,8 @@ export default function SyncSection({ sync, onSyncChange }) {
   const interval = sync?.pullIntervalSeconds ?? 10;
 
   const [showPat, setShowPat] = useState(false);
-  const [verifyState, setVerifyState] = useState({ status: 'idle' });
-  const [gitState, setGitState] = useState({ status: 'checking' });
+  const [verifyState, setVerifyState] = useState<any>({ status: 'idle' });
+  const [gitState, setGitState] = useState<any>({ status: 'checking' });
 
   // Re-run the git check on mount and whenever the section is reopened. Cheap
   // (spawns one process) and the result can change if the user installs git

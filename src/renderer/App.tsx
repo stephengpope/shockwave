@@ -62,7 +62,7 @@ function sortTreeNodes(nodes, order) {
   return out.map((n) => (n.children ? { ...n, children: sortTreeNodes(n.children, order) } : n));
 }
 
-function flattenAll(nodes, out = []) {
+function flattenAll(nodes, out: any[] = []) {
   for (const n of nodes) {
     if (n.children) flattenAll(n.children, out);
     out.push(n);
@@ -88,19 +88,19 @@ function findNameConflict({ tree, currentPath, newName }) {
 
 export default function App() {
   // ---- top-level state ----
-  const [workspaces, setWorkspaces] = useState([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState(null);
-  const [tree, setTree] = useState([]);
-  const [selectedFolderPath, setSelectedFolderPath] = useState(null);
+  const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<any>(null);
+  const [tree, setTree] = useState<any[]>([]);
+  const [selectedFolderPath, setSelectedFolderPath] = useState<any>(null);
   const [graphMode, setGraphMode] = useState(false);
-  const [errorMessage, setErrorMessage] = useState(null);
+  const [errorMessage, setErrorMessage] = useState<any>(null);
   const [titleDraft, setTitleDraft] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState(SETTINGS_SECTIONS.WORKSPACES);
   // When set, renders <UrlPromptModal>. `resolve` is the awaiting promise's
   // resolver. `initialUrl` / `initialText` (Edit mode) optionally pre-fill the
   // form. Resolver receives { url, text } | null.
-  const [urlPromptOpts, setUrlPromptOpts] = useState(null);
+  const [urlPromptOpts, setUrlPromptOpts] = useState<any>(null);
   const [quickSearchOpen, setQuickSearchOpen] = useState(false);
   // Bookmarks live in useBookmarks (called below, after workspacePath + showError
   // exist). sortedTree is defined there too, since it consumes the bookmark set.
@@ -115,15 +115,15 @@ export default function App() {
   const chatSidebarOpenRef = useRef(false);
   const [chatSidebarWidth, setChatSidebarWidth] = useState(360);
   const chatSidebarWidthRef = useRef(360);
-  const [viewMode, setViewMode] = useState(VIEW_MODES.LIVE);
+  const [viewMode, setViewMode] = useState<any>(VIEW_MODES.LIVE);
   const [editorStats, setEditorStats] = useState({ words: 0, chars: 0 });
   const [editorHistory, setEditorHistory] = useState({ canUndo: false, canRedo: false });
-  const [saveState, setSaveState] = useState(SAVE_STATES.SAVED);
+  const [saveState, setSaveState] = useState<any>(SAVE_STATES.SAVED);
   // Send-to-Agent state (sendToAgentPending, chatSidebarRef, injection) lives in
   // useSendToAgent, called below once its chat-sidebar deps exist.
   // Sync engine status pushed from main via `sync:status` events.
   // status: 'disabled' | 'idle' | 'syncing' | 'paused' | 'error'.
-  const [syncStatus, setSyncStatus] = useState({ status: 'disabled', detail: '', lastSyncAt: null });
+  const [syncStatus, setSyncStatus] = useState<any>({ status: 'disabled', detail: '', lastSyncAt: null });
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || null;
   const workspacePath = activeWorkspace?.path ?? null;
@@ -141,7 +141,7 @@ export default function App() {
   // Live ref to the active file's absolute path. Used by the editor's image
   // paste/drop handler (target dir for the saved image) and the inline image
   // renderer (base for resolving relative URLs). Null for drafts.
-  const activeFilePathRef = useRef(null);
+  const activeFilePathRef = useRef<any>(null);
 
   // ---- app title ----
   useEffect(() => {
@@ -154,7 +154,7 @@ export default function App() {
   useEffect(() => {
     const unsubFlush = window.api.sync.onFlushRequest(async (token) => {
       // Best-effort flush before sync acks; log so a failed save isn't silent.
-      try { await writeNowRef.current(); } catch (e) { console.warn('sync flush save failed:', e); }
+      try { await writeNowRef.current(); } catch (e: any) { console.warn('sync flush save failed:', e); }
       window.api.sync.flushDone(token).catch(() => {});
     });
     const unsubStatus = window.api.sync.onStatus((s) => setSyncStatus(s));
@@ -180,7 +180,7 @@ export default function App() {
   }, [effectiveTheme]);
 
   // ---- error helper ----
-  const errorTimerRef = useRef(null);
+  const errorTimerRef = useRef<any>(null);
   const showError = useCallback((msg) => {
     setErrorMessage(msg);
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
@@ -210,9 +210,9 @@ export default function App() {
   }, [tree, treeSortOrder, bookmarkFilterActive, bookmarks]);
 
   // ---- editor ref ----
-  const editorRef = useRef(null);
+  const editorRef = useRef<any>(null);
   // ---- file tree ref (imperative API: editNode(id)) ----
-  const fileTreeRef = useRef(null);
+  const fileTreeRef = useRef<any>(null);
   // ---- chat sidebar ref (imperative API: setComposerText, getComposerText, focusComposer) ----
 
   // ---- save lifecycle (stays in App, crosses concerns) ----
@@ -221,12 +221,12 @@ export default function App() {
   // moment of save; for real files it writes through. Per-tab in-flight guard
   // coalesces concurrent calls so two near-simultaneous saves can't both fire
   // createFile and leave an orphan disambiguated file behind.
-  const dirtyTabIdRef = useRef(null);
-  const saveTimerRef = useRef(null);
+  const dirtyTabIdRef = useRef<any>(null);
+  const saveTimerRef = useRef<any>(null);
   const writeInFlightRef = useRef(new Map());
   // Forward refs filled below by useSyncRef once useTabs/newFileDir exist.
-  const tabsRef = useRef([]);
-  const activeTabIdRef = useRef(null);
+  const tabsRef = useRef<any[]>([]);
+  const activeTabIdRef = useRef<any>(null);
   const titleDraftRef = useSyncRef(titleDraft);
   const newFileDirRef = useRef(() => null);
   const promoteTabPathRef = useRef(() => {});
@@ -265,7 +265,7 @@ export default function App() {
           const res = await window.api.createFile(targetDir, `${name}.md`, text);
           path = res.path;
           mtime = res.mtime;
-          promoteTabPathRef.current(tabId, path);
+          (promoteTabPathRef.current as any)(tabId, path);
         } else {
           path = tab.path;
           mtime = await window.api.writeFile(path, text);
@@ -276,7 +276,7 @@ export default function App() {
         linkIndex.updateFile(path, text, mtime);
         if (dirtyTabIdRef.current === null) setSaveState(SAVE_STATES.SAVED);
         return path;
-      } catch (err) {
+      } catch (err: any) {
         // Re-arm dirty so the next edit/save attempt retries this tab.
         dirtyTabIdRef.current = tabId;
         showError(err.message ?? String(err));
@@ -497,7 +497,7 @@ export default function App() {
 
   // Bulk-delete confirmation state. Set by the action wrapper when DELETE
   // arrives with >1 path; the ConfirmDialog renders below.
-  const [bulkDeleteCandidates, setBulkDeleteCandidates] = useState(null);
+  const [bulkDeleteCandidates, setBulkDeleteCandidates] = useState<any>(null);
 
   // Action wrapper around fileOps.onFileAction. Two responsibilities:
   // 1) Handle TOGGLE_BOOKMARK (kept here so useFileOps stays bookmark-free).
@@ -549,7 +549,7 @@ export default function App() {
         linkIndex.removeFile(p);
       }
       if (trashed.length > 0) await fileOps.treeAndIndexChanged();
-    } catch (err) {
+    } catch (err: any) {
       showError(err.message ?? String(err));
     }
   }, [bulkDeleteCandidates, closeTabsForPath, linkIndex, fileOps, showError]);
@@ -601,7 +601,7 @@ export default function App() {
       const newPath = await window.api.createFolder(dirPath, 'New folder');
       await fileOps.treeAndIndexChanged();
       fileTreeRef.current?.editNode(newPath);
-    } catch (err) {
+    } catch (err: any) {
       showError(err.message ?? String(err));
     }
   }, [fileOps, showError]);
@@ -624,7 +624,7 @@ export default function App() {
         // Sweep up any link-index entries inside the trashed folder so
         // backlinks/graph drop them immediately (don't wait for the watcher).
         const prefix = folderPath.endsWith('/') ? folderPath : folderPath + '/';
-        const affected = [];
+        const affected: any[] = [];
         for (const p of linkIndex.getOutgoingMap().keys()) {
           if (p.startsWith(prefix)) affected.push(p);
         }
@@ -638,7 +638,7 @@ export default function App() {
         }
         await fileOps.treeAndIndexChanged();
       }
-    } catch (err) {
+    } catch (err: any) {
       showError(err.message ?? String(err));
     }
   }, [addDraftTab, createFolderAt, closeTabsUnderPath, fileOps, linkIndex, selectedFolderPath, showError]);
@@ -667,7 +667,7 @@ export default function App() {
   const onMoveItems = useCallback(async (dragIds, destFolderId) => {
     const destDir = destFolderId ?? workspacePath;
     if (!destDir) return;
-    const affectedRenames = []; // [{oldPath, newPath}] for FILES (immediate + nested)
+    const affectedRenames: any[] = []; // [{oldPath, newPath}] for FILES (immediate + nested)
 
     for (const src of dragIds) {
       try {
@@ -677,7 +677,7 @@ export default function App() {
         if (src === destDir) continue;
         // Capture every linkIndex entry currently under this src (files + folder contents).
         const srcAsDir = src.endsWith('/') ? src : src + '/';
-        const insideSrc = [];
+        const insideSrc: any[] = [];
         for (const p of linkIndex.getOutgoingMap().keys()) {
           if (p === src || p.startsWith(srcAsDir)) insideSrc.push(p);
         }
@@ -705,7 +705,7 @@ export default function App() {
         else if (selectedFolderPath && selectedFolderPath.startsWith(srcAsDir)) {
           setSelectedFolderPath(newAsDir + selectedFolderPath.slice(srcAsDir.length));
         }
-      } catch (err) {
+      } catch (err: any) {
         showError(err.message ?? String(err));
       }
     }
@@ -735,7 +735,7 @@ export default function App() {
       try {
         // Capture nested .md paths from the index BEFORE renaming.
         const srcAsDir = id.endsWith('/') ? id : id + '/';
-        const insideSrc = [];
+        const insideSrc: any[] = [];
         for (const p of linkIndex.getOutgoingMap().keys()) {
           if (p === id || p.startsWith(srcAsDir)) insideSrc.push(p);
         }
@@ -757,7 +757,7 @@ export default function App() {
           setSelectedFolderPath(newAsDir + selectedFolderPath.slice(srcAsDir.length));
         }
         await fileOps.treeAndIndexChanged();
-      } catch (err) {
+      } catch (err: any) {
         showError(err.message ?? String(err));
       }
       return;
@@ -767,7 +767,7 @@ export default function App() {
 
   // ---- URL prompt (used by editor "Add" / "Edit" external link) ----
   // Always resolves to { url, text } | null. `text` is undefined in Add mode.
-  const requestUrl = useCallback((opts = {}) => {
+  const requestUrl = useCallback((opts: any = {}) => {
     return new Promise((resolve) => {
       setUrlPromptOpts({
         resolve,
@@ -788,7 +788,7 @@ export default function App() {
   // ---- settings open helpers ----
   // Pass an explicit section to land on a specific page; omit to defer to the modal's
   // topmost section (whatever it currently is).
-  const openSettings = useCallback((section) => {
+  const openSettings = useCallback((section?: any) => {
     setSettingsInitialSection(section ?? null);
     setSettingsOpen(true);
   }, []);
@@ -908,7 +908,7 @@ export default function App() {
   // tab, last path was null → skip the disk read. Tab switches, back/forward,
   // open-in-active-tab, theme toggles, and workspace switches all still load
   // because tabId / path / isDark differ.
-  const lastLoadRef = useRef({ tabId: null, path: null, isDark: null });
+  const lastLoadRef = useRef<any>({ tabId: null, path: null, isDark: null });
   useEffect(() => {
     if (!workspacePath) return;
     const editor = editorRef.current;
@@ -938,7 +938,7 @@ export default function App() {
         const vs = tabsApi.viewStateByPath.current.get(activeFile) ?? null;
         ed.setContent(text, vs);
         lastLoadRef.current = { tabId: activeTabId, path: activeFile, isDark };
-      } catch (err) {
+      } catch (err: any) {
         if (!cancelled) showError(err.message ?? String(err));
       }
     })();
@@ -1052,7 +1052,7 @@ export default function App() {
       style={{
         '--sidebar-width': `${sidebarWidth}px`,
         '--chat-col-width': chatSidebarOpen ? `${chatSidebarWidth}px` : '28px',
-      }}
+      } as React.CSSProperties}
     >
       <ThinSidebar
         onNewFile={onNewFile}
