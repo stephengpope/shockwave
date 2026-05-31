@@ -63,7 +63,8 @@
     "publish": {
       "provider": "github",
       "owner": "stephengpope",
-      "repo": "shockwave"
+      "repo": "shockwave",
+      "releaseType": "release"
     },
     "files": [
       "out/**",
