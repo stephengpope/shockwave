@@ -27,6 +27,13 @@ export interface CodingAgentSettings {
   provider: string;
   model: string;
   apiKey: string;
+  // OpenAI-compatible endpoint URL (Ollama, LM Studio, vLLM, remote gateways).
+  // Empty for built-in providers; set only when provider === 'openai-compatible'.
+  baseUrl: string;
+  // Optional context-window override (tokens) for openai-compatible models, whose
+  // size pi can't know. Built-in providers carry authoritative values, so it's
+  // unused there. Empty/undefined → 128000 default.
+  contextWindow?: number;
   systemPrompt: string;
   skills: {
     global: Record<string, SkillState>;

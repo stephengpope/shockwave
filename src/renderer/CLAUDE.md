@@ -111,7 +111,16 @@ The engine lives in main (see `src/main/CLAUDE.md`); the renderer just bridges t
 
 **Engine start on workspace switch.** `loadWorkspace` calls `window.api.sync.engineStart({ workspacePath, intervalSeconds })` after `watchStart`. The engine self-checks for an origin + PAT and emits `disabled` if either's missing, so the renderer doesn't gate on those locally. The mount-effect cleanup calls `engineStop` so a full reload doesn't leave a tick running against a torn-down window.
 
-**Status icon.** `EditorStatusBar.jsx`'s `renderSyncIcon` maps the status: `CloudCheck` for idle, spinning `Refresh` for syncing, `CloudAlert` for paused/error, hidden when `disabled`. Tooltips read from `status.detail` / `status.lastSyncAt`.
+**Status icon.** `EditorStatusBar.jsx`'s `renderSyncIcon` maps the status: `CloudCheck` for idle, spinning `Refresh` for syncing, `CloudAlert` for paused/error, hidden when `disabled`. Tooltips read from `status.detail` / `status.lastSyncAt`. **When the paused status carries conflicts, the icon turns red and clicking it opens the conflict view** (via `onOpenConflicts`) instead of the GitHub repo.
+
+### Conflict-resolution view
+
+When `syncStatus.conflicts` is non-empty, a red conflict toggle appears at the **far right** of the `SortBar` (with a count) and the red sync icon links to it; clicking either flips the file tree into a conflict-only view (`conflictFilterActive` in `App.tsx`). It auto-exits when the list clears.
+
+- **Data source is the git conflict list, NOT the file tree.** `buildConflictTree(absPaths, workspacePath)` constructs folder/file nodes straight from `syncStatus.conflicts` (rel→abs). The normal tree (`buildTree`) hides dotfiles, but conflicts happen in them (`.obsidian/workspace.json`), so the view is built independently — any file type, including hidden, shows up.
+- **Review-only.** Right-click a file → **Conflict resolved** / **Keep our file** / **Reset to remote** (`FILE_ACTIONS.RESOLVE`/`KEEP`/`RESET` → `conflictFileAction` → `sync.resolveConflict`/`keepConflict`/`resetConflict`). Resolve flushes the file first (`writeNow`) so git stages the user's edits, not stale on-disk content.
+- **Whole-tree** actions live on the cloud icon's **right-click** (`showConflictCloudMenu` → `keep`/`reset` → confirm dialog → `sync.keepAll`/`resetToRemote`). Both are behind a `ConfirmDialog` (destructive).
+- The view refreshes from the engine's `sync:status` push (fewer conflicts / idle), not the watcher — the watcher ignores dotfiles and `git add` changes nothing on disk.
 
 **Settings.** Two UI files under `settings/`:
 - `SyncSection.jsx` — global PAT (verify button hits `sync:verifyPat`), interval slider, and a git-presence check that runs once on mount.

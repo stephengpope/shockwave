@@ -40,7 +40,7 @@ Electron app with a Vite + React 19 renderer. The renderer is a markdown-workspa
 |---|---|---|
 | Main-process internals (watcher, IPC, settings, app://, coding agent, voice token, GitHub sync engine) | `src/main/*.ts` | `src/main/CLAUDE.md` |
 | Renderer internals (hooks, editor decorations, chat sidebar, voice, bookmarks, daily notes, quick search, sync UI) | `src/renderer/**` | `src/renderer/CLAUDE.md` |
-| GitHub sync | `src/main/sync.ts`, `src/main/syncEngine.ts`, `src/renderer/settings/SyncSection.tsx`, `src/renderer/settings/WorkspaceSyncDialog.tsx` | "GitHub sync" sections in both subdocs |
+| GitHub sync (merge-based; in-app conflict resolution) | `src/main/sync.ts`, `src/main/syncEngine.ts`, `src/renderer/settings/SyncSection.tsx`, `src/renderer/settings/WorkspaceSyncDialog.tsx`; conflict view in `src/renderer/{App.tsx, SortBar.tsx, FileTree.tsx}` | "GitHub sync" sections in both subdocs |
 | Cross-process types + constants | `src/shared/{api.d.ts, settings.ts, constants.ts}` | this file, below |
 | Tests | `tests/*.test.js` | `tests/CLAUDE.md` |
 

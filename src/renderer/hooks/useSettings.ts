@@ -14,7 +14,7 @@ const DEFAULT_CANONICAL: Settings = {
   activeWorkspaceId: null,
   appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false },
   dailyNote: { format: 'YYYY-MM-DD', folder: '' },
-  codingAgent: { provider: DEFAULT_PROVIDER_SLUG, model: 'claude-sonnet-4-5', apiKey: '', systemPrompt: '', skills: { global: {}, workspaces: {} } },
+  codingAgent: { provider: DEFAULT_PROVIDER_SLUG, model: 'claude-sonnet-4-5', apiKey: '', baseUrl: '', systemPrompt: '', skills: { global: {}, workspaces: {} } },
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
   sync: { pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] },

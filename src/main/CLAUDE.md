@@ -13,7 +13,7 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 - `agentTokensExtension.ts` — pi extension exposing `list_agent_secrets` + `get_agent_secret`; installed via `installAgentTokensBridge` at startup.
 - `skillLibrary.ts` — on-disk skill library under `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` and the workspace-override resolution.
 - `sync.ts` — GitHub sync support: REST helpers (`verifyPat`, `probeWrite`, `createRepo`), URL parsing, the `gitSpawn` wrapper that injects a PAT via `GIT_ASKPASS`, git-presence check, per-workspace status, and the four setup flows (clone / init+create / adopt-existing / teardown).
-- `syncEngine.ts` — singleton per-workspace tick engine. Sequential ticks (flush → commit → pull --rebase → push), status state machine, flush-renderer-dirty bridge, drain-on-quit hook.
+- `syncEngine.ts` — singleton per-workspace tick engine. Sequential ticks (pause-if-conflicts → flush → commit → fetch → **merge** if behind → push), status state machine (with a `conflicts[]` payload on pause), per-file + whole-tree conflict resolution (`resolveConflict`/`keepConflict`/`resetConflict`/`keepAll`/`resetToRemote`), flush-renderer-dirty bridge, drain-on-quit hook.
 
 ## File watcher
 
@@ -140,20 +140,31 @@ PAT is stored encrypted in `settings.sync.pat` (`enc:v1:` via `safeStorage`). Fo
 
 ### Tick (sequential, never overlapping)
 
+0. **`git diff --name-only --diff-filter=U -z` → if any unmerged files exist, emit `paused` + the conflict list and RETURN — before step 2.** `git add -A` on a conflicted tree stages the marker-laden files and git treats them resolved, so push would ship `<<<<<<<` garbage. This bail is the entire defense; it must run first. (`-z` / NUL-split is required — the default output escapes spaces/unicode paths.)
 1. `sync:flushRequest(token)` → renderer flushes dirty editor tabs → `sync:flushDone(token)`. **1 s timeout** so a hung renderer can't stall the engine.
-2. `git status --porcelain`; if dirty → `git add -A` + commit (message `Shockwave sync: <ISO>`).
-3. `git ls-remote --heads origin <branch>` — skips the pull on a freshly-init'd repo that has no remote branch yet.
-4. If the remote has the branch → `git pull --rebase --autostash origin <branch>`. After it, check for `.git/rebase-merge` or `.git/rebase-apply` — if either exists, status becomes `paused` and ticking stops.
-5. `git push --set-upstream origin <branch>`.
+2. `git status --porcelain`; if dirty → `git add -A` + commit (message `Shockwave sync: <ISO>`). A `git commit` here with `MERGE_HEAD` present also **concludes a resolved-but-open merge** — that's how the engine stays *stateless* about the pause (once conflicts are gone, the normal commit finishes the merge).
+3. `git fetch origin <branch>`, then `git rev-list --count HEAD..origin/<branch>` to see if the remote is ahead. Fetch failing with "couldn't find remote ref" = no remote branch yet (fresh init) → skip to push.
+4. If the remote is ahead → **`git merge origin/<branch>`** (NOT rebase — merge touches only genuinely-differing files and resolves in one pass; rebase replayed every auto-commit and churned the tree). On conflict the merge leaves unmerged files + `MERGE_HEAD`; emit `paused` + the list and return.
+5. If local is ahead → `git push --set-upstream origin <branch>`.
+
+### Conflict resolution (driven by the renderer's conflict view)
+
+While paused, the renderer surfaces the conflict list and lets the user resolve. All of these stage the index (serialized with the tick via the `ticking` guard), re-list conflicts, and — when the list hits empty — kick a tick immediately so the merge commit + push happen at once:
+
+- `resolveConflict(ws, rel)` — accept the file as hand-edited: `git add <rel>`.
+- `keepConflict(ws, rel)` — keep ours: `git checkout --ours -- <rel>` + add.
+- `resetConflict(ws, rel)` — take remote: `git checkout --theirs -- <rel>` + add.
+- `keepAll(ws)` — whole tree, keep ours: `git checkout --ours .` + `git add -A` (then the merge completes; remote's non-conflicting changes still come in).
+- `resetToRemote(ws)` — whole tree, take remote: `git merge --abort` + fetch + `git reset --hard origin/<branch>` (discards ALL local divergence — the renderer confirms first).
 
 ### Status state machine
 
-`sync:status` push event carries `{ status, detail, lastSyncAt }`:
+`sync:status` push event carries `{ status, detail, lastSyncAt, repoUrl, conflicts }`. `conflicts` is the workspace-relative path list, present only on `paused`-for-conflicts (every other emit resets it to `[]` — see `emitStatus`):
 
 - `disabled` — workspace has no origin, or no PAT configured. Icon hides.
 - `idle` — last tick succeeded, waiting for next.
 - `syncing` — a tick is in progress; `detail` describes the current step.
-- `paused` — paused rebase OR auth failure. **No retry loop** — user must resolve and either resume (path not wired yet) or fix the PAT.
+- `paused` — **merge conflicts** (carries `conflicts[]`) OR auth failure. **No retry loop.** For conflicts the user resolves in the renderer's conflict view (per-file or whole-tree, above); the engine is stateless — once unmerged files are gone, the next tick completes the merge and resumes. For auth, fix the PAT.
 - `error` — transient (network, generic git failure). Next tick retries automatically.
 
 ### Lifecycle
@@ -183,13 +194,13 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 | Dialogs | `dialog:openFolder` |
 | FS | `fs:readTree`, `fs:readAllMarkdown`, `fs:readFile`, `fs:writeFile`, `fs:createFile`, `fs:renameFile`, `fs:duplicateFile`, `fs:trashFolder`, `fs:trashFile`, `fs:createFolder`, `fs:ensureDir`, `fs:moveItem`, `fs:renameFolder`, `fs:writeImage`, `fs:pathExists`, `fs:watchStart`, `fs:watchStop` |
 | Shell | `shell:revealInFolder`, `shell:openExternal` |
-| Context menus | `context:fileMenu`, `context:folderMenu`, `context:editorMenu` |
+| Context menus | `context:fileMenu` (`conflictMode` → Conflict resolved / Keep our file / Reset to remote), `context:conflictCloudMenu` (whole-tree keep/reset), `context:folderMenu`, `context:editorMenu` |
 | Settings | `settings:read`, `settings:write` |
 | Bookmarks | `bookmarks:read`, `bookmarks:write` |
 | Theme | `theme:getInitial`; plus `theme:systemChanged` push event |
 | Voice | `voice:getToken` |
 | Agent | `agent:send`, `agent:abort`, `agent:reset`, `agent:getDefaultSystemPrompt`, `agent:listProviders`, `agent:listModels`; plus push events: `agent:event` (per pi event), `agent:error` |
 | Skills | `skills:list`, `skills:libraryDir`, `skills:importPicker`, `skills:importFromPath`, `skills:remove` |
-| Sync | `sync:verifyPat`, `sync:checkGit`, `sync:workspaceStatus`, `sync:setupClone`, `sync:setupInitAndCreate`, `sync:setupExistingLocal`, `sync:teardown`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`; plus push events `sync:status`, `sync:flushRequest` |
+| Sync | `sync:verifyPat`, `sync:checkGit`, `sync:workspaceStatus`, `sync:setupClone`, `sync:setupInitAndCreate`, `sync:setupExistingLocal`, `sync:teardown`, `sync:setWorkspaceDisabled`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`, `sync:listConflicts`, `sync:resolveConflict`, `sync:keepConflict`, `sync:resetConflict`, `sync:keepAll`, `sync:resetToRemote`; plus push events `sync:status` (carries `conflicts[]` when paused), `sync:flushRequest` |
 
 The renderer reaches every one of these via `window.api.*` — see `src/preload/preload.cjs`. The renderer never touches Node directly.

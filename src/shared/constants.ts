@@ -63,6 +63,9 @@ export const SUPPORTED_PROVIDER_SLUGS = Object.freeze([
   'xiaomi-token-plan-cn',
   'xiaomi-token-plan-ams',
   'xiaomi-token-plan-sgp',
+  // Generic OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, remote gateways).
+  // Not in pi-ai's registry — main injects it into agent:listProviders.
+  'openai-compatible',
 ] as const);
 
 export const DEFAULT_PROVIDER_SLUG = 'anthropic';

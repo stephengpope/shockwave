@@ -22,10 +22,11 @@ const state: any = {
   key: null,
 };
 
-function makeKey({ workspacePath, provider, model, apiKey, systemPrompt }) {
+function makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt }) {
   // systemPrompt is part of the key so changing it forces a fresh session
-  // (pi's system prompt is baked at session boot).
-  return [workspacePath, provider, model, apiKey, systemPrompt ?? ''].join(' ');
+  // (pi's system prompt is baked at session boot). baseUrl/contextWindow are in
+  // the key too so editing the openai-compatible endpoint reboots the session.
+  return [workspacePath, provider, model, apiKey, baseUrl ?? '', contextWindow ?? '', systemPrompt ?? ''].join(' ');
 }
 
 async function teardown() {
@@ -40,9 +41,9 @@ async function teardown() {
   }
 }
 
-async function ensureSession({ workspacePath, provider, model, apiKey, systemPrompt, userDataDir, skillsState, workspaceId }, emitEvent) {
+async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt, userDataDir, skillsState, workspaceId }, emitEvent) {
   const effectiveSystemPrompt = (systemPrompt ?? '').trim() || DEFAULT_AGENT_SYSTEM_PROMPT;
-  const key = makeKey({ workspacePath, provider, model, apiKey, systemPrompt: effectiveSystemPrompt });
+  const key = makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt: effectiveSystemPrompt });
   // We always recompute the effective skill list before session create so the
   // skills array reflects the current global+workspace state. If the session
   // is already up but the skill set has changed, the user can hit Clear in the
@@ -63,9 +64,34 @@ async function ensureSession({ workspacePath, provider, model, apiKey, systemPro
   await teardown();
 
   const authStorage = AuthStorage.inMemory();
-  authStorage.setRuntimeApiKey(provider, apiKey);
   const modelRegistry = ModelRegistry.create(authStorage);
-  const modelObj = getModel(provider, model);
+
+  let modelObj;
+  if (provider === 'openai-compatible') {
+    // Register the endpoint as a custom provider (pi's documented path). NOTE:
+    // registerProvider's applyProviderConfig does RAW passthrough with NO field
+    // defaults — unlike the disk-load parseModels path. Every model field MUST be
+    // present or pi crashes at stream time (verified: a missing `input` makes
+    // `model.input.includes(...)` throw). Mirror pi docs/models.md exactly.
+    modelRegistry.registerProvider('openai-compatible', {
+      baseUrl,
+      apiKey: apiKey || 'local',          // registry requires non-empty; local servers ignore it
+      api: 'openai-completions',
+      models: [{
+        id: model,
+        name: model,
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: contextWindow || 128000,
+        maxTokens: 16384,
+      }],
+    });
+    modelObj = modelRegistry.find('openai-compatible', model);
+  } else {
+    authStorage.setRuntimeApiKey(provider, apiKey);
+    modelObj = getModel(provider, model);
+  }
 
   // Custom resource loader so we can override pi's default coding-agent system
   // prompt with ours (see DEFAULT_AGENT_SYSTEM_PROMPT). Still uses the standard
@@ -98,7 +124,8 @@ export async function agentSend(opts, emitEvent) {
   if (!workspacePath) throw new Error('Open a workspace first.');
   if (!provider) throw new Error('Coding agent provider not configured.');
   if (!model) throw new Error('Coding agent model not configured.');
-  if (!apiKey) throw new Error('Coding agent API key not configured. Open Settings → LLM / Agent.');
+  // openai-compatible endpoints (local servers) don't require a key.
+  if (provider !== 'openai-compatible' && !apiKey) throw new Error('Coding agent API key not configured. Open Settings → LLM / Agent.');
 
   // Wrap the renderer's event listener so we can intercept the failure
   // assistant message that pi emits on any provider-side error (bad API key,

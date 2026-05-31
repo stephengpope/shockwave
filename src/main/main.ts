@@ -89,6 +89,8 @@ const DEFAULT_SETTINGS = {
     provider: 'anthropic',
     model: 'claude-sonnet-4-5',
     apiKey: '',
+    // OpenAI-compatible endpoint URL; only set when provider is 'openai-compatible'.
+    baseUrl: '',
     // Pre-filled with the default on first install so users can read + edit.
     // "Reset to default" in the UI writes the current default back into here.
     systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -1111,7 +1113,7 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
     const settings = await readSettings();
     const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
     const workspacePath = ws?.path ?? null;
-    const { provider, model, apiKey, skills, systemPrompt } = settings.codingAgent ?? {};
+    const { provider, model, apiKey, baseUrl, contextWindow, skills, systemPrompt } = settings.codingAgent ?? {};
 
     await agentSend(
       {
@@ -1121,6 +1123,8 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
         provider,
         model,
         apiKey,
+        baseUrl,
+        contextWindow,
         systemPrompt,
         userDataDir: app.getPath('userData'),
         skillsState: skills,
@@ -1177,13 +1181,46 @@ ipcMain.handle('agent:getDefaultSystemPrompt', async () => DEFAULT_AGENT_SYSTEM_
 // codex) are filtered out — our settings schema only carries a single API
 // key, which is insufficient for those.
 //
+// 'openai-compatible' is our own generic local/remote endpoint — pi-ai's
+// registry doesn't know it, so inject it after the registry filter.
+const INJECTED_PROVIDERS = ['openai-compatible'];
 ipcMain.handle('agent:listProviders', () => {
-  return getProviders().filter((slug) => SUPPORTED_PROVIDER_SLUGS.has(slug as any)).sort();
+  const fromPi = getProviders().filter((slug) => SUPPORTED_PROVIDER_SLUGS.has(slug as any));
+  return [...new Set([...fromPi, ...INJECTED_PROVIDERS])].sort();
 });
 
 ipcMain.handle('agent:listModels', (_evt, provider) => {
   if (!provider) return [];
+  // openai-compatible has no static catalog — models come from the Validate
+  // call (GET /v1/models) or are typed free-form. getModels returns [] here.
   return getModels(provider).map((m) => m.id).sort();
+});
+
+// Validate an OpenAI-compatible endpoint by hitting `{baseUrl}/models` — no
+// inference, no tokens. Confirms reachability + key validity and returns the
+// model list to populate the dropdown. Scoped to openai-compatible only: that
+// path is uniform (the user types a /v1 baseUrl), whereas built-in cloud
+// providers have non-uniform /models paths + auth and pi already supplies their
+// model lists. Security: a 5s timeout (no hang), and we never echo upstream
+// response bodies back to the renderer.
+ipcMain.handle('agent:validateConnection', async (_evt, { baseUrl, apiKey }) => {
+  try {
+    if (!baseUrl) return { ok: false, error: 'Base URL is required' };
+    const base = String(baseUrl).replace(/\/+$/, '');
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    const res = await fetch(`${base}/models`, { headers, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status} ${res.statusText}` };
+    const body: any = await res.json();
+    const models = (body.data ?? body.models ?? [])
+      .map((m: any) => m.id ?? m.name)
+      .filter(Boolean);
+    return { ok: true, models: models.length ? models : undefined };
+  } catch (err: any) {
+    if (err?.name === 'TimeoutError') return { ok: false, error: 'Connection timed out' };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 });
 
 function timestampForFilename(d = new Date()) {

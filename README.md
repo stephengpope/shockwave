@@ -37,6 +37,7 @@ Sync any workspace to **your own GitHub repo** — no subscription, no third-par
 - **One token, set once** — a GitHub PAT, encrypted at rest, used across all workspaces.
 - **Flexible setup** — clone an existing repo, create a brand-new one, or adopt a folder that's already a git repo.
 - **Hands-off** — auto-syncs on an interval, with a status icon showing idle / syncing / paused.
+- **Conflicts handled in-app** — when two machines edit the same file, a red badge shows what clashed. Resolve each file (keep yours, take theirs, or merge by hand) or reset the whole workspace either way — no terminal, no git knowledge needed.
 
 ---
 
