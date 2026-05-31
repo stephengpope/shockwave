@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createLinkIndex, normalizeTarget } from '../linkIndex.js';
 
-function flattenTree(nodes, out = []) {
+function flattenTree(nodes, out: any[] = []) {
   for (const n of nodes) {
     if (n.children) flattenTree(n.children, out);
     else out.push(n);
@@ -23,7 +23,7 @@ function buildPageIndex(treeData) {
 }
 
 export function useLinkIndex(tree) {
-  const linkIndexRef = useRef(null);
+  const linkIndexRef = useRef<any>(null);
   if (linkIndexRef.current === null) {
     linkIndexRef.current = createLinkIndex();
   }

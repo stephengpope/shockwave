@@ -20,8 +20,8 @@ const makeTabId = () => `t${nextTabId++}`;
  *   onAfterSwitch?    — optional, fires after any tab op completes (e.g., turn off graph mode)
  */
 export function useTabs({ editorRef, writeNow, onAfterSwitch }) {
-  const [tabs, setTabs] = useState([]);
-  const [activeTabId, setActiveTabId] = useState(null);
+  const [tabs, setTabs] = useState<any[]>([]);
+  const [activeTabId, setActiveTabId] = useState<any>(null);
   const viewStateByPath = useRef(new Map());
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || null;
@@ -131,7 +131,7 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }) {
   const closeTabsForPath = useCallback((filePath) => {
     setTabs((prev) => {
       const activeWasClosed = prev.find((t) => t.id === activeTabId)?.path === filePath;
-      const next = [];
+      const next: any[] = [];
       for (const t of prev) {
         if (t.path === filePath) continue;
         if (!t.history.includes(filePath)) {
@@ -139,7 +139,7 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }) {
           continue;
         }
         // Purge deleted path from this tab's history; shift the index for each removed entry at or before it.
-        const nextHistory = [];
+        const nextHistory: any[] = [];
         let nextIndex = t.historyIndex;
         for (let i = 0; i < t.history.length; i++) {
           if (t.history[i] === filePath) {
@@ -170,12 +170,12 @@ export function useTabs({ editorRef, writeNow, onAfterSwitch }) {
     setTabs((prev) => {
       const activeTab = prev.find((t) => t.id === activeTabId);
       const activeWasClosed = activeTab && inFolder(activeTab.path);
-      const next = [];
+      const next: any[] = [];
       for (const t of prev) {
         if (inFolder(t.path)) continue;
         const hasFolderInHistory = t.history.some(inFolder);
         if (!hasFolderInHistory) { next.push(t); continue; }
-        const nextHistory = [];
+        const nextHistory: any[] = [];
         let nextIndex = t.historyIndex;
         for (let i = 0; i < t.history.length; i++) {
           if (inFolder(t.history[i])) {

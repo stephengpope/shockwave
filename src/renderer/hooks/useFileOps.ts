@@ -30,7 +30,7 @@ export function useFileOps({
       });
       renameTabsPath(oldPath, newPath);
       await treeAndIndexChanged();
-    } catch (err) {
+    } catch (err: any) {
       showError(err.message ?? String(err));
     }
   }, [writeNow, linkIndex, renameTabsPath, treeAndIndexChanged, showError]);
@@ -68,7 +68,7 @@ export function useFileOps({
         linkIndex.removeFile(filePath);
         await treeAndIndexChanged();
       }
-    } catch (err) {
+    } catch (err: any) {
       showError(err.message ?? String(err));
     }
   }, [openInNewTab, closeTabsForPath, linkIndex, treeAndIndexChanged, showError]);
