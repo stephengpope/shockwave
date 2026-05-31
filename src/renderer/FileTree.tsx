@@ -4,7 +4,7 @@ import { FILE_ACTIONS } from './constants.js';
 import { SIDEBAR_IMAGE_MIME } from './imagePaste.js';
 
 const FileTree = forwardRef<any, any>(function FileTree(
-  { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, bookmarkedPaths },
+  { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, bookmarkedPaths, conflictMode },
   ref,
 ) {
   const wrapRef = useRef<any>(null);
@@ -71,6 +71,7 @@ const FileTree = forwardRef<any, any>(function FileTree(
               onFolderAction={onFolderAction}
               getIsBookmarked={getIsBookmarked}
               isBookmarked={bookmarkedPaths?.has(props.node.id)}
+              conflictMode={conflictMode}
             />
           )}
         </Tree>
@@ -83,7 +84,7 @@ export default FileTree;
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 
-function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, getIsBookmarked, isBookmarked }: any) {
+function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, getIsBookmarked, isBookmarked, conflictMode }: any) {
   const isFolder = node.isInternal;
   const isImage = !isFolder && IMAGE_EXT_RE.test(node.data.name);
   const willReceiveDrop = isFolder && node.willReceiveDrop;
@@ -115,6 +116,8 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, get
     e.stopPropagation();
 
     if (isFolder) {
+      // Conflict view is review-only — folders are just grouping, no actions.
+      if (conflictMode) return;
       // Folder context menus stay single-selection — mixed folder/file
       // multi-select adds more UX confusion than it's worth here.
       const action = await window.api.showFolderContextMenu();
@@ -149,6 +152,7 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, get
       isMd: allMd,
       isBookmarked: allBookmarked,
       selectionCount: targetPaths.length,
+      conflictMode: !!conflictMode,
     });
     if (!action) return;
     if (action === FILE_ACTIONS.RENAME) {

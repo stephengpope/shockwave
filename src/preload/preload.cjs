@@ -161,7 +161,7 @@ contextBridge.exposeInMainWorld('api', {
    * (no Rename/Duplicate/Reveal). When `selectionCount` > 1, `isBookmarked`
    * describes whether ALL selected files are currently bookmarked (drives
    * the Bookmark/Remove bookmark label).
-   * @param {{ isMd?: boolean, isBookmarked?: boolean, selectionCount?: number }} opts
+   * @param {{ isMd?: boolean, isBookmarked?: boolean, selectionCount?: number, conflictMode?: boolean }} opts
    * @returns {Promise<string|null>} The chosen FILE_ACTIONS value, or null if dismissed.
    */
   showFileContextMenu: (opts) => ipcRenderer.invoke('context:fileMenu', opts),
@@ -349,6 +349,16 @@ contextBridge.exposeInMainWorld('api', {
      *  push event would arrive.
      *  @returns {Promise<{ status: string, detail: string, lastSyncAt: number|null }>} */
     engineStatus: () => ipcRenderer.invoke('sync:engineStatus'),
+    /** List currently-unmerged (conflicted) files, workspace-relative POSIX paths.
+     *  @param {string} workspacePath @returns {Promise<string[]>} */
+    listConflicts: (workspacePath) => ipcRenderer.invoke('sync:listConflicts', workspacePath),
+    /** Mark one conflicted file resolved (git add). Returns the remaining
+     *  conflict list; empty means the merge will conclude + push on the next tick.
+     *  @param {string} workspacePath @param {string} relPath @returns {Promise<string[]>} */
+    resolveConflict: (workspacePath, relPath) => ipcRenderer.invoke('sync:resolveConflict', { workspacePath, relPath }),
+    /** Discard ALL local divergence and hard-reset the workspace to origin/<branch>.
+     *  Destructive — the caller confirms first. @param {string} workspacePath @returns {Promise<void>} */
+    resetToRemote: (workspacePath) => ipcRenderer.invoke('sync:resetToRemote', workspacePath),
     /** Reply to a `onFlushRequest` with the same token. The engine waits
      *  on this before committing.
      *  @param {number} token @returns {Promise<void>} */

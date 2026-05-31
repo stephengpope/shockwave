@@ -202,6 +202,33 @@ html, body, #root {
   color: var(--accent);
 }
 
+/* Sync-conflict toggle: red, shown only while conflicts exist, with a count. */
+.sort-bar-conflict-btn,
+.sort-bar-conflict-btn:hover:not(:disabled) {
+  color: #e02d2d;
+  width: auto;
+  gap: 3px;
+  padding: 0 5px;
+  margin-left: auto; /* push to the far right of the sort bar */
+}
+[data-theme="dark"] .sort-bar-conflict-btn,
+[data-theme="dark"] .sort-bar-conflict-btn:hover:not(:disabled) {
+  color: #f87171;
+}
+.sort-bar-conflict-btn.is-active {
+  color: #fff;
+  background: #e02d2d;
+}
+[data-theme="dark"] .sort-bar-conflict-btn.is-active {
+  background: #f87171;
+  color: #1a1a1a;
+}
+.sort-bar-conflict-count {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 /* Bookmark quick-pick popover (right-click on the bookmark icon). */
 .bookmark-picker {
   position: absolute;

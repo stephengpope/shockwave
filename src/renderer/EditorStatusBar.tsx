@@ -10,9 +10,10 @@ function formatNum(n) {
 // 'disabled' returns null so the icon vanishes when the active workspace
 // isn't sync-configured. When the engine knows the GitHub web URL we
 // render the icon as a button that opens the repo via shell.openExternal.
-function renderSyncIcon(syncStatus) {
+function renderSyncIcon(syncStatus, onOpenConflicts) {
   if (!syncStatus || syncStatus.status === 'disabled') return null;
   const { status, detail, lastSyncAt, repoUrl } = syncStatus;
+  const conflictCount = syncStatus.conflicts?.length ?? 0;
   let icon = <CloudCheckIcon size={12} />;
   let cls = 'status-cloud-idle';
   let baseTitle = lastSyncAt
@@ -26,6 +27,21 @@ function renderSyncIcon(syncStatus) {
     icon = <CloudAlertIcon size={12} />;
     cls = 'status-cloud-error';
     baseTitle = detail || (status === 'paused' ? 'Sync paused' : 'Sync error');
+  }
+  // Conflicts → the icon opens the conflict-resolution view instead of the repo.
+  if (conflictCount > 0 && onOpenConflicts) {
+    const title = `${conflictCount} conflict${conflictCount === 1 ? '' : 's'} — click to resolve`;
+    return (
+      <button
+        type="button"
+        className={`status-icon status-cloud ${cls} status-cloud-link`}
+        title={title}
+        aria-label={title}
+        onClick={onOpenConflicts}
+      >
+        {icon}
+      </button>
+    );
   }
   if (repoUrl) {
     const title = `${baseTitle} — click to open ${repoUrl}`;
@@ -72,6 +88,7 @@ export default function EditorStatusBar({
   onUndo,
   onRedo,
   syncStatus,
+  onOpenConflicts,
 }) {
   const isLive = viewMode === VIEW_MODES.LIVE;
   const isSaved = saveState === SAVE_STATES.SAVED;
@@ -127,7 +144,7 @@ export default function EditorStatusBar({
       >
         {isSaved ? <CheckCircleIcon size={12} /> : <DotCircleIcon size={12} />}
       </span>
-      {renderSyncIcon(syncStatus)}
+      {renderSyncIcon(syncStatus, onOpenConflicts)}
     </div>
   );
 }

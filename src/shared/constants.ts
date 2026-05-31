@@ -9,6 +9,8 @@ export const FILE_ACTIONS = Object.freeze({
   RENAME: 'rename',
   DELETE: 'delete',
   TOGGLE_BOOKMARK: 'toggleBookmark',
+  RESOLVE: 'resolve',
+  RESET_TO_REMOTE: 'resetToRemote',
 } as const);
 export type FileAction = (typeof FILE_ACTIONS)[keyof typeof FILE_ACTIONS];
 

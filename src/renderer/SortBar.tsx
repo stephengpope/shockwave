@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { TREE_SORT_ORDERS, TREE_SORT_LABELS } from './constants.js';
-import { SearchIcon, SortIcon, CollapseAllIcon, BookmarkIcon } from './Icons.jsx';
+import { SearchIcon, SortIcon, CollapseAllIcon, BookmarkIcon, CloudAlertIcon } from './Icons.jsx';
 
 const ORDER = [
   TREE_SORT_ORDERS.NAME_ASC,
@@ -30,6 +30,10 @@ export default function SortBar({
   bookmarks,
   workspacePath,
   onPickBookmark,
+  hasConflicts,
+  conflictCount,
+  conflictFilterActive,
+  onToggleConflictFilter,
   disabled,
 }) {
   const rootRef = useRef<any>(null);
@@ -168,6 +172,22 @@ export default function SortBar({
             </React.Fragment>
           ))}
         </ul>
+      )}
+      {/* Conflict view toggle — pinned to the far right (rarely used). */}
+      {hasConflicts && (
+        <button
+          type="button"
+          className={`sort-bar-icon-btn sort-bar-conflict-btn ${conflictFilterActive ? 'is-active' : ''}`}
+          onClick={onToggleConflictFilter}
+          title={conflictFilterActive
+            ? 'Show all files'
+            : `${conflictCount} sync conflict${conflictCount === 1 ? '' : 's'} — click to resolve`}
+          aria-label="Toggle conflict view"
+          aria-pressed={conflictFilterActive}
+        >
+          <CloudAlertIcon size={16} />
+          <span className="sort-bar-conflict-count">{conflictCount}</span>
+        </button>
       )}
     </div>
   );

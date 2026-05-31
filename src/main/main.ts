@@ -28,6 +28,9 @@ import {
   drainBeforeQuit as engineDrainBeforeQuit,
   handleFlushDone as engineHandleFlushDone,
   getCurrentStatus as engineGetCurrentStatus,
+  getConflicts as engineGetConflicts,
+  resolveConflict as engineResolveConflict,
+  resetToRemote as engineResetToRemote,
 } from './syncEngine.js';
 import {
   APP_NAME,
@@ -619,7 +622,16 @@ function revealLabel() {
 
 ipcMain.handle('context:fileMenu', async (evt, opts = {}) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
-  const { isMd = true, isBookmarked = false, selectionCount = 1 } = opts;
+  const { isMd = true, isBookmarked = false, selectionCount = 1, conflictMode = false } = opts;
+  // In the conflict-resolution view: Resolve (= git add this file) or the
+  // whole-repo escape hatch, Reset to Remote (discard local, take GitHub).
+  if (conflictMode) {
+    return popupContextMenu(win, [
+      { label: 'Resolve', value: FILE_ACTIONS.RESOLVE },
+      { type: 'separator' },
+      { label: 'Reset to Remote (discard local)', value: FILE_ACTIONS.RESET_TO_REMOTE },
+    ]);
+  }
   const multi = selectionCount > 1;
   const template: any[] = [];
   if (multi) {
@@ -1009,6 +1021,24 @@ ipcMain.handle('sync:flushDone', async (_evt, token) => {
 // next push event would arrive).
 ipcMain.handle('sync:engineStatus', async () => {
   return engineGetCurrentStatus();
+});
+
+// Conflict-resolution view: list unmerged files, and resolve one (git add).
+// Both return workspace-relative POSIX paths.
+ipcMain.handle('sync:listConflicts', async (_evt, workspacePath) => {
+  if (!workspacePath) return [];
+  return engineGetConflicts(workspacePath);
+});
+
+ipcMain.handle('sync:resolveConflict', async (_evt, { workspacePath, relPath }) => {
+  if (!workspacePath || !relPath) return [];
+  return engineResolveConflict(workspacePath, relPath);
+});
+
+// Whole-repo escape hatch: discard local divergence, hard-reset to origin.
+ipcMain.handle('sync:resetToRemote', async (_evt, workspacePath) => {
+  if (!workspacePath) return;
+  return engineResetToRemote(workspacePath);
 });
 
 // ---- Coding agent (pi) ----

@@ -77,6 +77,8 @@ export interface SyncStatus {
   detail: string;
   lastSyncAt: number | null;
   repoUrl?: string | null;
+  /** Unmerged files (workspace-relative POSIX paths). Present on the paused status. */
+  conflicts?: string[];
 }
 
 export interface ShockwaveApi {
@@ -110,7 +112,7 @@ export interface ShockwaveApi {
   openExternal(url: string): Promise<void>;
 
   // Native context menus
-  showFileContextMenu(opts: { isMd?: boolean; isBookmarked?: boolean; selectionCount?: number }): Promise<FileAction | null>;
+  showFileContextMenu(opts: { isMd?: boolean; isBookmarked?: boolean; selectionCount?: number; conflictMode?: boolean }): Promise<FileAction | null>;
   showFolderContextMenu(): Promise<FolderAction | null>;
   showEditorContextMenu(opts: { hasSelection?: boolean; hasFilePath?: boolean; hasLink?: boolean }): Promise<EditorAction | null>;
 
@@ -173,6 +175,9 @@ export interface ShockwaveApi {
     engineStart(opts: { workspacePath: string; intervalSeconds?: number }): Promise<void>;
     engineStop(): Promise<void>;
     engineStatus(): Promise<SyncStatus>;
+    listConflicts(workspacePath: string): Promise<string[]>;
+    resolveConflict(workspacePath: string, relPath: string): Promise<string[]>;
+    resetToRemote(workspacePath: string): Promise<void>;
     flushDone(token: number): Promise<void>;
     onFlushRequest(cb: (token: number) => void): Unsubscribe;
     onStatus(cb: (status: SyncStatus) => void): Unsubscribe;

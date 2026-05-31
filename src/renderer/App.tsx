@@ -17,7 +17,7 @@ import Dialog from './Dialog.jsx';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import JournalDatePicker from './JournalDatePicker.jsx';
 import QuickSearch from './QuickSearch.jsx';
-import { basenameOf, dirOf } from './pathUtils';
+import { basenameOf, dirOf, toRelPath } from './pathUtils';
 import { prettyName } from './linkIndex.js';
 import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, VIEW_MODES, SAVE_STATES, TREE_SORT_ORDERS, FILE_ACTIONS } from './constants.js';
 import SortBar from './SortBar.jsx';
@@ -68,6 +68,45 @@ function flattenAll(nodes, out: any[] = []) {
     out.push(n);
   }
   return out;
+}
+
+// Build a nested folder/file tree for the conflict view straight from the git
+// conflict list (workspace-absolute paths) — NOT from the file tree, which
+// excludes hidden files. So conflicts in `.obsidian/…` etc. still show up.
+// Node shape matches buildTree: { id (abs path), name, children? }.
+function buildConflictTree(absPaths: string[], workspacePath: string | null) {
+  if (!workspacePath) return [];
+  const root: any[] = [];
+  const folders = new Map<string, any>(); // abs folder path → node
+  for (const abs of absPaths) {
+    const prefix = workspacePath + '/';
+    if (!abs.startsWith(prefix)) continue;
+    const parts = abs.slice(prefix.length).split('/');
+    let children = root;
+    let curAbs = workspacePath;
+    for (let i = 0; i < parts.length - 1; i++) {
+      curAbs = `${curAbs}/${parts[i]}`;
+      let node = folders.get(curAbs);
+      if (!node) {
+        node = { id: curAbs, name: parts[i], children: [] };
+        folders.set(curAbs, node);
+        children.push(node);
+      }
+      children = node.children;
+    }
+    children.push({ id: abs, name: parts[parts.length - 1] });
+  }
+  // Folders first, then A→Z, at every level.
+  const sortLevel = (ns: any[]) => {
+    ns.sort((a, b) => {
+      const ad = !!a.children, bd = !!b.children;
+      if (ad !== bd) return ad ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    for (const n of ns) if (n.children) sortLevel(n.children);
+  };
+  sortLevel(root);
+  return root;
 }
 
 // Workspace-wide, case-insensitive .md basename collision check. The link
@@ -129,6 +168,18 @@ export default function App() {
   const workspacePath = activeWorkspace?.path ?? null;
   const workspacePathRef = useSyncRef(workspacePath);
   const treeRef = useSyncRef(tree);
+
+  // Conflict files surfaced by the sync engine on its paused status (relative
+  // POSIX paths → workspace-absolute). Drives the conflict-resolution view.
+  const conflictPaths = useMemo(
+    () => (workspacePath ? (syncStatus?.conflicts ?? []).map((r: string) => `${workspacePath}/${r}`) : []),
+    [workspacePath, syncStatus],
+  );
+  const hasConflicts = conflictPaths.length > 0;
+  // Conflict-only tree view. Manual entry (click the red sync icon / sort-bar
+  // toggle); auto-exit once everything's resolved.
+  const [conflictFilterActive, setConflictFilterActive] = useState(false);
+  useEffect(() => { if (!hasConflicts) setConflictFilterActive(false); }, [hasConflicts]);
 
   const {
     themeMode, hideLineNumbers, dailyNote, dailyNoteRef, treeSortOrder,
@@ -243,9 +294,11 @@ export default function App() {
   } = useBookmarks({ workspacePath, showError });
 
   const sortedTree = useMemo(() => {
+    // Conflict view is its own pre-sorted tree from the git conflict list.
+    if (conflictFilterActive) return buildConflictTree(conflictPaths, workspacePath);
     const base = bookmarkFilterActive ? flattenBookmarkedFiles(tree, bookmarks) : tree;
     return sortTreeNodes(base, treeSortOrder);
-  }, [tree, treeSortOrder, bookmarkFilterActive, bookmarks]);
+  }, [tree, treeSortOrder, bookmarkFilterActive, bookmarks, conflictFilterActive, conflictPaths, workspacePath]);
 
   // ---- editor ref ----
   const editorRef = useRef<any>(null);
@@ -444,10 +497,12 @@ export default function App() {
       return;
     }
     setSelectedFolderPath(null);
-    if (!node.data.name.toLowerCase().endsWith('.md')) return;
+    // Conflict view may list non-.md / hidden files; allow opening those so
+    // they can be resolved. Otherwise keep the .md-only rule.
+    if (!conflictFilterActive && !node.data.name.toLowerCase().endsWith('.md')) return;
     if (graphMode) setGraphMode(false);
     await openInActiveTab(node.id);
-  }, [openInActiveTab, graphMode]);
+  }, [openInActiveTab, graphMode, conflictFilterActive]);
 
   // ---- workspace operations ----
 
@@ -536,6 +591,8 @@ export default function App() {
   // Bulk-delete confirmation state. Set by the action wrapper when DELETE
   // arrives with >1 path; the ConfirmDialog renders below.
   const [bulkDeleteCandidates, setBulkDeleteCandidates] = useState<any>(null);
+  // Whole-repo "reset to remote" awaiting the user's confirm.
+  const [resetToRemotePending, setResetToRemotePending] = useState(false);
 
   // Action wrapper around fileOps.onFileAction. Two responsibilities:
   // 1) Handle TOGGLE_BOOKMARK (kept here so useFileOps stays bookmark-free).
@@ -543,9 +600,36 @@ export default function App() {
   //    right-click on a multi-selection. Single-target actions (DUPLICATE,
   //    REVEAL, RENAME) collapse to the first path; bulk-safe actions
   //    (TOGGLE_BOOKMARK, DELETE, NEW_TAB) fan out.
+  // Mark one conflicted file resolved (git add). Flush it first if it's open so
+  // git stages the user's edits, not stale on-disk content. The engine pushes a
+  // new status (fewer conflicts, or idle) → conflictPaths updates → view
+  // refreshes/exits on its own.
+  const resolveConflictPath = useCallback(async (absPath) => {
+    if (!workspacePath) return;
+    if (absPath === activeFile) { try { await writeNow(); } catch { /* surfaced below */ } }
+    const rel = toRelPath(absPath, workspacePath);
+    if (!rel) return;
+    try {
+      await window.api.sync.resolveConflict(workspacePath, rel);
+    } catch (err: any) {
+      showError(`Failed to resolve: ${err.message ?? err}`);
+    }
+  }, [workspacePath, activeFile, writeNow, showError]);
+
   const onFileActionWithBookmarks = useCallback((action, filePathOrPaths) => {
     const paths = Array.isArray(filePathOrPaths) ? filePathOrPaths : [filePathOrPaths];
     if (paths.length === 0) return;
+
+    if (action === FILE_ACTIONS.RESOLVE) {
+      void resolveConflictPath(paths[0]);
+      return;
+    }
+
+    if (action === FILE_ACTIONS.RESET_TO_REMOTE) {
+      // Whole-repo, destructive → confirm first (handled by the dialog below).
+      setResetToRemotePending(true);
+      return;
+    }
 
     if (action === FILE_ACTIONS.TOGGLE_BOOKMARK) {
       if (paths.length === 1) {
@@ -573,7 +657,17 @@ export default function App() {
 
     // Single-target actions: act on the first path.
     fileOps.onFileAction(action, paths[0]);
-  }, [fileOps, toggleBookmark, setBookmarksForPaths]);
+  }, [fileOps, toggleBookmark, setBookmarksForPaths, resolveConflictPath]);
+
+  const confirmResetToRemote = useCallback(async () => {
+    setResetToRemotePending(false);
+    if (!workspacePath) return;
+    try {
+      await window.api.sync.resetToRemote(workspacePath);
+    } catch (err: any) {
+      showError(`Reset to remote failed: ${err.message ?? err}`);
+    }
+  }, [workspacePath, showError]);
 
   const cancelBulkDelete = useCallback(() => setBulkDeleteCandidates(null), []);
   const confirmBulkDelete = useCallback(async () => {
@@ -1144,13 +1238,17 @@ export default function App() {
           onOpenQuickSearch={() => setQuickSearchOpen(true)}
           onCollapseAll={() => fileTreeRef.current?.closeAll?.()}
           bookmarkFilterActive={bookmarkFilterActive}
-          onToggleBookmarkFilter={() => setBookmarkFilterActive((v) => !v)}
+          onToggleBookmarkFilter={() => { setConflictFilterActive(false); setBookmarkFilterActive((v) => !v); }}
           bookmarks={bookmarks}
           workspacePath={workspacePath}
           onPickBookmark={async (absPath) => {
             if (graphMode) setGraphMode(false);
             await openInActiveTab(absPath);
           }}
+          hasConflicts={hasConflicts}
+          conflictCount={conflictPaths.length}
+          conflictFilterActive={conflictFilterActive}
+          onToggleConflictFilter={() => { setBookmarkFilterActive(false); setConflictFilterActive((v) => !v); }}
           disabled={!workspacePath}
         />
         <div className="tree-wrap">
@@ -1163,16 +1261,19 @@ export default function App() {
               onFileAction={onFileActionWithBookmarks}
               onFolderAction={onFolderAction}
               onMoveItems={onMoveItems}
-              disableDrop={disableDrop}
+              disableDrop={disableDrop || conflictFilterActive}
+              conflictMode={conflictFilterActive}
               bookmarkedPaths={bookmarks}
             />
           ) : (
             <div className="empty">
               {!workspacePath
                 ? 'No workspace open'
-                : bookmarkFilterActive
-                  ? 'No bookmarks'
-                  : 'Empty workspace'}
+                : conflictFilterActive
+                  ? 'No conflicts'
+                  : bookmarkFilterActive
+                    ? 'No bookmarks'
+                    : 'Empty workspace'}
             </div>
           )}
         </div>
@@ -1284,6 +1385,7 @@ export default function App() {
                 onUndo={onUndo}
                 onRedo={onRedo}
                 syncStatus={syncStatus}
+                onOpenConflicts={() => { setBookmarkFilterActive(false); setConflictFilterActive(true); }}
               />
             )}
           </>
@@ -1355,6 +1457,16 @@ export default function App() {
         destructive
         onConfirm={confirmBulkDelete}
         onClose={cancelBulkDelete}
+      />
+
+      <ConfirmDialog
+        open={resetToRemotePending}
+        title="Reset to remote"
+        message="Discard all local changes in this workspace and take the GitHub version? This throws away your un-synced edits and can't be undone."
+        confirmLabel="Reset to remote"
+        destructive
+        onConfirm={confirmResetToRemote}
+        onClose={() => setResetToRemotePending(false)}
       />
 
       <Dialog
