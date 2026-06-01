@@ -161,11 +161,14 @@ While paused, the renderer surfaces the conflict list and lets the user resolve.
 
 `sync:status` push event carries `{ status, detail, lastSyncAt, repoUrl, conflicts }`. `conflicts` is the workspace-relative path list, present only on `paused`-for-conflicts (every other emit resets it to `[]` — see `emitStatus`):
 
-- `disabled` — workspace has no origin, or no PAT configured. Icon hides.
-- `idle` — last tick succeeded, waiting for next.
+- `unconfigured` — sync not set up (no origin / no PAT), or a benign engine stop (workspace switch / window reload). **Renderer hides the icon.**
+- `idle` — synced. `lastSyncAt === null` = "not synced yet" (gray cloud); set = synced (cloud-check).
 - `syncing` — a tick is in progress; `detail` describes the current step.
-- `paused` — **merge conflicts** (carries `conflicts[]`) OR auth failure. **No retry loop.** For conflicts the user resolves in the renderer's conflict view (per-file or whole-tree, above); the engine is stateless — once unmerged files are gone, the next tick completes the merge and resumes. For auth, fix the PAT.
-- `error` — transient (network, generic git failure). Next tick retries automatically.
+- `paused` — **merge conflicts** (carries `conflicts[]`). The engine is stateless — once unmerged files are gone, the next tick completes the merge and resumes (see the per-file / whole-tree resolution above).
+- `offline` — **a transient/network error. Sync is NOT off — it backs off (10s → 30s → 1m) and keeps retrying forever.** `state.retryAt` gates ticks during backoff; a confirmed fetch clears it.
+- `disabled` — **stopped**: the user turned it off (`userDisable`), or a *terminal* error stopped it (`disableOnError` — clears the interval). The renderer shows the **stop** icon; clicking it → reason + **Enable** (→ `setWorkspaceDisabled(false)` → `engineStart`).
+
+**Network NEVER disables sync.** Only `isTerminalGitError` (an allowlist: big file `GH001`, secret `GH013`, protected branch, auth/perms, repo-not-found) routes a failure to `disabled`. Anything unrecognized → `offline` + retry. Bias is intentional: when unsure, keep trying, don't turn off.
 
 ### Lifecycle
 

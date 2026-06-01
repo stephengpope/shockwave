@@ -25,6 +25,7 @@ import {
 import {
   start as engineStart,
   stop as engineStop,
+  userDisable as engineUserDisable,
   drainBeforeQuit as engineDrainBeforeQuit,
   handleFlushDone as engineHandleFlushDone,
   getCurrentStatus as engineGetCurrentStatus,
@@ -998,12 +999,14 @@ ipcMain.handle('sync:engineStart', async (evt, { workspacePath, intervalSeconds 
   const wsId = (settings.workspaces || []).find((w) => w.path === workspacePath)?.id ?? null;
   const disabledIds = settings.sync?.disabledWorkspaceIds || [];
   const win = BrowserWindow.fromWebContents(evt.sender);
-  // User paused sync for this workspace → don't start the engine. engineStop
-  // emits a `disabled` status (icon hidden) which matches the rest of the
-  // "not syncing" cases. Origin stays in .git/config so re-enabling is a
-  // single engineStart with no setup required.
+  // User turned sync off for this workspace → don't start the engine, but show
+  // the DISABLED (stop) icon so they can re-enable from the status bar. Origin
+  // stays in .git/config so re-enabling is a single engineStart, no setup.
+  // (Only when there's a remote to sync to — otherwise it's just unconfigured.)
   if (wsId && disabledIds.includes(wsId)) {
-    await engineStop();
+    const ws = await syncWorkspaceStatus(workspacePath);
+    if (ws.hasOrigin) await engineUserDisable();
+    else await engineStop();
     return;
   }
   await engineStart({
@@ -1032,7 +1035,11 @@ ipcMain.handle('sync:setWorkspaceDisabled', async (evt, { workspacePath, disable
   // would yank the engine away from the workspace the user is editing.
   if (settings.activeWorkspaceId === wsId) {
     if (disabled) {
-      await engineStop();
+      // Show the DISABLED (stop) icon — not hidden — so it can be re-enabled
+      // from the status bar. (Falls back to a plain stop if there's no remote.)
+      const ws = await syncWorkspaceStatus(workspacePath);
+      if (ws.hasOrigin) await engineUserDisable();
+      else await engineStop();
     } else {
       const win = BrowserWindow.fromWebContents(evt.sender);
       await engineStart({

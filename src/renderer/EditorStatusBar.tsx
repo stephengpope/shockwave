@@ -1,55 +1,93 @@
-import React from 'react';
-import { PencilIcon, CodeIcon, CheckCircleIcon, DotCircleIcon, RotateCcwIcon, RotateCwIcon, CloudCheckIcon, RefreshIcon, CloudAlertIcon } from './Icons.jsx';
+import React, { useEffect, useRef, useState } from 'react';
+import { PencilIcon, CodeIcon, CheckCircleIcon, DotCircleIcon, RotateCcwIcon, RotateCwIcon, CloudCheckIcon, CloudIcon, RefreshIcon, CloudAlertIcon, AlertTriangleIcon, StopIcon } from './Icons.jsx';
 import { VIEW_MODES, SAVE_STATES } from './constants.js';
 
 function formatNum(n) {
   return n.toLocaleString();
 }
 
-// Map sync engine status → icon + color + animation + tooltip.
-// 'disabled' returns null so the icon vanishes when the active workspace
-// isn't sync-configured. When the engine knows the GitHub web URL we
-// render the icon as a button that opens the repo via shell.openExternal.
-function renderSyncIcon(syncStatus, onOpenConflicts) {
-  if (!syncStatus || syncStatus.status === 'disabled') return null;
+// Sync status → one of six icons. `unconfigured` renders nothing (sync isn't
+// set up). Disabled opens a click-popover (reason + Enable); conflicts open the
+// resolve view; the rest open the repo when the URL is known.
+//   not synced yet → gray cloud · idle → cloud-check · syncing → spinner
+//   offline → cloud-alert (retrying) · conflicts → yellow triangle · disabled → stop
+function SyncStatusIcon({ syncStatus, onOpenConflicts, onEnableSync }) {
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const anchorRef = useRef<any>(null);
+  useEffect(() => {
+    if (!popoverOpen) return;
+    const onDown = (e) => { if (anchorRef.current && !anchorRef.current.contains(e.target)) setPopoverOpen(false); };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [popoverOpen]);
+
+  if (!syncStatus || syncStatus.status === 'unconfigured') return null;
   const { status, detail, lastSyncAt, repoUrl } = syncStatus;
   const conflictCount = syncStatus.conflicts?.length ?? 0;
-  let icon = <CloudCheckIcon size={12} />;
-  let cls = 'status-cloud-idle';
-  let baseTitle = lastSyncAt
-    ? `Synced ${Math.max(1, Math.round((Date.now() - lastSyncAt) / 1000))}s ago`
-    : 'Synced';
-  if (status === 'syncing') {
-    icon = <RefreshIcon size={12} />;
-    cls = 'status-cloud-syncing';
-    baseTitle = detail || 'Syncing…';
-  } else if (status === 'paused' || status === 'error') {
-    icon = <CloudAlertIcon size={12} />;
-    cls = 'status-cloud-error';
-    baseTitle = detail || (status === 'paused' ? 'Sync paused' : 'Sync error');
+
+  // Disabled (turned off, or a terminal error stopped it) → stop icon + popover.
+  if (status === 'disabled') {
+    return (
+      <span className="sync-icon-anchor" ref={anchorRef}>
+        <button
+          type="button"
+          className="status-icon status-cloud status-cloud-disabled status-cloud-link"
+          title="Sync disabled — click"
+          aria-label="Sync disabled"
+          onClick={() => setPopoverOpen((v) => !v)}
+        >
+          <StopIcon size={12} />
+        </button>
+        {popoverOpen && (
+          <div className="sync-disabled-popover" role="dialog">
+            <div className="sync-disabled-reason">{detail || 'Sync is off'}</div>
+            <button
+              type="button"
+              className="dialog-button-primary"
+              onClick={() => { setPopoverOpen(false); onEnableSync?.(); }}
+            >
+              Enable
+            </button>
+          </div>
+        )}
+      </span>
+    );
   }
-  // Conflicts → the icon opens the conflict-resolution view instead of the repo.
-  if (conflictCount > 0 && onOpenConflicts) {
+
+  // Conflicts → yellow triangle, click opens the resolve view.
+  if (status === 'paused' && conflictCount > 0) {
     const title = `${conflictCount} conflict${conflictCount === 1 ? '' : 's'} — click to resolve`;
     return (
       <button
         type="button"
-        className={`status-icon status-cloud ${cls} status-cloud-link`}
+        className="status-icon status-cloud status-cloud-conflict status-cloud-link"
         title={title}
         aria-label={title}
         onClick={onOpenConflicts}
       >
-        {icon}
+        <AlertTriangleIcon size={12} />
       </button>
     );
   }
+
+  // idle (synced or not-synced-yet) / syncing / offline
+  let icon, cls, title;
+  if (status === 'syncing') {
+    icon = <RefreshIcon size={12} />; cls = 'status-cloud-syncing'; title = detail || 'Syncing…';
+  } else if (status === 'offline') {
+    icon = <CloudAlertIcon size={12} />; cls = 'status-cloud-offline'; title = detail || "Can't reach GitHub — retrying";
+  } else if (!lastSyncAt) {
+    icon = <CloudIcon size={12} />; cls = 'status-cloud-pending'; title = 'Not synced yet';
+  } else {
+    icon = <CloudCheckIcon size={12} />; cls = 'status-cloud-idle';
+    title = `Synced ${Math.max(1, Math.round((Date.now() - lastSyncAt) / 1000))}s ago`;
+  }
   if (repoUrl) {
-    const title = `${baseTitle} — click to open ${repoUrl}`;
     return (
       <button
         type="button"
         className={`status-icon status-cloud ${cls} status-cloud-link`}
-        title={title}
+        title={`${title} — click to open ${repoUrl}`}
         aria-label={title}
         onClick={() => window.api.openExternal(repoUrl)}
       >
@@ -58,7 +96,7 @@ function renderSyncIcon(syncStatus, onOpenConflicts) {
     );
   }
   return (
-    <span className={`status-icon status-cloud ${cls}`} title={baseTitle} aria-label={baseTitle}>
+    <span className={`status-icon status-cloud ${cls}`} title={title} aria-label={title}>
       {icon}
     </span>
   );
@@ -89,6 +127,7 @@ export default function EditorStatusBar({
   onRedo,
   syncStatus,
   onOpenConflicts,
+  onEnableSync,
 }) {
   const isLive = viewMode === VIEW_MODES.LIVE;
   const isSaved = saveState === SAVE_STATES.SAVED;
@@ -144,7 +183,7 @@ export default function EditorStatusBar({
       >
         {isSaved ? <CheckCircleIcon size={12} /> : <DotCircleIcon size={12} />}
       </span>
-      {renderSyncIcon(syncStatus, onOpenConflicts)}
+      <SyncStatusIcon syncStatus={syncStatus} onOpenConflicts={onOpenConflicts} onEnableSync={onEnableSync} />
     </div>
   );
 }

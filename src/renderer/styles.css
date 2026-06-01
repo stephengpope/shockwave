@@ -2179,6 +2179,45 @@ html, body, #root {
   color: #f87171;
 }
 
+/* Not synced yet — neutral gray cloud. */
+.editor-status-bar .status-cloud-pending { color: var(--fg-muted); }
+
+/* Network trouble (retrying) — amber. */
+.editor-status-bar .status-cloud-offline { color: #d97706; }
+[data-theme="dark"] .editor-status-bar .status-cloud-offline { color: #fbbf24; }
+
+/* Conflicts — yellow, the "act on this" state. */
+.editor-status-bar .status-cloud-conflict { color: #d4a017; }
+[data-theme="dark"] .editor-status-bar .status-cloud-conflict { color: #facc15; }
+
+/* Disabled — muted stop. */
+.editor-status-bar .status-cloud-disabled { color: var(--fg-muted); }
+
+/* Disabled popover: anchored above the icon (status bar sits at the bottom). */
+.sync-icon-anchor { position: relative; display: inline-flex; }
+.sync-disabled-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-popover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+.sync-disabled-reason {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
 @keyframes status-cloud-spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }

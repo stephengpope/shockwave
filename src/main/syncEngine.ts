@@ -43,19 +43,41 @@ let state: any = {
   ticking: false,           // a tick is currently executing
   intervalHandle: null,
   pendingTickPromise: null, // resolves when current tick finishes (for stop())
+  backoffStep: 0,           // network-error backoff: 0 = none, 1/2/3 = 10s/30s/60s
+  retryAt: null,            // timestamp before which ticks are skipped (backing off)
 };
 
-// Status surfaced to the renderer. Status icon (task 6) maps these to icon
-// states. The renderer reads `status` + `detail` + `lastSyncAt`.
+// Status surfaced to the renderer → maps to a status-bar icon:
+//   unconfigured → icon HIDDEN (sync not set up; or a benign engine stop)
+//   idle         → cloud-check (synced) / gray cloud (lastSyncAt null = not synced yet)
+//   syncing      → spinner
+//   paused       → yellow triangle (merge conflicts; carries conflicts[])
+//   offline      → cloud-alert (can't reach GitHub; retrying with backoff)
+//   disabled     → stop (turned off, or a TERMINAL error stopped it); click → Enable
 const STATUS = Object.freeze({
-  DISABLED: 'disabled',     // not configured (no origin in workspace)
-  IDLE: 'idle',             // last tick ok, waiting for next
-  SYNCING: 'syncing',       // a tick is in progress
-  PAUSED: 'paused',         // merge conflict (or auth), needs user resolution
-  ERROR: 'error',           // last tick failed (auth/network/etc.)
+  UNCONFIGURED: 'unconfigured',
+  IDLE: 'idle',
+  SYNCING: 'syncing',
+  PAUSED: 'paused',
+  OFFLINE: 'offline',
+  DISABLED: 'disabled',
 });
 
-let currentStatus = { status: STATUS.DISABLED, detail: '', lastSyncAt: null, repoUrl: null, conflicts: [] };
+// Network/transient errors NEVER disable sync — they back off and keep retrying.
+// Only an explicit allowlist of "the server refused, retrying is pointless"
+// errors stops sync. Bias: anything unrecognized is treated as transient.
+function isTerminalGitError(stderr) {
+  const s = (stderr || '').toLowerCase();
+  return (
+    s.includes('gh001') || s.includes('file size limit') || s.includes('large files detected') ||  // file too big
+    s.includes('gh013') || s.includes('push protection') || s.includes('secret') ||                // secret scanning
+    s.includes('protected branch') || s.includes('pre-receive hook declined') ||                   // branch protection
+    isAuthError(s) || s.includes('permission denied') || s.includes('403') ||                      // auth / perms
+    s.includes('repository not found')                                                             // bad repo / no access
+  );
+}
+
+let currentStatus = { status: STATUS.UNCONFIGURED, detail: '', lastSyncAt: null, repoUrl: null, conflicts: [] };
 
 function emitStatus(patch) {
   // Reset `conflicts` every emit unless the patch sets it — only the paused
@@ -69,6 +91,31 @@ function emitStatus(patch) {
 
 export function getCurrentStatus() {
   return currentStatus;
+}
+
+// A transient/network error: don't disable — back off (10s → 30s → 1m) and keep
+// retrying. The tick-top guard skips ticks until `retryAt`.
+function enterOffline() {
+  state.backoffStep = Math.min(state.backoffStep + 1, 3);
+  const ms = [10_000, 30_000, 60_000][state.backoffStep - 1];
+  state.retryAt = Date.now() + ms;
+  emitStatus({ status: STATUS.OFFLINE, detail: "Can't reach GitHub — retrying" });
+}
+
+// A terminal error (server refused; retrying is pointless): stop ticking and
+// surface the reason. The user fixes it and clicks Enable (→ engineStart).
+function disableOnError(reason) {
+  if (state.intervalHandle) { clearInterval(state.intervalHandle); state.intervalHandle = null; }
+  state.running = false;
+  state.retryAt = null;
+  state.backoffStep = 0;
+  emitStatus({ status: STATUS.DISABLED, detail: reason });
+}
+
+// Route a failed git command: terminal (allowlisted) → disable; else → offline.
+function handleGitFailure(stderr, label) {
+  if (isTerminalGitError(stderr)) disableOnError((stderr || '').trim() || `${label} failed`);
+  else enterOffline();
 }
 
 // ─── Flush-renderer-dirty bridge ───────────────────────────────────────────
@@ -125,27 +172,19 @@ function isAuthError(stderr) {
 // clean by the end, false on a git error (status emitted by caller).
 async function commitDirty(workspacePath) {
   const status = await gitSpawn(workspacePath, ['status', '--porcelain'], { timeoutMs: 10_000 });
-  if (!status.ok) {
-    emitStatus({ status: STATUS.ERROR, detail: `git status failed: ${status.stderr.trim()}` });
-    return false;
-  }
+  if (!status.ok) { enterOffline(); return false; }       // local git hiccup → retry, never disable
   if (status.stdout.trim().length === 0) return true;
   const add = await gitSpawn(workspacePath, ['add', '-A'], { timeoutMs: 30_000 });
-  if (!add.ok) {
-    emitStatus({ status: STATUS.ERROR, detail: `git add failed: ${add.stderr.trim()}` });
-    return false;
-  }
+  if (!add.ok) { enterOffline(); return false; }
   const commit = await gitSpawn(workspacePath, ['commit', '-m', `Shockwave sync: ${new Date().toISOString()}`], { timeoutMs: 30_000 });
-  if (!commit.ok) {
-    emitStatus({ status: STATUS.ERROR, detail: `git commit failed: ${commit.stderr.trim()}` });
-    return false;
-  }
+  if (!commit.ok) { enterOffline(); return false; }
   return true;
 }
 
 async function runTick() {
   if (!state.running) return;
   if (state.ticking) return; // serial: never overlap a tick with itself
+  if (state.retryAt && Date.now() < state.retryAt) return; // backing off after a network error
   state.ticking = true;
   let tickResolve;
   state.pendingTickPromise = new Promise<any>((res) => { tickResolve = res; });
@@ -186,18 +225,17 @@ async function runTick() {
       timeoutMs: 60_000,
     });
     if (!fetch.ok) {
-      const stderr = fetch.stderr.toLowerCase();
-      if (isAuthError(stderr)) {
-        emitStatus({ status: STATUS.PAUSED, detail: 'Authentication failed — check your PAT' });
-        return;
-      }
-      if (stderr.includes("couldn't find remote ref")) {
-        remoteBranchExists = false;
+      if (fetch.stderr.toLowerCase().includes("couldn't find remote ref")) {
+        remoteBranchExists = false;        // fresh repo, no remote branch yet
       } else {
-        emitStatus({ status: STATUS.ERROR, detail: `git fetch failed: ${fetch.stderr.trim()}` });
+        handleGitFailure(fetch.stderr, 'git fetch');  // auth/perms → disabled; network → offline+retry
         return;
       }
     }
+    // Reached the remote → connectivity is confirmed; clear any network backoff
+    // (even if we go on to pause on a conflict, we're not "offline" anymore).
+    state.backoffStep = 0;
+    state.retryAt = null;
 
     // 4. If remote has new commits we don't have, merge. Visible — this is
     // the "downloading from git" case the user actually wants to see. Merge
@@ -220,7 +258,7 @@ async function runTick() {
             emitStatus({ status: STATUS.PAUSED, detail: `${merged.length} conflict${merged.length > 1 ? 's' : ''} — resolve to continue`, conflicts: merged });
             return;
           }
-          emitStatus({ status: STATUS.ERROR, detail: `git merge failed: ${merge.stderr.trim()}` });
+          handleGitFailure(merge.stderr, 'git merge');
           return;
         }
       }
@@ -242,18 +280,17 @@ async function runTick() {
         timeoutMs: 60_000,
       });
       if (!push.ok) {
-        if (isAuthError(push.stderr)) {
-          emitStatus({ status: STATUS.PAUSED, detail: 'Authentication failed — check your PAT' });
-          return;
-        }
         const stderr = push.stderr.toLowerCase();
         if (push.code !== 0 && !stderr.includes('up-to-date') && !stderr.includes('nothing to')) {
-          emitStatus({ status: STATUS.ERROR, detail: `git push failed: ${push.stderr.trim()}` });
+          handleGitFailure(push.stderr, 'git push');  // big file/auth/etc → disabled; network → offline+retry
           return;
         }
       }
     }
 
+    // Success → clear any backoff and mark synced.
+    state.backoffStep = 0;
+    state.retryAt = null;
     emitStatus({ status: STATUS.IDLE, detail: '', lastSyncAt: Date.now() });
   } finally {
     state.ticking = false;
@@ -287,7 +324,7 @@ async function stageAndReport(workspacePath, ops) {
     state.ticking = false;
   }
   if (remaining.length === 0) {
-    runTick().catch((err) => emitStatus({ status: STATUS.ERROR, detail: `Tick failed: ${err.message}` }));
+    runTick().catch(() => enterOffline());
   }
   return remaining;
 }
@@ -326,15 +363,12 @@ export async function resetToRemote(workspacePath) {
     await gitSpawn(workspacePath, ['merge', '--abort'], { timeoutMs: 30_000 });
     await gitSpawn(workspacePath, ['fetch', 'origin', branch], { pat: state.pat, timeoutMs: 60_000 });
     const reset = await gitSpawn(workspacePath, ['reset', '--hard', `origin/${branch}`], { timeoutMs: 30_000 });
-    if (!reset.ok) {
-      emitStatus({ status: STATUS.ERROR, detail: `Reset failed: ${reset.stderr.trim()}` });
-      return;
-    }
+    if (!reset.ok) { handleGitFailure(reset.stderr, 'git reset'); return; }
   } finally {
     state.ticking = false;
   }
   // Back in sync with origin → resume normal ticking (clears the paused status).
-  runTick().catch((err) => emitStatus({ status: STATUS.ERROR, detail: `Tick failed: ${err.message}` }));
+  runTick().catch(() => enterOffline());
 }
 
 // ─── Lifecycle ─────────────────────────────────────────────────────────────
@@ -344,17 +378,18 @@ export async function start({ workspacePath, pat, intervalSeconds, windowId }) {
   await stop();
   if (!workspacePath || !pat) {
     state.windowId = windowId ?? state.windowId;
-    emitStatus({ status: STATUS.DISABLED, detail: pat ? 'No workspace' : 'No PAT set', lastSyncAt: null, repoUrl: null });
+    emitStatus({ status: STATUS.UNCONFIGURED, detail: pat ? 'No workspace' : 'No PAT set', lastSyncAt: null, repoUrl: null });
     return;
   }
-  // Verify the workspace actually has an origin — without one, sync is a
-  // no-op. Surface 'disabled' so the icon hides itself.
+  // No origin → sync isn't set up for this workspace. UNCONFIGURED hides the icon.
   const ws = await workspaceStatus(workspacePath);
   if (!ws.hasOrigin) {
     state.windowId = windowId ?? state.windowId;
-    emitStatus({ status: STATUS.DISABLED, detail: 'Workspace has no remote', lastSyncAt: null, repoUrl: null });
+    emitStatus({ status: STATUS.UNCONFIGURED, detail: 'Workspace has no remote', lastSyncAt: null, repoUrl: null });
     return;
   }
+  state.backoffStep = 0;
+  state.retryAt = null;
   state.running = true;
   state.workspacePath = workspacePath;
   state.pat = pat;
@@ -370,9 +405,7 @@ export async function start({ workspacePath, pat, intervalSeconds, windowId }) {
   // changes without waiting up to 10s), then on the interval.
   state.intervalHandle = setInterval(runTick, state.intervalMs);
   // Don't await — let it run in the background and update status events.
-  runTick().catch((err) => {
-    emitStatus({ status: STATUS.ERROR, detail: `Tick failed: ${err.message}` });
-  });
+  runTick().catch(() => enterOffline());
 }
 
 export async function stop() {
@@ -381,13 +414,23 @@ export async function stop() {
     state.intervalHandle = null;
   }
   state.running = false;
+  state.retryAt = null;
+  state.backoffStep = 0;
   // Let any in-flight tick finish so we don't leave a partial commit/push.
   if (state.pendingTickPromise) {
     await state.pendingTickPromise.catch(() => {});
   }
   state.workspacePath = null;
   state.pat = null;
-  emitStatus({ status: STATUS.DISABLED, detail: '', lastSyncAt: currentStatus.lastSyncAt, repoUrl: null });
+  // Benign stop (workspace switch / window reload) → UNCONFIGURED hides the icon.
+  emitStatus({ status: STATUS.UNCONFIGURED, detail: '', lastSyncAt: currentStatus.lastSyncAt, repoUrl: null });
+}
+
+/** User turned sync off for this workspace. Like stop(), but the icon STAYS
+ *  (DISABLED → stop icon) so they can re-enable it right from the status bar. */
+export async function userDisable() {
+  await stop();
+  emitStatus({ status: STATUS.DISABLED, detail: 'Sync is turned off', lastSyncAt: currentStatus.lastSyncAt, repoUrl: null });
 }
 
 /** Called from `before-quit` to drain any in-flight tick before app exits. */

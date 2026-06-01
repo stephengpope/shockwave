@@ -209,6 +209,26 @@ export function CloudAlertIcon({ size = 14 }) {
   );
 }
 
+// Plain cloud, no mark inside — sync "not synced yet" (gray).
+export function CloudIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
+      <path d="M17.5 19a4.5 4.5 0 1 0-.94-8.9 6 6 0 1 0-11.56 2.4A4 4 0 0 0 7 19h10.5z" />
+    </svg>
+  );
+}
+
+// Warning triangle with an exclamation — sync conflicts (yellow).
+export function AlertTriangleIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" {...stroke}>
+      <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <circle cx="12" cy="16.5" r="0.6" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 export function PlayIcon({ size = 14 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">

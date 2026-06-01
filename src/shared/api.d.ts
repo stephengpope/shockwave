@@ -73,7 +73,7 @@ export interface InstalledSkill {
 export type Unsubscribe = () => void;
 
 export interface SyncStatus {
-  status: 'disabled' | 'idle' | 'syncing' | 'paused' | 'error' | string;
+  status: 'unconfigured' | 'idle' | 'syncing' | 'paused' | 'offline' | 'disabled' | string;
   detail: string;
   lastSyncAt: number | null;
   repoUrl?: string | null;

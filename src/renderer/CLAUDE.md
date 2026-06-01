@@ -111,7 +111,7 @@ The engine lives in main (see `src/main/CLAUDE.md`); the renderer just bridges t
 
 **Engine start on workspace switch.** `loadWorkspace` calls `window.api.sync.engineStart({ workspacePath, intervalSeconds })` after `watchStart`. The engine self-checks for an origin + PAT and emits `disabled` if either's missing, so the renderer doesn't gate on those locally. The mount-effect cleanup calls `engineStop` so a full reload doesn't leave a tick running against a torn-down window.
 
-**Status icon.** `EditorStatusBar.jsx`'s `renderSyncIcon` maps the status: `CloudCheck` for idle, spinning `Refresh` for syncing, `CloudAlert` for paused/error, hidden when `disabled`. Tooltips read from `status.detail` / `status.lastSyncAt`. **When the paused status carries conflicts, the icon turns red and clicking it opens the conflict view** (via `onOpenConflicts`) instead of the GitHub repo.
+**Status icon.** `EditorStatusBar.jsx`'s `SyncStatusIcon` maps the 6 statuses to one icon each: `unconfigured` → **hidden**; `idle` + `lastSyncAt===null` → gray `Cloud` ("not synced yet"); `idle` + set → `CloudCheck`; `syncing` → spinning `Refresh`; `offline` → `CloudAlert` (amber, "retrying"); `paused` → yellow `AlertTriangle` (click → conflict view via `onOpenConflicts`); `disabled` → `Stop` (click → a small popover with the reason + an **Enable** button → `onEnableSync` → `setWorkspaceDisabled(false)`). Idle/syncing/offline still click through to the repo URL when known.
 
 ### Conflict-resolution view
 

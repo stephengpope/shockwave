@@ -1479,6 +1479,11 @@ export default function App() {
                 onRedo={onRedo}
                 syncStatus={syncStatus}
                 onOpenConflicts={() => { setBookmarkFilterActive(false); setConflictFilterActive(true); }}
+                onEnableSync={() => {
+                  if (!workspacePath) return;
+                  window.api.sync.setWorkspaceDisabled({ workspacePath, disabled: false })
+                    .catch((err: any) => showError(`Couldn't enable sync: ${err.message ?? err}`));
+                }}
               />
             )}
           </>
