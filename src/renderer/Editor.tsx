@@ -2,13 +2,14 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react
 import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
-import { markdown, markdownKeymap } from '@codemirror/lang-markdown';
+import { markdown, insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, defaultHighlightStyle, indentOnInput } from '@codemirror/language';
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { taskCheckboxes, taskEnterKeymap } from './taskCheckboxes.js';
 import { blankLineOutdentKeymap } from './blankLineOutdent.js';
+import { listContinueKeymap } from './listContinue.js';
 import { bulletPoints } from './bulletPoints.js';
 import { wikiLinks } from './wikiLinks.js';
 import { wikiLinkCompletions } from './wikiCompletions.js';
@@ -20,6 +21,21 @@ import { imagePaste } from './imagePaste.js';
 import { imageWidgets } from './imageWidgets.js';
 import { diffFlashExtension, flashRanges as flashRangesHelper } from './diffFlash.js';
 import { EDITOR_ACTIONS, VIEW_MODES } from './constants.js';
+
+// Markdown list/quote Enter + Backspace. `nonTightLists: false` makes an empty
+// bullet/quote collapse immediately on Enter, instead of CM's default
+// tight→loose conversion (which inserts a blank line, pushing the marker down,
+// and only collapses on a *second* Enter).
+//
+// We must own this keymap explicitly: markdown() defaults to addKeymap:true,
+// which injects its own markdownKeymap at Prec.high — that high-prec copy beats
+// our manually-ordered keymap below, pre-empting taskEnterKeymap (so `- [ ]`
+// never collapses) and carrying the buggy default tight-list config. We pass
+// addKeymap:false to markdown() and bind these ourselves, AFTER taskEnterKeymap.
+const markdownEnterKeymap = [
+  { key: 'Enter', run: insertNewlineContinueMarkupCommand({ nonTightLists: false }) },
+  { key: 'Backspace', run: deleteMarkupBackward },
+];
 
 function computeStats(state) {
   const chars = state.doc.length;
@@ -331,7 +347,7 @@ const Editor = forwardRef<any, any>(function Editor(
           ? { dark: '#3a3a3a', activeDark: '#5a5a5a' }
           : { light: '#e0e0e0', activeLight: '#c0c0c0' },
       }),
-      markdown({ extensions: [{ remove: ['SetextHeading'] }] }),
+      markdown({ addKeymap: false, extensions: [{ remove: ['SetextHeading'] }] }),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       livePreviewCompartment.of(initialLive),
       imagePaste({
@@ -348,7 +364,8 @@ const Editor = forwardRef<any, any>(function Editor(
         indentWithTab,
         ...completionKeymap,
         ...taskEnterKeymap,
-        ...markdownKeymap,
+        ...listContinueKeymap,
+        ...markdownEnterKeymap,
         ...blankLineOutdentKeymap,
         ...defaultKeymap,
         ...historyKeymap,

@@ -47,6 +47,13 @@ class LinkWidget extends WidgetType {
 
 function buildDecorations(view, onClick, pageIndex) {
   const builder = new RangeSetBuilder();
+  const ranges = view.state.selection.ranges;
+  const touchesSelection = (from, to) => {
+    for (const r of ranges) {
+      if (r.from <= to && r.to >= from) return true;
+    }
+    return false;
+  };
   for (const { from, to } of view.visibleRanges) {
     let pos = from;
     while (pos <= to) {
@@ -59,6 +66,9 @@ function buildDecorations(view, onClick, pageIndex) {
         const resolved = pageIndex.has(normalizeTarget(targetName));
         const start = line.from + m.index;
         const end = start + m[0].length;
+        // Reveal raw [[name]] when the cursor/selection touches the link, so
+        // the user can edit it (same convention as markdownLinks.ts).
+        if (touchesSelection(start, end)) continue;
         builder.add(
           start,
           end,
@@ -83,7 +93,7 @@ export function wikiLinks(onClick, getPageIndex) {
       update(update) {
         const pageIndex = getPageIndex();
         // Identity changes when the tree changes (useMemo in useLinkIndex).
-        if (update.docChanged || update.viewportChanged || pageIndex !== this.pageIndex) {
+        if (update.docChanged || update.viewportChanged || update.selectionSet || pageIndex !== this.pageIndex) {
           this.pageIndex = pageIndex;
           this.decorations = buildDecorations(update.view, onClick, pageIndex);
         }

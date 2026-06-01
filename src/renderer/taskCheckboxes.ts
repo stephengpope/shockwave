@@ -80,9 +80,12 @@ function buildDecorations(view) {
 // Enter handler for task list items. Runs BEFORE markdownKeymap so we own the
 // `- [ ]` continuation logic (markdownKeymap continues `- ` bullets but doesn't
 // know about the `[ ]` part, so without this you'd get a bare `- ` on the next
-// line and the empty-task escape never works). Only acts when the cursor is at
-// the end of a task line; everything else falls through.
+// line and the empty-task escape never works). Acts when the cursor is in the
+// task's content (at or past the start of the text after `[ ]`); a cursor inside
+// the marker/prefix falls through to normal Enter handling.
 //   non-empty task + Enter at end  →  new `- [ ] ` line below (Obsidian/Notion)
+//   non-empty task + Enter mid-text →  split, carrying the after-cursor text
+//                                      onto a new `- [ ] ` line (keeps checkbox)
 //   empty task + Enter             →  clear the empty `- [ ]` (escape the list)
 export const taskEnterKeymap: KeyBinding[] = [{
   key: 'Enter',
@@ -91,10 +94,13 @@ export const taskEnterKeymap: KeyBinding[] = [{
     const sel = state.selection.main;
     if (!sel.empty) return false;
     const line = state.doc.lineAt(sel.head);
-    if (sel.head !== line.to) return false;
     const m = line.text.match(TASK_LINE_RE);
     if (!m) return false;
     const [, indent, bullet, , content] = m;
+    // Only handle Enter once the cursor is in the content region; inside the
+    // `- [ ] ` marker we let the default newline run.
+    const contentStart = line.from + (line.text.length - content.length);
+    if (sel.head < contentStart) return false;
     if (content.trim() === '') {
       view.dispatch({
         changes: { from: line.from, to: line.to, insert: '' },
@@ -103,6 +109,9 @@ export const taskEnterKeymap: KeyBinding[] = [{
       });
       return true;
     }
+    // Insert a fresh task marker at the cursor. At end of line this appends an
+    // empty `- [ ] `; mid-text it splits — the text after the cursor moves onto
+    // the new task line, so the checkbox is preserved on both halves.
     const insert = `\n${indent}${bullet}[ ] `;
     view.dispatch({
       changes: { from: sel.head, insert },
