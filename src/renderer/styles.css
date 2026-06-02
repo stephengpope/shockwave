@@ -1557,8 +1557,11 @@ html, body, #root {
 
 .workspace-remove { color: var(--fg-error) !important; }
 
+/* Unified accent action button (Workspaces / API Secrets / Global Skills):
+   left-aligned, directly under the section description, above the list. The
+   description's bottom margin sets the gap above; 16px below before the list. */
 .workspace-add {
-  margin-top: 8px;
+  margin: 0 0 16px;
   padding: 8px 14px;
   border: 1px solid var(--border-strong);
   background: var(--accent);

@@ -27,6 +27,8 @@ export default function WorkspacesSection({
         from this list.
       </p>
 
+      <button className="workspace-add" onClick={onAdd}>+ Add workspace</button>
+
       {workspaces.length === 0 ? (
         <div className="settings-empty">No workspaces yet.</div>
       ) : (
@@ -66,8 +68,6 @@ export default function WorkspacesSection({
           ))}
         </ul>
       )}
-
-      <button className="workspace-add" onClick={onAdd}>+ Add workspace</button>
 
       <ConfirmDialog
         open={!!target}

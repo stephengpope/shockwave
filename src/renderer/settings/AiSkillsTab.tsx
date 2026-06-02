@@ -152,20 +152,18 @@ export default function AiSkillsTab({ skills, onSkillsChange }) {
 
   return (
     <div>
-      <p className="settings-tab-intro">
+      <p className="settings-section-desc">
         Skills are reusable instructions the Agent loads on demand. Global state below sets the
         default; per-workspace overrides live in the Workspace Skills tab.
       </p>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-        <button
-          type="button"
-          className="workspace-add"
-          onClick={() => { setError(null); setAddOpen(true); }}
-        >
-          + Add Skills
-        </button>
-      </div>
+      <button
+        type="button"
+        className="workspace-add"
+        onClick={() => { setError(null); setAddOpen(true); }}
+      >
+        + Add Skills
+      </button>
 
       {error && <div className="skill-error">{error}</div>}
 
