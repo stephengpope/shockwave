@@ -6,7 +6,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev --watch --remoteDebuggingPort=9222",
-    "cli-tools": "npm --prefix cli-tools install --no-audit --no-fund",
+    "cli-tools": "npm --prefix cli-tools install --no-audit --no-fund && node scripts/clean-cli-tools.mjs",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "dist": "electron-vite build && electron-builder",
@@ -65,7 +65,7 @@
       "provider": "github",
       "owner": "stephengpope",
       "repo": "shockwave",
-      "releaseType": "release"
+      "releaseType": "draft"
     },
     "files": [
       "out/**",
