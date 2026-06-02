@@ -1,9 +1,9 @@
 name: Release
 
 # Fires when you push a version tag, e.g.  git tag v1.0.1 && git push --tags
-# Builds on all three OSes and publishes the installers to a DRAFT GitHub
-# Release (review the draft, then click Publish). Keep package.json "version"
-# in sync with the tag you push.
+# Builds on all three OSes and publishes the installers directly to a public
+# GitHub Release (package.json build.publish.releaseType = "release"). Keep
+# package.json "version" in sync with the tag you push.
 on:
   push:
     tags:
@@ -36,7 +36,7 @@ jobs:
       - run: npm run cli-tools
 
       # electron-vite build + electron-builder. --publish always uploads the
-      # platform's installer to the GitHub Release (created as a draft).
+      # platform's installer to the public GitHub Release for this tag.
       - run: npm run dist -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
