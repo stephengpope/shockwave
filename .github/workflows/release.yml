@@ -30,6 +30,11 @@ jobs:
 
       - run: npm ci
 
+      # Provision the bundled CLI tools (firecrawl, playwright-cli) as a separate
+      # top-level step — NOT a postinstall nested inside `npm ci`. A nested npm
+      # install dies with EPERM on the Windows runner; a standalone step doesn't.
+      - run: npm run cli-tools
+
       # electron-vite build + electron-builder. --publish always uploads the
       # platform's installer to the GitHub Release (created as a draft).
       - run: npm run dist -- --publish always
