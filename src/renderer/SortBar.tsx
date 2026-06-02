@@ -27,8 +27,7 @@ export default function SortBar({
   onCollapseAll,
   bookmarkFilterActive,
   onToggleBookmarkFilter,
-  bookmarks,
-  workspacePath,
+  bookmarkItems,
   onPickBookmark,
   hasConflicts,
   conflictCount,
@@ -61,23 +60,9 @@ export default function SortBar({
     };
   }, [openMenu]);
 
-  // Compose [{abs, rel, name}] sorted by name for the picker. Workspace-
-  // relative path renders below the basename so users can disambiguate two
-  // files of the same name in different folders.
-  const bookmarkRows = (() => {
-    const arr = bookmarks ? Array.from(bookmarks) : [];
-    return arr
-      .map((abs: any) => {
-        const rel = (workspacePath && abs.startsWith(workspacePath + '/'))
-          ? abs.slice(workspacePath.length + 1)
-          : abs;
-        const slash = rel.lastIndexOf('/');
-        const name = slash >= 0 ? rel.slice(slash + 1) : rel;
-        const dir = slash >= 0 ? rel.slice(0, slash) : '';
-        return { abs, rel, name, dir };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-  })();
+  // Picker rows come pre-resolved from App ({ name, dir, path }), already sorted
+  // by name. The folder renders below the basename for context.
+  const bookmarkRows = bookmarkItems ?? [];
 
   return (
     <div className="sort-bar" ref={rootRef}>
@@ -105,13 +90,13 @@ export default function SortBar({
           ) : (
             bookmarkRows.map((row) => (
               <li
-                key={row.abs}
+                key={row.path}
                 role="option"
                 className="bookmark-picker-item"
                 onMouseDown={(e) => {
                   e.preventDefault();
                   setOpenMenu(null);
-                  onPickBookmark?.(row.abs);
+                  onPickBookmark?.(row.path);
                 }}
               >
                 <span className="bookmark-picker-name">{row.name}</span>

@@ -715,19 +715,23 @@ ipcMain.handle('context:fileMenu', async (evt, opts = {}) => {
   const template: any[] = [];
   if (multi) {
     // Bulk-safe actions only: open all in new tabs (if md), bookmark toggle, delete.
-    // Rename/Duplicate/Reveal don't make sense across a selection.
+    // Rename/Duplicate/Reveal don't make sense across a selection. Bookmark is
+    // .md-only (bookmarks are keyed by basename via the link index).
     if (isMd) template.push({ label: `Open ${selectionCount} files in new tabs`, value: FILE_ACTIONS.NEW_TAB });
-    template.push(
+    if (isMd) template.push(
       { label: isBookmarked ? `Remove ${selectionCount} bookmarks` : `Bookmark ${selectionCount} files`, value: FILE_ACTIONS.TOGGLE_BOOKMARK },
       { type: 'separator' },
-      { label: `Delete ${selectionCount} files`, value: FILE_ACTIONS.DELETE },
     );
+    template.push({ label: `Delete ${selectionCount} files`, value: FILE_ACTIONS.DELETE });
   } else {
     if (isMd) template.push({ label: 'Open in new tab', value: FILE_ACTIONS.NEW_TAB });
-    template.push(
-      { label: 'Duplicate', value: FILE_ACTIONS.DUPLICATE },
+    template.push({ label: 'Duplicate', value: FILE_ACTIONS.DUPLICATE });
+    // Bookmark is .md-only.
+    if (isMd) template.push(
       { type: 'separator' },
       { label: isBookmarked ? 'Remove bookmark' : 'Bookmark', value: FILE_ACTIONS.TOGGLE_BOOKMARK },
+    );
+    template.push(
       { type: 'separator' },
       { label: revealLabel(), value: FILE_ACTIONS.REVEAL },
       { type: 'separator' },
@@ -747,17 +751,23 @@ ipcMain.handle('context:conflictCloudMenu', async (evt) => {
   ]);
 });
 
-ipcMain.handle('context:folderMenu', async (evt) => {
+ipcMain.handle('context:folderMenu', async (evt, opts = {}) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
-  return popupContextMenu(win, [
+  const { isRoot = false } = opts;
+  const template: any[] = [
     { label: 'New file', value: FOLDER_ACTIONS.NEW_FILE },
     { label: 'New folder', value: FOLDER_ACTIONS.NEW_FOLDER },
     { type: 'separator' },
     { label: revealLabel(), value: FOLDER_ACTIONS.REVEAL },
-    { type: 'separator' },
-    { label: 'Rename', value: FOLDER_ACTIONS.RENAME },
-    { label: 'Delete', value: FOLDER_ACTIONS.DELETE },
-  ]);
+  ];
+  if (!isRoot) {
+    template.push(
+      { type: 'separator' },
+      { label: 'Rename', value: FOLDER_ACTIONS.RENAME },
+      { label: 'Delete', value: FOLDER_ACTIONS.DELETE },
+    );
+  }
+  return popupContextMenu(win, template);
 });
 
 ipcMain.handle('fs:createFolder', async (_evt, { dirPath, name = 'New folder' }) => {
@@ -787,9 +797,11 @@ ipcMain.handle('fs:ensureDir', async (_evt, dirPath) => {
 
 // ─── Bookmarks ──────────────────────────────────────────────────────────────
 // Stored at `<workspace>/.shockwave/bookmarks.json` as:
-//   { "version": 1, "paths": ["folder/sub/file.md", ...] }
-// Paths are workspace-relative (POSIX-style) so renames + folder moves can be
-// applied in place and the file survives the workspace folder moving on disk.
+//   { "version": 1, "names": ["recipes", ...] }
+// `names` are `.md` basenames (no folder, no extension). Only `.md` files can
+// be bookmarked and their basenames are workspace-unique, so the name alone
+// identifies the file; its location is resolved on click via the link index.
+// Tracking by name means moves need no bookkeeping (the basename is unchanged).
 // The `.shockwave` segment starts with a dot, which matches the watcher's
 // `ignored` predicate — our own writes don't trigger fs:changed events.
 
@@ -802,20 +814,22 @@ ipcMain.handle('bookmarks:read', async (_evt, workspacePath) => {
   try {
     const raw = await fs.readFile(bookmarksPath(workspacePath), 'utf8');
     const parsed = JSON.parse(raw);
-    const paths = Array.isArray(parsed?.paths) ? parsed.paths : [];
-    // De-dupe + keep only strings.
-    return Array.from(new Set(paths.filter((p) => typeof p === 'string' && p.length > 0)));
+    const names = Array.isArray(parsed?.names) ? parsed.names : [];
+    // De-dupe + keep only non-empty strings.
+    return Array.from(new Set(names.filter((n) => typeof n === 'string' && n.length > 0)));
   } catch {
     // Missing or corrupt — treat as empty. A subsequent write will replace it.
     return [];
   }
 });
 
-ipcMain.handle('bookmarks:write', async (_evt, { workspacePath, paths }) => {
+// The renderer passes the name list under the legacy `paths` preload param —
+// they are `.md` basenames now.
+ipcMain.handle('bookmarks:write', async (_evt, { workspacePath, paths: names }) => {
   if (!workspacePath) return;
   const file = bookmarksPath(workspacePath);
   const tmp = `${file}.tmp`;
-  const body = JSON.stringify({ version: 1, paths: Array.isArray(paths) ? paths : [] }, null, 2);
+  const body = JSON.stringify({ version: 1, names: Array.isArray(names) ? names : [] }, null, 2);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(tmp, body, 'utf8');
   await fs.rename(tmp, file);
@@ -967,6 +981,69 @@ ipcMain.handle('voice:getToken', async () => {
     return { error: 'Voice token request failed' };
   }
 });
+
+// ---- App update check ------------------------------------------------------
+//
+// v1: poll GitHub's "latest release" and compare its tag against the running
+// app.getVersion(). Notify-only — we surface an "Update available" pill that
+// links to the release page; there is no auto-download/install. The repo
+// coordinates mirror package.json's `build.publish` block. Unauthenticated
+// GitHub API allows ~60 req/hr — a daily poll plus the odd manual check is
+// nowhere near that.
+const UPDATE_REPO = { owner: 'stephengpope', repo: 'shockwave' };
+const UPDATE_POLL_MS = 24 * 60 * 60 * 1000; // daily auto-check
+
+// "v1.2.3" / "1.2.3-beta" → [1,2,3]; the leading "v" and any pre-release/build
+// suffix are dropped (we only compare the numeric core).
+function parseVersion(v: string): number[] {
+  const core = String(v || '').trim().replace(/^v/i, '').split(/[-+]/)[0];
+  return core.split('.').map((n) => parseInt(n, 10) || 0);
+}
+// >0 when `a` is newer than `b`, <0 when older, 0 when equal.
+function compareVersions(a: string, b: string): number {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+// Last computed status, served to renderers that subscribe after a background
+// check already ran (so the pill hydrates without waiting for the next poll).
+let lastUpdateResult: any = null;
+
+async function runUpdateCheck() {
+  const current = app.getVersion();
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest`,
+      { headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(5000) },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const latest = String(data.tag_name || '').replace(/^v/i, '');
+    const url = data.html_url
+      || `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest`;
+    lastUpdateResult = {
+      updateAvailable: latest ? compareVersions(latest, current) > 0 : false,
+      latest, current, url, error: null,
+    };
+  } catch (err: any) {
+    console.warn('[update] check failed:', err.message);
+    lastUpdateResult = { updateAvailable: false, latest: null, current, url: null, error: err.message || 'check failed' };
+  }
+  for (const w of BrowserWindow.getAllWindows()) {
+    w.webContents.send('app:updateStatus', lastUpdateResult);
+  }
+  return lastUpdateResult;
+}
+
+// Manual check (Settings → Updates button) — always hits the network.
+ipcMain.handle('app:checkForUpdates', async () => runUpdateCheck());
+// Cached status for a freshly-mounted renderer (null until the first check).
+ipcMain.handle('app:getUpdateStatus', async () => lastUpdateResult);
 
 // ---- GitHub sync ----
 //
@@ -1650,6 +1727,10 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+  // Update check: once shortly after launch (let the window mount + subscribe
+  // first), then daily. Notify-only; failures are swallowed (offline is fine).
+  setTimeout(() => { runUpdateCheck().catch(() => {}); }, 8000);
+  setInterval(() => { runUpdateCheck().catch(() => {}); }, UPDATE_POLL_MS);
 });
 
 app.on('window-all-closed', () => {

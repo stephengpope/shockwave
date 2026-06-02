@@ -3,7 +3,7 @@ import FileTree from './FileTree.jsx';
 import Editor from './Editor.jsx';
 import BacklinksPanel from './BacklinksPanel.jsx';
 import GraphView from './GraphView.jsx';
-import MediaView, { mediaKind } from './MediaView';
+import MediaView, { mediaKind, isOpenable } from './MediaView';
 import { rewriteReferences } from './renameOps.js';
 import TabStrip from './TabStrip.jsx';
 import EditorTitle from './EditorTitle.jsx';
@@ -27,11 +27,12 @@ import { useLinkIndex } from './hooks/useLinkIndex.js';
 import { useTabs } from './hooks/useTabs.js';
 import { useFileOps } from './hooks/useFileOps.js';
 import { useSyncRef } from './hooks/useSyncRef';
-import { useBookmarks, flattenBookmarkedFiles } from './hooks/useBookmarks';
+import { useBookmarks, flattenBookmarkedFiles, bookmarkKey } from './hooks/useBookmarks';
 import { useDailyNote } from './hooks/useDailyNote';
 import { useSendToAgent } from './hooks/useSendToAgent';
 import { useFsWatcher } from './hooks/useFsWatcher';
 import { useSettings } from './hooks/useSettings';
+import { useAppUpdate } from './hooks/useAppUpdate';
 
 const SAVE_DEBOUNCE_MS = 500;
 
@@ -218,6 +219,9 @@ export default function App() {
     onSyncChange, onSyncDisabledChange,
   } = useSettings({ activeWorkspacePath: workspacePath });
 
+  // App-update status: feeds the editor-pane "Update available" pill + Settings → Updates.
+  const appUpdate = useAppUpdate();
+
   // Live ref to the active file's absolute path. Used by the editor's image
   // paste/drop handler (target dir for the saved image) and the inline image
   // renderer (base for resolving relative URLs). Null for drafts.
@@ -309,17 +313,25 @@ export default function App() {
 
   const {
     bookmarks,
-    bookmarksRef,
     bookmarkFilterActive,
     setBookmarkFilterActive,
     resetBookmarks,
     seedBookmarks,
     toggleBookmark,
     setBookmarksForPaths,
-    renameBookmarkPath,
-    removeBookmarkPath,
+    isBookmarked,
+    renameBookmarkName,
+    removeBookmarkName,
     persistBookmarks,
   } = useBookmarks({ workspacePath, showError });
+
+  // Resolvable bookmark keys = basenames of every .md file currently in the
+  // workspace. Used to prune dead bookmarks on seed and to resolve a name → path
+  // on click (via the link index's pageIndex).
+  const bookmarkResolvableKeys = useCallback(
+    () => new Set(flattenAll(treeRef.current).filter((n) => !n.children && /\.md$/i.test(n.id)).map((n) => bookmarkKey(n.id))),
+    [treeRef],
+  );
 
   const sortedTree = useMemo(() => {
     // Conflict view is its own pre-sorted tree from the git conflict list.
@@ -351,6 +363,20 @@ export default function App() {
   const promoteTabPathRef = useRef(() => {});
 
   const linkIndex = useLinkIndex(tree);
+
+  // Bookmarks resolved to current locations for the picker: name → path via the
+  // link index. Unresolved names (file gone) are hidden. Sorted by display name.
+  const bookmarkItems = useMemo(() => {
+    const items: Array<{ name: string; dir: string; path: string }> = [];
+    for (const key of bookmarks) {
+      const path = linkIndex.pageIndex.get(key);
+      if (!path) continue;
+      const rel = (workspacePath && path.startsWith(workspacePath + '/')) ? path.slice(workspacePath.length + 1) : path;
+      const slash = rel.lastIndexOf('/');
+      items.push({ name: slash >= 0 ? rel.slice(slash + 1) : rel, dir: slash >= 0 ? rel.slice(0, slash) : '', path });
+    }
+    return items.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }, [bookmarks, linkIndex.pageIndex, workspacePath]);
 
   // Returns the absolute path that was saved (the new path for a draft, or the
   // existing path for a real file), or null if nothing was dirty / save failed.
@@ -529,10 +555,12 @@ export default function App() {
       return;
     }
     setSelectedFolderPath(null);
-    // Any file opens: .md/text in the editor, images/video in MediaView.
+    // Only .md (editor) + image/video (MediaView) open. Other types are inert.
+    // Conflict view is exempt so any conflicted file can be opened to resolve it.
+    if (!conflictFilterActive && !isOpenable(node.id)) return;
     if (graphMode) setGraphMode(false);
     await openInActiveTab(node.id);
-  }, [openInActiveTab, graphMode]);
+  }, [openInActiveTab, graphMode, conflictFilterActive]);
 
   // ---- workspace operations ----
 
@@ -550,15 +578,15 @@ export default function App() {
     setGraphMode(false);
     setSaveState(SAVE_STATES.SAVED);
     resetBookmarks();
-    const [treeData, files, bookmarkRelPaths] = await Promise.all([
+    const [treeData, files, bookmarkNames] = await Promise.all([
       window.api.readTree(workspace.path),
       window.api.readAllMarkdown(workspace.path),
       window.api.bookmarks.read(workspace.path),
     ]);
     setTree(treeData);
     linkIndex.rebuild(files);
-    // Seed the bookmark set from disk, pruning entries whose files are gone.
-    seedBookmarks(workspace.path, bookmarkRelPaths, new Set(files.map((f) => f.path)));
+    // Seed the bookmark set from disk, pruning names whose .md file is gone.
+    seedBookmarks(bookmarkNames, new Set(files.map((f) => bookmarkKey(f.path))));
     await window.api.watchStart(workspace.path);
     // Kick the sync engine. It self-checks whether the workspace has an
     // origin and what the PAT is, so we don't gate on those here. Status
@@ -658,14 +686,18 @@ export default function App() {
     if (action === FILE_ACTIONS.RESET) { void conflictFileAction(paths[0], 'reset'); return; }
 
     if (action === FILE_ACTIONS.TOGGLE_BOOKMARK) {
-      if (paths.length === 1) {
-        toggleBookmark(paths[0]);
+      // Only .md files can be bookmarked (keyed by basename via the link index).
+      // The menu only offers it for .md, but guard here too.
+      const mdPaths = paths.filter((p) => /\.md$/i.test(p));
+      if (mdPaths.length === 0) return;
+      if (mdPaths.length === 1) {
+        toggleBookmark(mdPaths[0]);
       } else {
         // Mirror the menu label: if all selected files are bookmarked, the user
         // saw "Remove N bookmarks" — clear them. Otherwise they saw
         // "Bookmark N files" — set them all bookmarked.
-        const allBookmarked = paths.every((p) => bookmarksRef.current.has(p));
-        setBookmarksForPaths(paths, !allBookmarked);
+        const allBookmarked = mdPaths.every((p) => isBookmarked(p));
+        setBookmarksForPaths(mdPaths, !allBookmarked);
       }
       return;
     }
@@ -683,7 +715,7 @@ export default function App() {
 
     // Single-target actions: act on the first path.
     fileOps.onFileAction(action, paths[0]);
-  }, [fileOps, toggleBookmark, setBookmarksForPaths, conflictFileAction]);
+  }, [fileOps, toggleBookmark, setBookmarksForPaths, isBookmarked, conflictFileAction]);
 
   const confirmResetToRemote = useCallback(async () => {
     setResetToRemotePending(false);
@@ -755,8 +787,11 @@ export default function App() {
       return;
     }
     if (!activeFile) return;
-    await fileOps.performRename(activeFile, newName);
-  }, [activeTab, activeFile, writeNow, fileOps, titleDraftRef]);
+    const newPath = await fileOps.performRename(activeFile, newName);
+    // Rename changes the basename → re-key the bookmark (move keeps it, rename
+    // must follow). renameBookmarkName no-ops if it wasn't bookmarked.
+    if (newPath && renameBookmarkName(bookmarkKey(activeFile), bookmarkKey(newPath))) persistBookmarks();
+  }, [activeTab, activeFile, writeNow, fileOps, titleDraftRef, renameBookmarkName, persistBookmarks]);
 
   // ---- graph toggle ----
   const onToggleGraph = useCallback(async () => {
@@ -824,6 +859,14 @@ export default function App() {
     const dir = selectedFolderPath || workspacePath;
     await createFolderAt(dir);
   }, [workspacePath, selectedFolderPath, createFolderAt]);
+
+  // ---- empty-area right-click on the file tree → root-scoped folder menu ----
+  const onRootContextMenu = useCallback(async () => {
+    if (!workspacePath || conflictFilterActive) return;
+    const action = await window.api.showFolderContextMenu({ isRoot: true });
+    if (!action) return;
+    onFolderAction(action, workspacePath);
+  }, [workspacePath, conflictFilterActive, onFolderAction]);
 
   // ---- journal (calendar in thin sidebar) ----
   const { journalPickerAnchor, setJournalPickerAnchor, openJournal } = useDailyNote({
@@ -972,12 +1015,18 @@ export default function App() {
       } else if (!oldIsMd && newIsMd) {
         try { const c = await window.api.readFile(finalPath); idx.updateFile(finalPath, c); } catch { /* best effort */ }
       }
+      // Bookmarks are .md-keyed by basename: md→md re-keys the bookmark, md→non-md
+      // drops it (no longer bookmarkable). Moves never reach here.
+      let bmChanged = false;
+      if (oldIsMd && newIsMd) bmChanged = renameBookmarkName(bookmarkKey(oldName), bookmarkKey(finalName));
+      else if (oldIsMd && !newIsMd) bmChanged = removeBookmarkName(bookmarkKey(oldName));
+      if (bmChanged) persistBookmarks();
       renameTabsPath(id, finalPath);
       await fileOps.treeAndIndexChanged();
     } catch (err: any) {
       showError(err.message ?? String(err));
     }
-  }, [tree, fileOps, linkIndex, renameTabsPath, selectedFolderPath, showError, writeNow]);
+  }, [tree, fileOps, linkIndex, renameTabsPath, selectedFolderPath, showError, writeNow, renameBookmarkName, removeBookmarkName, persistBookmarks]);
 
   // ---- URL prompt (used by editor "Add" / "Edit" external link) ----
   // Always resolves to { url, text } | null. `text` is undefined in Add mode.
@@ -1046,8 +1095,8 @@ export default function App() {
     activeFile,
     activeIsDraft,
     editorRef,
-    renameBookmarkPath,
-    removeBookmarkPath,
+    renameBookmarkName,
+    removeBookmarkName,
     persistBookmarks,
   });
 
@@ -1058,12 +1107,11 @@ export default function App() {
   useEffect(() => {
     if (!workspacePath) return;
     const unsub = window.api.bookmarks.onChanged(async () => {
-      const rels = await window.api.bookmarks.read(workspacePath);
-      const existing = new Set(flattenAll(treeRef.current).map((n) => n.id));
-      seedBookmarks(workspacePath, rels, existing);
+      const names = await window.api.bookmarks.read(workspacePath);
+      seedBookmarks(names, bookmarkResolvableKeys());
     });
     return unsub;
-  }, [workspacePath, seedBookmarks, treeRef]);
+  }, [workspacePath, seedBookmarks, bookmarkResolvableKeys]);
 
   // ---- boot: load settings + subscribe to system theme ----
   useEffect(() => {
@@ -1327,11 +1375,10 @@ export default function App() {
           onCollapseAll={() => fileTreeRef.current?.closeAll?.()}
           bookmarkFilterActive={bookmarkFilterActive}
           onToggleBookmarkFilter={() => { setConflictFilterActive(false); setBookmarkFilterActive((v) => !v); }}
-          bookmarks={bookmarks}
-          workspacePath={workspacePath}
-          onPickBookmark={async (absPath) => {
+          bookmarkItems={bookmarkItems}
+          onPickBookmark={async (path) => {
             if (graphMode) setGraphMode(false);
-            await openInActiveTab(absPath);
+            await openInActiveTab(path);
           }}
           hasConflicts={hasConflicts}
           conflictCount={conflictPaths.length}
@@ -1353,10 +1400,18 @@ export default function App() {
               disableDrop={disableDrop || conflictFilterActive}
               conflictMode={conflictFilterActive}
               checkRenameConflict={(name, id) => findTreeRenameConflict({ tree, currentPath: id, newName: name })}
-              bookmarkedPaths={bookmarks}
+              getIsBookmarked={isBookmarked}
+              onRootContextMenu={onRootContextMenu}
             />
           ) : (
-            <div className="empty">
+            <div
+              className="empty"
+              onContextMenu={(e) => {
+                if (!workspacePath || conflictFilterActive) return;
+                e.preventDefault();
+                onRootContextMenu();
+              }}
+            >
               {!workspacePath
                 ? 'No workspace open'
                 : conflictFilterActive
@@ -1381,6 +1436,20 @@ export default function App() {
       </aside>
 
       <main className="editor-pane">
+        {(() => {
+          const u = appUpdate.status;
+          if (!u?.updateAvailable || !u.url) return null;
+          return (
+            <button
+              type="button"
+              className="update-pill"
+              onClick={() => window.api.openExternal(u.url!)}
+              title={`Version ${u.latest} is available — you're on ${u.current}. Click to view the release.`}
+            >
+              Update available
+            </button>
+          );
+        })()}
         {workspacePath && (
           <TabStrip
             tabs={tabs}
@@ -1638,6 +1707,7 @@ export default function App() {
           sync={sync}
           onSyncChange={onSyncChange}
           onSyncDisabledChange={onSyncDisabledChange}
+          appUpdate={appUpdate}
           saveStatus={saveStatus}
         />
       )}

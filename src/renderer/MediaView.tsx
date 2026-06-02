@@ -13,6 +13,15 @@ export function mediaKind(path: string | null): 'image' | 'video' | null {
   return null;
 }
 
+// The only file types the app will open: markdown (text editor) + image/video
+// (MediaView). Everything else (pdf, txt, binaries, …) is inert in the tree and
+// filtered out of quick search. Conflict view bypasses this so any conflicted
+// file can still be opened to resolve it.
+export function isOpenable(path: string | null): boolean {
+  if (!path) return false;
+  return /\.md$/i.test(path) || mediaKind(path) !== null;
+}
+
 // View-only preview for image/video files. Resolves the workspace-relative
 // path through the existing `app://media/<rel>` protocol (served by main from
 // the workspace root), so no new plumbing — the same channel image embeds use.

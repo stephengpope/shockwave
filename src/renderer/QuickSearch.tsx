@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import fuzzysort from 'fuzzysort';
 import { TREE_SORT_ORDERS } from './constants.js';
+import { isOpenable } from './MediaView';
 
 const DEFAULT_LIMIT = 10;
 
 // Flatten the (already-sorted) tree to a flat list of files. Folders are
-// dropped — we only want files in the quick-search results.
+// dropped, and so are file types the app won't open (only .md + image/video) —
+// no point surfacing a result that does nothing when picked.
 function flattenFiles(nodes, out: any[] = []) {
   for (const n of nodes) {
     if (n.children) flattenFiles(n.children, out);
-    else out.push(n);
+    else if (isOpenable(n.id)) out.push(n);
   }
   return out;
 }

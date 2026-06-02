@@ -4,7 +4,7 @@ import { FILE_ACTIONS } from './constants.js';
 import { SIDEBAR_IMAGE_MIME } from './imagePaste.js';
 
 const FileTree = forwardRef<any, any>(function FileTree(
-  { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, bookmarkedPaths, conflictMode, checkRenameConflict },
+  { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, conflictMode, checkRenameConflict, onRootContextMenu },
   ref,
 ) {
   const wrapRef = useRef<any>(null);
@@ -42,7 +42,17 @@ const FileTree = forwardRef<any, any>(function FileTree(
   }), []);
 
   return (
-    <div ref={wrapRef} className="tree-fill">
+    <div
+      ref={wrapRef}
+      className="tree-fill"
+      onContextMenu={(e) => {
+        // Row Nodes stopPropagation on their own onContextMenu, so this only
+        // fires on empty space below/around the tree rows.
+        if (!onRootContextMenu) return;
+        e.preventDefault();
+        onRootContextMenu();
+      }}
+    >
       {size.width > 0 && (
         <Tree
           ref={treeRef}
@@ -70,7 +80,7 @@ const FileTree = forwardRef<any, any>(function FileTree(
               onFileAction={onFileAction}
               onFolderAction={onFolderAction}
               getIsBookmarked={getIsBookmarked}
-              isBookmarked={bookmarkedPaths?.has(props.node.id)}
+              isBookmarked={getIsBookmarked ? getIsBookmarked(props.node.id) : false}
               conflictMode={conflictMode}
               checkRenameConflict={checkRenameConflict}
             />

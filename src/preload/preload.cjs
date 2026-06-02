@@ -172,8 +172,9 @@ contextBridge.exposeInMainWorld('api', {
   /** Right-click menu for the sync-conflict cloud icon (whole-tree).
    *  @returns {Promise<'keep'|'reset'|null>} */
   showConflictCloudMenu: () => ipcRenderer.invoke('context:conflictCloudMenu'),
-  /** @returns {Promise<string|null>} The chosen FOLDER_ACTIONS value, or null. */
-  showFolderContextMenu: () => ipcRenderer.invoke('context:folderMenu'),
+  /** @param {{ isRoot?: boolean }} [opts]
+   *  @returns {Promise<string|null>} The chosen FOLDER_ACTIONS value, or null. */
+  showFolderContextMenu: (opts) => ipcRenderer.invoke('context:folderMenu', opts),
   /**
    * Pop up the right-click menu inside the editor.
    * @param {{ hasSelection?: boolean, hasFilePath?: boolean, hasLink?: boolean }} opts
@@ -300,6 +301,26 @@ contextBridge.exposeInMainWorld('api', {
     /** Mint a fresh 60-second AssemblyAI streaming token using the configured key.
      *  @returns {Promise<{ token?: string, error?: string }>} */
     getToken: () => ipcRenderer.invoke('voice:getToken'),
+  },
+
+  // ---- App / updates ------------------------------------------------------
+  //
+  // v1 update check is notify-only: main polls GitHub releases and pushes an
+  // `app:updateStatus`; the renderer surfaces a pill that links to the release.
+
+  app: {
+    /** Force an update check now (Settings → Updates). Resolves with the freshest status.
+     *  @returns {Promise<{ updateAvailable: boolean, latest: string|null, current: string, url: string|null, error: string|null }>} */
+    checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates'),
+    /** Last computed update status, or null until the first check completes. */
+    getUpdateStatus: () => ipcRenderer.invoke('app:getUpdateStatus'),
+    /** Subscribe to background update-status pushes (launch check + daily poll).
+     *  @param {(status: any) => void} cb @returns {Unsubscribe} */
+    onUpdateStatus: (cb) => {
+      const listener = (_evt, payload) => cb(payload);
+      ipcRenderer.on('app:updateStatus', listener);
+      return () => ipcRenderer.removeListener('app:updateStatus', listener);
+    },
   },
 
   // ---- GitHub sync --------------------------------------------------------

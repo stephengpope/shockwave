@@ -77,6 +77,19 @@ export interface InstalledSkill {
 /** Detaches a listener. Always call on unmount. */
 export type Unsubscribe = () => void;
 
+export interface UpdateStatus {
+  /** True when the latest GitHub release is newer than the running version. */
+  updateAvailable: boolean;
+  /** Latest release version (tag with leading "v" stripped), or null on error. */
+  latest: string | null;
+  /** Running app version (app.getVersion()). */
+  current: string;
+  /** Release page to open, or null on error. */
+  url: string | null;
+  /** Error message when the check failed (offline, rate-limited, …), else null. */
+  error: string | null;
+}
+
 export interface SyncStatus {
   status: 'unconfigured' | 'idle' | 'syncing' | 'paused' | 'offline' | 'disabled' | string;
   detail: string;
@@ -121,7 +134,7 @@ export interface ShockwaveApi {
   // Native context menus
   showFileContextMenu(opts: { isMd?: boolean; isBookmarked?: boolean; selectionCount?: number; conflictMode?: boolean }): Promise<FileAction | null>;
   showConflictCloudMenu(): Promise<'keep' | 'reset' | null>;
-  showFolderContextMenu(): Promise<FolderAction | null>;
+  showFolderContextMenu(opts?: { isRoot?: boolean }): Promise<FolderAction | null>;
   showEditorContextMenu(opts: { hasSelection?: boolean; hasFilePath?: boolean; hasLink?: boolean }): Promise<EditorAction | null>;
 
   // File watcher (push)
@@ -169,6 +182,12 @@ export interface ShockwaveApi {
 
   voice: {
     getToken(): Promise<{ token?: string; error?: string }>;
+  };
+
+  app: {
+    checkForUpdates(): Promise<UpdateStatus>;
+    getUpdateStatus(): Promise<UpdateStatus | null>;
+    onUpdateStatus(cb: (status: UpdateStatus) => void): Unsubscribe;
   };
 
   sync: {

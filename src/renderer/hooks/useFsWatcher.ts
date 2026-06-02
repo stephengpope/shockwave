@@ -4,6 +4,7 @@ import { diffWordsWithSpace } from 'diff';
 import { useSyncRef } from './useSyncRef';
 import { rangesAddedFromDiff } from '../diffFlash.js';
 import { rewriteReferences } from '../renameOps.js';
+import { bookmarkKey } from './useBookmarks';
 import type { FsChangedEvent } from '../../shared/api';
 
 // Minimal shapes of the untyped JS collaborators this hook drives.
@@ -31,8 +32,8 @@ interface UseFsWatcherOpts {
   activeFile: string | null;
   activeIsDraft: boolean;
   editorRef: MutableRefObject<EditorHandle | null>;
-  renameBookmarkPath: (oldPath: string, newPath: string) => boolean;
-  removeBookmarkPath: (path: string) => boolean;
+  renameBookmarkName: (oldKey: string, newKey: string) => boolean;
+  removeBookmarkName: (key: string) => boolean;
   persistBookmarks: () => void;
 }
 
@@ -51,8 +52,8 @@ export function useFsWatcher({
   activeFile,
   activeIsDraft,
   editorRef,
-  renameBookmarkPath,
-  removeBookmarkPath,
+  renameBookmarkName,
+  removeBookmarkName,
   persistBookmarks,
 }: UseFsWatcherOpts) {
   const linkIndexRefForWatcher = useSyncRef(linkIndex);
@@ -63,8 +64,10 @@ export function useFsWatcher({
   const activeFileRef = useSyncRef(activeFile);
   const activeIsDraftRef = useSyncRef(activeIsDraft);
   // Bookmark sync on external/echoed rename + delete, via refs to stay stable.
-  const renameBookmarkPathRef = useSyncRef(renameBookmarkPath);
-  const removeBookmarkPathRef = useSyncRef(removeBookmarkPath);
+  // Bookmarks are keyed by .md basename: a move keeps the name (no-op), only a
+  // true rename re-keys; an unlink drops the name.
+  const renameBookmarkNameRef = useSyncRef(renameBookmarkName);
+  const removeBookmarkNameRef = useSyncRef(removeBookmarkName);
   const persistBookmarksRef = useSyncRef(persistBookmarks);
 
   useEffect(() => {
@@ -85,7 +88,7 @@ export function useFsWatcher({
       }
       if (evt.type === 'unlink') {
         li.removeFile(evt.path);
-        if (removeBookmarkPathRef.current(evt.path)) persistBookmarksRef.current();
+        if (/\.md$/i.test(evt.path) && removeBookmarkNameRef.current(bookmarkKey(evt.path))) persistBookmarksRef.current();
         scheduleRefresh();
         return;
       }
@@ -99,8 +102,9 @@ export function useFsWatcher({
         }
         // 3) Update any open tabs pointing at the old path.
         renameTabsPathRef.current(evt.oldPath, evt.newPath);
-        // 3b) Keep the bookmark set in sync if the renamed file was bookmarked.
-        if (renameBookmarkPathRef.current(evt.oldPath, evt.newPath)) persistBookmarksRef.current();
+        // 3b) Re-key the bookmark by basename. A pure move keeps the basename →
+        //     renameBookmarkName no-ops; only a true rename changes it.
+        if (renameBookmarkNameRef.current(bookmarkKey(evt.oldPath), bookmarkKey(evt.newPath))) persistBookmarksRef.current();
         // 4) Rewrite `[[OldName]]` references in other files. Idempotent — if
         //    the rename was in-app, these were already rewritten and the regex
         //    matches nothing on the watcher echo.

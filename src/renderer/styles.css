@@ -580,7 +580,36 @@ html, body, #root {
   min-height: 0;
   overflow: hidden;
   background: var(--bg-app);
+  /* Positioning context for the always-visible .update-pill (top-right). */
+  position: relative;
 }
+
+/* "Update available" pill — ambient app-update indicator anchored to the
+   editor pane's top-right. Always visible (the pane is always mounted), but
+   only rendered when a newer release exists. White-on-green; opens the
+   release page on click. */
+.update-pill {
+  position: absolute;
+  /* Sits below the tab strip (min-height 32px + 1px border), inside the editor
+     content area — not over the tabs. */
+  top: 42px;
+  right: 12px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #ffffff;
+  background: #2f9e44;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+.update-pill:hover { background: #2b8a3e; }
 
 .editor-scroll {
   flex: 1 1 auto;
@@ -1685,6 +1714,19 @@ html, body, #root {
 }
 .settings-button:hover:not(:disabled) { background: var(--bg-hover); }
 .settings-button:disabled { color: var(--fg-muted); cursor: not-allowed; }
+
+/* Accent (blue) variant of the standard settings-body button — same size/font,
+   filled background. */
+.settings-button-primary {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+.settings-button-primary:hover:not(:disabled) { filter: brightness(1.05); background: var(--accent); }
+.settings-button-primary:disabled { color: rgba(255, 255, 255, 0.7); }
+
+/* Settings → Updates: space the check button below the version line. */
+.settings-update-check { margin-top: 16px; }
 
 .settings-textarea {
   width: 100%;

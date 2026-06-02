@@ -19,6 +19,8 @@ export function useFileOps({
     linkIndex.bump();
   }, [refreshTree, linkIndex]);
 
+  // Returns the final path on success (so callers can re-key bookmarks etc.),
+  // or null on failure.
   const performRename = useCallback(async (oldPath, newName) => {
     try {
       await writeNow();
@@ -30,8 +32,10 @@ export function useFileOps({
       });
       renameTabsPath(oldPath, newPath);
       await treeAndIndexChanged();
+      return newPath;
     } catch (err: any) {
       showError(err.message ?? String(err));
+      return null;
     }
   }, [writeNow, linkIndex, renameTabsPath, treeAndIndexChanged, showError]);
 

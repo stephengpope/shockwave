@@ -17,6 +17,7 @@ export const SETTINGS_SECTIONS = Object.freeze({
   DAILY_NOTE: 'daily-note',
   SYNC: 'sync',
   TRANSCRIPTION: 'transcription',
+  UPDATES: 'updates',
   AGENT_LLM: 'agent-llm',
   AGENT_BUILTIN_SKILLS: 'agent-builtin-skills',
   AGENT_SKILLS: 'agent-skills',
