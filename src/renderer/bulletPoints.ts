@@ -4,7 +4,13 @@ import { RangeSetBuilder } from '@codemirror/state';
 // Match a list-item marker at line start. Skip task items — taskCheckboxes.js
 // swallows the whole `bullet [ ]` range, so decorating the bullet here would
 // collide with that decoration.
-const LIST_RE = /^(\s*)([-*+])(\s+)(?!\[[ xX]\])/;
+//
+// The `(\s+|$)` (vs a bare `\s+`) also matches an EMPTY list item — a marker
+// alone at end of line (`-` with no trailing content). CommonMark treats that
+// as a valid empty list item, and trailing whitespace on a blank bullet is
+// fragile (easily stripped), so `- ` and `-` must render the bullet identically
+// — otherwise the same blank bullet flips between `•` and a raw `-`.
+const LIST_RE = /^(\s*)([-*+])(\s+|$)(?!\[[ xX]\])/;
 
 class BulletWidget extends WidgetType {
   eq() { return true; }
