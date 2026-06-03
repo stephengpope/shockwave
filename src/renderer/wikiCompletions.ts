@@ -16,27 +16,20 @@ function applyCompletion(display) {
   };
 }
 
-export function wikiLinkCompletions(getPageIndex, getVaultPath) {
+export function wikiLinkCompletions(getPageIndex) {
   return (context) => {
     const before = context.state.sliceDoc(Math.max(0, context.pos - 200), context.pos);
     const m = before.match(TRIGGER_RE);
     if (!m) return null;
-    const partial = m[1].toLowerCase();
     const start = context.pos - m[1].length;
     const index = getPageIndex();
-    const vaultPath = getVaultPath();
+    // Hand CM every basename (links are basename-only, workspace-unique) and let
+    // its built-in autocomplete matcher do the fuzzy filtering, ranking, and
+    // match highlighting. No pre-filter, no custom render — CM owns all of it.
     const options: any[] = [];
-    for (const [key, path] of index) {
-      if (!key.includes(partial)) continue;
+    for (const [, path] of index) {
       const display = prettyName(path).split('/').pop();
-      const full = prettyName(path, vaultPath);
-      options.push({
-        label: display,
-        apply: applyCompletion(display),
-        detail: full !== display ? full : undefined,
-        boost: key.startsWith(partial) ? 1 : 0,
-      });
-      if (options.length >= 50) break;
+      options.push({ label: display, apply: applyCompletion(display) });
     }
     if (options.length === 0 && !context.explicit) return null;
     return { from: start, options };

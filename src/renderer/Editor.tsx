@@ -313,7 +313,6 @@ const Editor = forwardRef<any, any>(function Editor(
     if (!hostRef.current) return;
     const completionSource = wikiLinkCompletions(
       () => getPageIndexRef?.current ?? new Map(),
-      () => getVaultPathRef?.current ?? null,
     );
 
     const readOnlyCompartment = new Compartment();

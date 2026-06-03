@@ -91,7 +91,7 @@ export default function QuickSearch({ open, tree, sortOrder, workspacePath, onPi
     if (!query) {
       return indexedFiles.slice(0, DEFAULT_LIMIT).map((f) => ({ file: f, relPath: f.relPath, indexes: null }));
     }
-    const ranked = fuzzysort.go(query, indexedFiles, { key: 'relPath', limit: 200 });
+    const ranked = fuzzysort.go(query, indexedFiles, { key: 'relPath', limit: 50 });
     return ranked.map((r) => ({ file: (r.obj as any), relPath: (r.obj as any).relPath, indexes: r.indexes }));
   }, [indexedFiles, q]);
 

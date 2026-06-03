@@ -834,6 +834,30 @@ html, body, #root {
   text-decoration-style: dashed;
 }
 
+/* The [[ ]] autocomplete dropdown — match QuickSearch's surface (CM's default
+   tooltip / oneDark theme is far darker than the app background). */
+.cm-tooltip.cm-tooltip-autocomplete {
+  background: var(--bg-app);
+  color: var(--fg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-popover);
+}
+.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--accent-soft);
+  color: var(--fg-primary);
+}
+
+/* Matched chars in the [[ ]] autocomplete dropdown — match QuickSearch's
+   highlight (accent color + bold + underline). Scoped under the tooltip
+   container so the two-class selector outweighs CM's single-class base rule
+   (injected into <head> after this sheet, so a same-specificity rule loses). */
+.cm-tooltip-autocomplete .cm-completionMatchedText {
+  font-weight: 700;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 /* ---------- Backlinks ---------- */
 
 .backlinks-section {
@@ -1082,6 +1106,7 @@ html, body, #root {
 .quick-search-match {
   font-weight: 700;
   color: var(--accent);
+  text-decoration: underline;
 }
 
 .quick-search-empty {
