@@ -269,6 +269,49 @@ html, body, #root {
   padding: 24px;
 }
 
+/* Excalidraw drawings render full-bleed. The pane stops scrolling (the canvas
+   manages its own viewport) and DrawingView + the Excalidraw root fill the
+   remaining height below the tab strip. Excalidraw needs a definitely-sized
+   parent or it collapses to 0. */
+.editor-scroll-fill { overflow: hidden; }
+.drawing-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+.drawing-view .excalidraw {
+  flex: 1 1 auto;
+  height: 100%;
+  width: 100%;
+}
+/* "Message Agent" button — our own overlay in the canvas bottom-right, sitting
+   just left of Excalidraw's help "?" button (Excalidraw exposes no slot there,
+   so we absolutely-position it over the canvas; .drawing-view is the relative
+   container). z-index clears the canvas; the help button stays to its right. */
+.drawing-agent-btn {
+  position: absolute;
+  /* Vertically center on Excalidraw's 36px help button (bottom:16 → center 34px
+     up); ours is 32px tall, so bottom:18 puts its center at the same 34px. Sits
+     just left of the help button (its left edge is ~52px from the pane right). */
+  bottom: 18px;
+  right: 62px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+.drawing-agent-btn:hover { filter: brightness(1.07); }
+
 /* Bookmark quick-pick popover (right-click on the bookmark icon). */
 .bookmark-picker {
   position: absolute;

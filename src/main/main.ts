@@ -501,8 +501,18 @@ async function buildTree(dirPath) {
   return children;
 }
 
+// TEMP switch-freeze instrumentation — writes per-op durations to /tmp/sw-timing.log
+async function swtime(label, fn) {
+  const s = Date.now();
+  try { return await fn(); }
+  finally {
+    const d = Date.now() - s;
+    fs.appendFile('/tmp/sw-timing.log', `${new Date().toISOString()} ${label} ${d}ms\n`).catch(() => {});
+  }
+}
+
 ipcMain.handle('fs:readTree', async (_evt, dirPath) => {
-  return buildTree(dirPath);
+  return swtime('readTree', () => buildTree(dirPath));
 });
 
 async function readAllMarkdown(dirPath) {
@@ -523,7 +533,7 @@ async function readAllMarkdown(dirPath) {
 }
 
 ipcMain.handle('fs:readAllMarkdown', async (_evt, dirPath) => {
-  return readAllMarkdown(dirPath);
+  return swtime('readAllMarkdown', () => readAllMarkdown(dirPath));
 });
 
 ipcMain.handle('fs:readFile', async (_evt, filePath) => {
@@ -935,7 +945,7 @@ ipcMain.handle('settings:read', async () => {
 });
 
 ipcMain.handle('settings:write', async (_evt, obj) => {
-  await writeSettings(obj);
+  await swtime('settings:write', () => writeSettings(obj));
 });
 
 // Mint a short-lived AssemblyAI streaming token. The long-lived API key sits
@@ -1456,6 +1466,13 @@ async function flushWatcher() {
       continue;
     }
     try {
+      // Drawings carry no wiki-links — stat for the mtime only; the renderer
+      // re-reads the JSON itself when it needs to reload an open canvas.
+      if (isDrawingFile(p)) {
+        const stat = await fs.stat(p);
+        win.webContents.send('fs:changed', { type, path: p, mtime: stat.mtimeMs });
+        continue;
+      }
       const [content, stat] = await Promise.all([
         fs.readFile(p, 'utf8'),
         fs.stat(p),
@@ -1506,7 +1523,19 @@ function setupCorrelator() {
   });
 }
 
+// `.excalidraw` drawings get content events too (so an open drawing reloads
+// when the agent rewrites it), but they bypass the rename correlator — that's
+// .md-only machinery for re-keying the basename link index, which drawings
+// aren't part of. A drawing rename therefore surfaces as unlink+add, which is
+// fine: drawings carry no backlinks to rewrite.
+function isDrawingFile(p) { return /\.excalidraw$/i.test(p); }
+
 async function onChokidarAdd(p) {
+  if (isDrawingFile(p)) {
+    pendingByPath.set(p, pendingByPath.get(p) === 'unlink' ? 'change' : 'add');
+    scheduleFlush();
+    return;
+  }
   if (!isMdFile(p)) {
     pendingTreeOnly = true;
     scheduleFlush();
@@ -1517,6 +1546,11 @@ async function onChokidarAdd(p) {
 }
 
 async function onChokidarChange(p) {
+  if (isDrawingFile(p)) {
+    pendingByPath.set(p, pendingByPath.get(p) === 'add' ? 'add' : 'change');
+    scheduleFlush();
+    return;
+  }
   if (!isMdFile(p)) {
     pendingTreeOnly = true;
     scheduleFlush();
@@ -1531,6 +1565,11 @@ async function onChokidarChange(p) {
 }
 
 function onChokidarUnlink(p) {
+  if (isDrawingFile(p)) {
+    pendingByPath.set(p, 'unlink');
+    scheduleFlush();
+    return;
+  }
   if (!isMdFile(p)) {
     pendingTreeOnly = true;
     scheduleFlush();
@@ -1571,13 +1610,14 @@ async function stopWatcher() {
 }
 
 ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
-  await stopWatcher();
+  await swtime('watchStart:stopWatcher', () => stopWatcher());
   const win = BrowserWindow.fromWebContents(evt.sender);
   if (!win) return;
   watcherWindowId = win.id;
   watcherRootDir = dirPath;
   setupCorrelator();
-  await seedCorrelator(dirPath);
+  await swtime('watchStart:seedCorrelator', () => seedCorrelator(dirPath));
+  const __cwStart = Date.now();
   currentWatcher = chokidar.watch(dirPath, {
     ignored: (p) => {
       // Skip if any path segment within the watched root starts with '.'
@@ -1589,6 +1629,10 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     persistent: true,
+  });
+  fs.appendFile('/tmp/sw-timing.log', `${new Date().toISOString()} watchStart:chokidar.watch(sync-construct) ${Date.now() - __cwStart}ms\n`).catch(() => {});
+  currentWatcher.on('ready', () => {
+    fs.appendFile('/tmp/sw-timing.log', `${new Date().toISOString()} watchStart:chokidar-ready(scan) ${Date.now() - __cwStart}ms\n`).catch(() => {});
   });
   currentWatcher
     .on('add', onChokidarAdd)
@@ -1671,6 +1715,18 @@ installAgentTokensBridge(async () => {
     console.warn('[cli-tools] shim setup failed:', err?.message ?? err);
   }
 })();
+
+// TEMP: main event-loop heartbeat. Continuous logs = loop alive (starvation);
+// a gap = loop synchronously blocked.
+{
+  let __hbLast = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const drift = now - __hbLast - 250;
+    if (drift > 200) fs.appendFile('/tmp/sw-timing.log', `${new Date(now).toISOString()} MAIN-LOOP-STALL drift=${drift}ms\n`).catch(() => {});
+    __hbLast = now;
+  }, 250);
+}
 
 app.whenReady().then(async () => {
   protocol.handle('app', async (req) => {

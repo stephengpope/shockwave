@@ -5,6 +5,8 @@ import { useSyncRef } from './useSyncRef';
 import { rangesAddedFromDiff } from '../diffFlash.js';
 import { rewriteReferences } from '../renameOps.js';
 import { bookmarkKey } from './useBookmarks';
+import { isDrawing } from '../MediaView';
+import type { DrawingViewHandle } from '../DrawingView';
 import type { FsChangedEvent } from '../../shared/api';
 
 // Minimal shapes of the untyped JS collaborators this hook drives.
@@ -35,6 +37,11 @@ interface UseFsWatcherOpts {
   renameBookmarkName: (oldKey: string, newKey: string) => boolean;
   removeBookmarkName: (key: string) => boolean;
   persistBookmarks: () => void;
+  // Drawing reload: the live canvas (when the active tab is a `.excalidraw`)
+  // and the per-path mtime store that guards the self-echo (drawings aren't in
+  // the link index, so they need their own store — same role as li.getMtime).
+  drawingViewRef: MutableRefObject<DrawingViewHandle | null>;
+  drawingMtimesRef: MutableRefObject<Map<string, number>>;
 }
 
 // Subscribes to main's `fs:changed` push events and reconciles the renderer's
@@ -55,6 +62,8 @@ export function useFsWatcher({
   renameBookmarkName,
   removeBookmarkName,
   persistBookmarks,
+  drawingViewRef,
+  drawingMtimesRef,
 }: UseFsWatcherOpts) {
   const linkIndexRefForWatcher = useSyncRef(linkIndex);
   const refreshTreeRef = useSyncRef(refreshTree);
@@ -134,6 +143,29 @@ export function useFsWatcher({
         return;
       }
       // 'add' | 'change'
+      // Drawings: not in the link index. Use the dedicated mtime store for the
+      // self-echo guard, and reload the live canvas if this is the open drawing.
+      if (isDrawing(evt.path)) {
+        const store = drawingMtimesRef.current;
+        const prior = store.get(evt.path);
+        const fresh = prior == null || evt.mtime > prior;
+        store.set(evt.path, Math.max(prior ?? 0, evt.mtime));
+        if (
+          evt.type === 'change' &&
+          fresh &&
+          evt.path === activeFileRef.current &&
+          !activeIsDraftRef.current
+        ) {
+          (async () => {
+            try {
+              const json = await window.api.readFile(evt.path);
+              drawingViewRef.current?.reloadScene(json);
+            } catch { /* file may have been deleted or moved */ }
+          })();
+        }
+        if (evt.type === 'add') scheduleRefresh();
+        return;
+      }
       const stored = li.getMtime(evt.path);
       const isFresh = stored == null || evt.mtime > stored;
       if (isFresh) {

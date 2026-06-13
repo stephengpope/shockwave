@@ -19,6 +19,13 @@ interface SendToAgentInfo {
   col?: number;
 }
 
+// One selected Excalidraw element, summarized for the agent.
+export interface DrawingSelectionItem {
+  id: string;
+  type: string;
+  text?: string;
+}
+
 interface UseSendToAgentOpts {
   workspacePath: string | null;
   activeFile: string | null;
@@ -66,6 +73,23 @@ export function useSendToAgent({
     return `My cursor is at line ${payload.line}, column ${payload.col} in ${relPath}.\n\n`;
   }, [workspacePath]);
 
+  // Framing snippet for an Excalidraw drawing: the cwd-relative file path plus a
+  // summary of the selected elements (the agent reads the .excalidraw JSON
+  // itself; the ids/types just tell it which elements the user means).
+  const buildDrawingSnippet = useCallback((relPath: string, selected: DrawingSelectionItem[]) => {
+    if (!relPath) return '';
+    if (selected && selected.length) {
+      const lines = selected
+        .map((e) => `- ${e.type}${e.text ? ` "${e.text}"` : ''} (id: ${e.id})`)
+        .join('\n');
+      return (
+        `I'm working on the Excalidraw drawing ${relPath}. ` +
+        `These ${selected.length} element(s) are selected — read the file for their full data:\n${lines}\n\n`
+      );
+    }
+    return `I'm working on the Excalidraw drawing ${relPath} (no elements selected). Read the file to see its contents.\n\n`;
+  }, []);
+
   const applySendToAgent = useCallback((snippet: string, { append }: { append: boolean }) => {
     if (!chatSidebarOpenRef.current) {
       chatSidebarOpenRef.current = true;
@@ -86,16 +110,20 @@ export function useSendToAgent({
     setPendingComposerInjection(null);
   }, [chatSidebarReady, pendingComposerInjection]);
 
-  const onSendToAgent = useCallback((info: SendToAgentInfo) => {
-    if (!workspacePath || !activeFile) return;
-    // Prefix the workspace-relative path with `[cwd]/` so the agent reads it as
-    // "relative to your cwd" (which pi sets to the active workspace).
+  // Prefix the workspace-relative path with `[cwd]/` so the agent reads it as
+  // "relative to your cwd" (which pi sets to the active workspace).
+  const cwdRelPath = useCallback(() => {
+    if (!activeFile) return '';
     let rel = activeFile;
-    if (activeFile.startsWith(workspacePath)) {
+    if (workspacePath && activeFile.startsWith(workspacePath)) {
       rel = activeFile.slice(workspacePath.length).replace(/^\/+/, '');
     }
-    const relPath = `[cwd]/${rel}`;
-    const snippet = buildSendToAgentSnippet({ ...info, relPath });
+    return `[cwd]/${rel}`;
+  }, [workspacePath, activeFile]);
+
+  // Inject a built snippet: expand the sidebar and drop it in, but if the
+  // composer already has text, ask Replace/Append first.
+  const injectOrAsk = useCallback((snippet: string) => {
     if (!snippet) return;
     // Sidebar closed → composer guaranteed empty (component unmounted). Sidebar
     // open → ask before clobbering existing text.
@@ -107,7 +135,18 @@ export function useSendToAgent({
       }
     }
     applySendToAgent(snippet, { append: false });
-  }, [workspacePath, activeFile, chatSidebarOpenRef, buildSendToAgentSnippet, applySendToAgent]);
+  }, [chatSidebarOpenRef, applySendToAgent]);
 
-  return { onSendToAgent, setChatSidebarRef, sendToAgentPending, setSendToAgentPending, applySendToAgent };
+  const onSendToAgent = useCallback((info: SendToAgentInfo) => {
+    if (!workspacePath || !activeFile) return;
+    injectOrAsk(buildSendToAgentSnippet({ ...info, relPath: cwdRelPath() }));
+  }, [workspacePath, activeFile, cwdRelPath, buildSendToAgentSnippet, injectOrAsk]);
+
+  // Drawing equivalent: send the file path + selected-element summary.
+  const onSendDrawingToAgent = useCallback((selected: DrawingSelectionItem[]) => {
+    if (!workspacePath || !activeFile) return;
+    injectOrAsk(buildDrawingSnippet(cwdRelPath(), selected));
+  }, [workspacePath, activeFile, cwdRelPath, buildDrawingSnippet, injectOrAsk]);
+
+  return { onSendToAgent, onSendDrawingToAgent, setChatSidebarRef, sendToAgentPending, setSendToAgentPending, applySendToAgent };
 }

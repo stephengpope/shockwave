@@ -6,3 +6,6 @@ out/
 cli-tools/node_modules/
 .playwright-cli/
 .firecrawl/
+
+# Vendored Excalidraw fonts (copied from node_modules by the Vite plugin)
+src/renderer/public/excalidraw/

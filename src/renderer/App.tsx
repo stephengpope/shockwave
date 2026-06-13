@@ -3,7 +3,9 @@ import FileTree from './FileTree.jsx';
 import Editor from './Editor.jsx';
 import BacklinksPanel from './BacklinksPanel.jsx';
 import GraphView from './GraphView.jsx';
-import MediaView, { mediaKind, isOpenable } from './MediaView';
+import MediaView, { mediaKind, isOpenable, isDrawing } from './MediaView';
+import DrawingView from './DrawingView';
+import type { DrawingViewHandle } from './DrawingView';
 import { rewriteReferences } from './renameOps.js';
 import TabStrip from './TabStrip.jsx';
 import EditorTitle from './EditorTitle.jsx';
@@ -497,6 +499,15 @@ export default function App() {
   // Image/video active file → render a MediaView preview instead of the text
   // editor. null for .md and any other text (those open in the editor).
   const activeMediaKind = activeIsDraft ? null : mediaKind(activeFile);
+  // `.excalidraw` active file → render the editable DrawingView instead.
+  const activeDrawing = !activeIsDraft && isDrawing(activeFile);
+  // Live drawing canvas (for watcher reload) + per-path mtime store guarding
+  // the drawing self-echo (drawings aren't in the link index — see useFsWatcher).
+  const drawingViewRef = useRef<DrawingViewHandle | null>(null);
+  const drawingMtimesRef = useRef<Map<string, number>>(new Map());
+  const onDrawingSaved = useCallback((p: string, mtime: number) => {
+    drawingMtimesRef.current.set(p, mtime);
+  }, []);
 
   const onBack = useCallback(() => { if (activeTabId) goBack(activeTabId); }, [activeTabId, goBack]);
   const onForward = useCallback(() => { if (activeTabId) goForward(activeTabId); }, [activeTabId, goForward]);
@@ -856,7 +867,7 @@ export default function App() {
       return;
     }
     if (graphMode) setGraphMode(false);
-    const hasEditableTab = !!activeTab && !activeMediaKind;
+    const hasEditableTab = !!activeTab && !activeMediaKind && !activeDrawing;
     if (hasEditableTab) {
       // Editor may be remounting if we just left graph mode — wait for the ref.
       const tryInsert = (attempt = 0) => {
@@ -869,7 +880,7 @@ export default function App() {
       pendingTemplateRef.current = content;
       await addDraftTab();
     }
-  }, [workspacePath, graphMode, activeTab, activeMediaKind, addDraftTab, showError]);
+  }, [workspacePath, graphMode, activeTab, activeMediaKind, activeDrawing, addDraftTab, showError]);
 
   // ---- create a folder + put it into rename mode ----
   const createFolderAt = useCallback(async (dirPath) => {
@@ -1176,6 +1187,8 @@ export default function App() {
     renameBookmarkName,
     removeBookmarkName,
     persistBookmarks,
+    drawingViewRef,
+    drawingMtimesRef,
   });
 
   // Re-seed bookmarks when bookmarks.json changes on disk out from under us
@@ -1265,9 +1278,10 @@ export default function App() {
   const lastLoadRef = useRef<any>({ tabId: null, path: null, isDark: null });
   useEffect(() => {
     if (!workspacePath) return;
-    // Media tabs render a MediaView (no editor mounted) — nothing to load, and
-    // reading binary as text would be garbage.
-    if (activeMediaKind) {
+    // Media + drawing tabs don't use the text editor — MediaView / DrawingView
+    // own their content. Nothing to load here (reading them as text is garbage;
+    // DrawingView loads its own JSON from the path prop).
+    if (activeMediaKind || activeDrawing) {
       lastLoadRef.current = { tabId: activeTabId, path: activeFile, isDark };
       return;
     }
@@ -1318,7 +1332,7 @@ export default function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [activeFile, activeIsDraft, activeTabId, workspacePath, isDark, tabsApi.viewStateByPath, showError, activeMediaKind]);
+  }, [activeFile, activeIsDraft, activeTabId, workspacePath, isDark, tabsApi.viewStateByPath, showError, activeMediaKind, activeDrawing]);
 
   // ---- backlinks for active file ----
   const activeBacklinks = useMemo(
@@ -1392,6 +1406,7 @@ export default function App() {
   // line so the user can start typing their request.
   const {
     onSendToAgent,
+    onSendDrawingToAgent,
     setChatSidebarRef,
     sendToAgentPending,
     setSendToAgentPending,
@@ -1589,8 +1604,11 @@ export default function App() {
           />
         ) : workspacePath ? (
           <>
-            <div className="editor-scroll">
-              <div className={activeTab ? '' : 'editor-zone-hidden'}>
+            <div className={activeDrawing ? 'editor-scroll editor-scroll-fill' : 'editor-scroll'}>
+              {/* Drawings render full-bleed: no title bar or backlinks (the
+                  link index is .md-only). The Editor stays mounted but hidden so
+                  switching back to a text tab doesn't rebuild it. */}
+              <div className={(activeTab && !activeDrawing) ? '' : 'editor-zone-hidden'}>
                 <EditorNav
                   onBack={onBack}
                   onForward={onForward}
@@ -1609,7 +1627,7 @@ export default function App() {
                   </ErrorMessage>
                 )}
               </div>
-              <div className={activeTab ? '' : 'editor-zone-hidden'} style={activeMediaKind ? { display: 'none' } : undefined}>
+              <div className={activeTab ? '' : 'editor-zone-hidden'} style={(activeMediaKind || activeDrawing) ? { display: 'none' } : undefined}>
                 <Editor
                   ref={editorRef}
                   onLinkClick={fileOps.onLinkClick}
@@ -1631,7 +1649,18 @@ export default function App() {
               {activeMediaKind && activeFile && (
                 <MediaView path={activeFile} workspacePath={workspacePath} kind={activeMediaKind} />
               )}
-              {activeTab ? (
+              {activeDrawing && activeFile && (
+                <DrawingView
+                  ref={drawingViewRef}
+                  key={activeFile}
+                  path={activeFile}
+                  dark={isDark}
+                  onSaved={onDrawingSaved}
+                  onError={showError}
+                  onSendToAgent={onSendDrawingToAgent}
+                />
+              )}
+              {activeTab && activeDrawing ? null : activeTab ? (
                 <BacklinksPanel
                   groups={activeBacklinks}
                   vaultPath={workspacePath}
@@ -1649,8 +1678,8 @@ export default function App() {
             {activeTab && (
               <EditorStatusBar
                 backlinkCount={activeBacklinks.length}
-                words={activeMediaKind ? 0 : editorStats.words}
-                chars={activeMediaKind ? 0 : editorStats.chars}
+                words={(activeMediaKind || activeDrawing) ? 0 : editorStats.words}
+                chars={(activeMediaKind || activeDrawing) ? 0 : editorStats.chars}
                 viewMode={viewMode}
                 onToggleViewMode={onToggleViewMode}
                 saveState={saveState}

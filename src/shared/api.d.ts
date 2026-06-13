@@ -43,7 +43,8 @@ export interface FsAddOrChangeEvent {
   type: 'add' | 'change';
   path: string;
   mtime: number;
-  outgoingLinks: ParsedLink[];
+  // Present for `.md` files; absent for `.excalidraw` drawings (no wiki-links).
+  outgoingLinks?: ParsedLink[];
 }
 export interface FsUnlinkEvent {
   type: 'unlink';
