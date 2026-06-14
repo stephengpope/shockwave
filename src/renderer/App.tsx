@@ -1204,6 +1204,16 @@ export default function App() {
     return unsub;
   }, [workspacePath, seedBookmarks, bookmarkResolvableKeys]);
 
+  // Agent `open_file` tool → open the file in a new tab. Main has already
+  // confined the path to the active workspace; we re-gate on displayable types.
+  // Subscribe once on mount; openInNewTab is read via ref so it stays stable.
+  const openInNewTabRef = useSyncRef(openInNewTab);
+  useEffect(() => {
+    return window.api.agent.onOpenFile(({ path }) => {
+      if (path && isOpenable(path)) openInNewTabRef.current(path);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- subscribe once; openInNewTab via ref
+
   // ---- boot: load settings + subscribe to system theme ----
   useEffect(() => {
     let active = true;

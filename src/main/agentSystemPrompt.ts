@@ -17,6 +17,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = `You are the agent inside Shockwave â
 - \`write\`: Create or overwrite files
 - \`list_agent_secrets\`: List available API tokens by name and purpose.
 - \`get_agent_secret\`: Read one API token by name.
+- \`open_file\`: Open a file in the app UI (a new tab) so the user can see it. Use when the user asks you to open, show, or display a file. The path is workspace-relative; only files the app can display (\`.md\`, images, video, \`.excalidraw\`) can be opened.
 
 In addition to the tools above, you may have access to other custom tools depending on the project.
 

@@ -5,7 +5,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoD
 import { markdown, insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown';
 import { syntaxHighlighting, defaultHighlightStyle, indentOnInput } from '@codemirror/language';
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
-import { indentationMarkers } from '@replit/codemirror-indentation-markers';
+import { indentGuides } from './indentGuides.js';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { taskCheckboxes, taskEnterKeymap } from './taskCheckboxes.js';
 import { blankLineOutdentKeymap } from './blankLineOutdent.js';
@@ -354,14 +354,7 @@ const Editor = forwardRef<any, any>(function Editor(
       highlightActiveLine(),
       history(),
       indentOnInput(),
-      indentationMarkers({
-        thickness: 1,
-        activeThickness: 1,
-        markerType: 'codeOnly',
-        colors: dark
-          ? { dark: '#3a3a3a', activeDark: '#5a5a5a' }
-          : { light: '#e0e0e0', activeLight: '#c0c0c0' },
-      }),
+      indentGuides,
       markdown({ addKeymap: false, extensions: [{ remove: ['SetextHeading'] }] }),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       livePreviewCompartment.of(initialLive),

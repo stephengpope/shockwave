@@ -165,7 +165,7 @@ contextBridge.exposeInMainWorld('api', {
    * (no Rename/Duplicate/Reveal). When `selectionCount` > 1, `isBookmarked`
    * describes whether ALL selected files are currently bookmarked (drives
    * the Bookmark/Remove bookmark label).
-   * @param {{ isMd?: boolean, isBookmarked?: boolean, selectionCount?: number, conflictMode?: boolean }} opts
+   * @param {{ isMd?: boolean, isOpenable?: boolean, isBookmarked?: boolean, selectionCount?: number, conflictMode?: boolean }} opts
    * @returns {Promise<string|null>} The chosen FILE_ACTIONS value, or null if dismissed.
    */
   showFileContextMenu: (opts) => ipcRenderer.invoke('context:fileMenu', opts),
@@ -288,6 +288,13 @@ contextBridge.exposeInMainWorld('api', {
       const listener = (_evt, payload) => cb(payload);
       ipcRenderer.on('agent:error', listener);
       return () => ipcRenderer.removeListener('agent:error', listener);
+    },
+    /** Fires when the agent's open_file tool asks the UI to open a file (new tab).
+     *  @param {(payload: { path: string }) => void} cb @returns {Unsubscribe} */
+    onOpenFile: (cb) => {
+      const listener = (_evt, payload) => cb(payload);
+      ipcRenderer.on('agent:openFile', listener);
+      return () => ipcRenderer.removeListener('agent:openFile', listener);
     },
   },
 

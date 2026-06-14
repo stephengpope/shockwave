@@ -880,6 +880,14 @@ html, body, #root {
   font-weight: bold;
 }
 
+/* Indent guides (indentGuides.ts). The guide lines themselves are stacked 1px
+   background gradients set as an inline style on each `.cm-iguide` line, placed
+   at measured pixel offsets. Here we only darken them on the active line to
+   match the editor's active indent color. */
+.cm-activeLine.cm-iguide {
+  --indent-line: var(--indent-line-active);
+}
+
 /* Inline `code` — monospace pill (codeBlocks.ts). Horizontal padding only so
    line-height doesn't jump. */
 .cm-inline-code {

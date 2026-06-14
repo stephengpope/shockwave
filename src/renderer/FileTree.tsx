@@ -2,6 +2,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { Tree } from 'react-arborist';
 import { FILE_ACTIONS } from './constants.js';
 import { SIDEBAR_IMAGE_MIME } from './imagePaste.js';
+import { isOpenable } from './MediaView.js';
 
 const FileTree = forwardRef<any, any>(function FileTree(
   { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, conflictMode, checkRenameConflict, onRootContextMenu, fixedHeight },
@@ -180,16 +181,22 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, get
       }
       if (targetPaths.length === 0) targetPaths = [node.id];
     } else {
-      tree.select(node.id);
+      // Deliberately do NOT select the row: selecting fires the tree's onSelect,
+      // which opens/loads the file. A right-click should only show the menu —
+      // the menu targets node.id directly, so no selection is needed.
       targetPaths = [node.id];
     }
 
     const allMd = targetPaths.every((p) => p.toLowerCase().endsWith('.md'));
+    // "Open in new tab" is offered for any file the app can actually open
+    // (.md + image/video/drawing), not just markdown.
+    const allOpenable = targetPaths.every((p) => isOpenable(p));
     const allBookmarked = getIsBookmarked
       ? targetPaths.every((p) => getIsBookmarked(p))
       : !!isBookmarked;
     const action = await window.api.showFileContextMenu({
       isMd: allMd,
+      isOpenable: allOpenable,
       isBookmarked: allBookmarked,
       selectionCount: targetPaths.length,
       conflictMode: !!conflictMode,

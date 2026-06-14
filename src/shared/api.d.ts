@@ -133,7 +133,7 @@ export interface ShockwaveApi {
   openExternal(url: string): Promise<void>;
 
   // Native context menus
-  showFileContextMenu(opts: { isMd?: boolean; isBookmarked?: boolean; selectionCount?: number; conflictMode?: boolean }): Promise<FileAction | null>;
+  showFileContextMenu(opts: { isMd?: boolean; isOpenable?: boolean; isBookmarked?: boolean; selectionCount?: number; conflictMode?: boolean }): Promise<FileAction | null>;
   showConflictCloudMenu(): Promise<'keep' | 'reset' | null>;
   showFolderContextMenu(opts?: { isRoot?: boolean }): Promise<FolderAction | null>;
   showEditorContextMenu(opts: { hasSelection?: boolean; hasFilePath?: boolean; hasLink?: boolean }): Promise<EditorAction | null>;
@@ -179,6 +179,7 @@ export interface ShockwaveApi {
     validateConnection(opts: { baseUrl: string; apiKey?: string }): Promise<{ ok: boolean; models?: string[]; error?: string }>;
     onEvent(cb: (evt: unknown) => void): Unsubscribe;
     onError(cb: (payload: { message: string }) => void): Unsubscribe;
+    onOpenFile(cb: (payload: { path: string }) => void): Unsubscribe;
   };
 
   voice: {

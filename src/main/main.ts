@@ -11,6 +11,7 @@ import { isMdFile, uniquePath, uniqueInWorkspace, walkMarkdownPaths, collectMark
 import { getProviders, getModels } from '@earendil-works/pi-ai';
 import { listInstalled, importFromPath, removeSkill, libraryDirFor } from './skillLibrary.js';
 import { installAgentTokensBridge } from './agentTokensExtension.js';
+import { installOpenFileBridge } from './openFileExtension.js';
 import { ensureCliShims, prependPath } from './cliTools.js';
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from './agentSystemPrompt.js';
 import {
@@ -689,7 +690,7 @@ function revealLabel() {
 
 ipcMain.handle('context:fileMenu', async (evt, opts = {}) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
-  const { isMd = true, isBookmarked = false, selectionCount = 1, conflictMode = false } = opts;
+  const { isMd = true, isOpenable = isMd, isBookmarked = false, selectionCount = 1, conflictMode = false } = opts;
   // Conflict view, per file: accept as-edited, keep ours, or take remote.
   if (conflictMode) {
     return popupContextMenu(win, [
@@ -701,17 +702,17 @@ ipcMain.handle('context:fileMenu', async (evt, opts = {}) => {
   const multi = selectionCount > 1;
   const template: any[] = [];
   if (multi) {
-    // Bulk-safe actions only: open all in new tabs (if md), bookmark toggle, delete.
-    // Rename/Duplicate/Reveal don't make sense across a selection. Bookmark is
-    // .md-only (bookmarks are keyed by basename via the link index).
-    if (isMd) template.push({ label: `Open ${selectionCount} files in new tabs`, value: FILE_ACTIONS.NEW_TAB });
+    // Bulk-safe actions only: open all in new tabs (if openable), bookmark
+    // toggle, delete. Rename/Duplicate/Reveal don't make sense across a
+    // selection. Bookmark is .md-only (keyed by basename via the link index).
+    if (isOpenable) template.push({ label: `Open ${selectionCount} files in new tabs`, value: FILE_ACTIONS.NEW_TAB });
     if (isMd) template.push(
       { label: isBookmarked ? `Remove ${selectionCount} bookmarks` : `Bookmark ${selectionCount} files`, value: FILE_ACTIONS.TOGGLE_BOOKMARK },
       { type: 'separator' },
     );
     template.push({ label: `Delete ${selectionCount} files`, value: FILE_ACTIONS.DELETE });
   } else {
-    if (isMd) template.push({ label: 'Open in new tab', value: FILE_ACTIONS.NEW_TAB });
+    if (isOpenable) template.push({ label: 'Open in new tab', value: FILE_ACTIONS.NEW_TAB });
     template.push({ label: 'Duplicate', value: FILE_ACTIONS.DUPLICATE });
     // Bookmark is .md-only.
     if (isMd) template.push(
@@ -1694,6 +1695,35 @@ nativeTheme.on('updated', () => {
 installAgentTokensBridge(async () => {
   const settings = await readSettings();
   return settings.agentSecrets ?? [];
+});
+
+// Bridge for the open-file pi extension: validate the agent's path against the
+// active workspace, then ask the renderer to open it in a new tab. Confined to
+// the workspace (the agent's cwd); only display-able types open. The extension
+// (cwd) ext list must stay in sync with the renderer's isOpenable (MediaView).
+const OPENABLE_RE = /\.(md|png|jpe?g|gif|webp|svg|bmp|ico|avif|mp4|webm|mov|m4v|ogv|ogg|excalidraw)$/i;
+installOpenFileBridge(async (relPath) => {
+  if (!watcherRootDir) return { ok: false, error: 'No workspace is open.' };
+  if (typeof relPath !== 'string' || !relPath.trim()) return { ok: false, error: 'No path provided.' };
+  // Tolerate a leading `[cwd]/` and leading slashes; resolve against the workspace.
+  const rel = relPath.replace(/^\[cwd\]\/?/, '').replace(/^\/+/, '');
+  const abs = path.resolve(watcherRootDir, rel);
+  if (abs !== watcherRootDir && !abs.startsWith(watcherRootDir + path.sep)) {
+    return { ok: false, error: 'Path is outside the workspace.' };
+  }
+  if (!OPENABLE_RE.test(abs)) {
+    return { ok: false, error: 'Only .md, image, video, or .excalidraw files can be opened.' };
+  }
+  try {
+    const st = await fs.stat(abs);
+    if (!st.isFile()) return { ok: false, error: 'Not a file.' };
+  } catch {
+    return { ok: false, error: `File not found: ${rel}` };
+  }
+  const win = senderWindow();
+  if (!win) return { ok: false, error: 'App window is not available.' };
+  win.webContents.send('agent:openFile', { path: abs });
+  return { ok: true };
 });
 
 // Generate the CLI shims (firecrawl, playwright-cli) into <userData>/pi-agent/bin
