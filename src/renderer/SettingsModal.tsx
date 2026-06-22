@@ -4,9 +4,8 @@ import { XIcon, CheckCircleIcon } from './Icons.jsx';
 import WorkspacesSection from './settings/WorkspacesSection.jsx';
 import AppearanceSection from './settings/AppearanceSection.jsx';
 import AgentChatSection from './settings/AgentChatSection.jsx';
-import BuiltinSkillsTab from './settings/BuiltinSkillsTab.jsx';
-import AiSkillsTab from './settings/AiSkillsTab.jsx';
-import WorkspaceSkillsTab from './settings/WorkspaceSkillsTab.jsx';
+import WorkspaceSkillsSection from './settings/WorkspaceSkillsSection.jsx';
+import BuiltinSkillsSection from './settings/BuiltinSkillsSection.jsx';
 import AgentSecretsSection from './settings/AgentSecretsSection.jsx';
 import DailyNoteSection from './settings/DailyNoteSection.jsx';
 import TemplatesSection from './settings/TemplatesSection.jsx';
@@ -20,21 +19,30 @@ import UpdatesSection from './settings/UpdatesSection.jsx';
 const NAV = [
   { kind: 'header', label: 'General' },
   { kind: 'item', id: SETTINGS_SECTIONS.APPEARANCE, label: 'Appearance' },
-  { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
-  { kind: 'item', id: SETTINGS_SECTIONS.DAILY_NOTE, label: 'Daily Notes' },
-  { kind: 'item', id: SETTINGS_SECTIONS.TEMPLATES, label: 'Templates' },
   { kind: 'item', id: SETTINGS_SECTIONS.SYNC, label: 'GitHub Sync' },
   { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
   { kind: 'item', id: SETTINGS_SECTIONS.UPDATES, label: 'Updates' },
+  { kind: 'header', label: 'Workspaces' },
+  { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Manage' },
+  { kind: 'item', id: SETTINGS_SECTIONS.DAILY_NOTE, label: 'Daily Notes' },
+  { kind: 'item', id: SETTINGS_SECTIONS.TEMPLATES, label: 'Templates' },
+  { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACE_SKILLS, label: 'Manage Skills' },
   { kind: 'header', label: 'AI Agent' },
   { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
   { kind: 'item', id: SETTINGS_SECTIONS.AGENT_BUILTIN_SKILLS, label: 'Built-in Skills' },
-  { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SKILLS, label: 'Global Skills' },
-  { kind: 'item', id: SETTINGS_SECTIONS.AGENT_WORKSPACE_SKILLS, label: 'Workspace Skills' },
   { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
 ];
 
 const DEFAULT_SECTION = SETTINGS_SECTIONS.APPEARANCE;
+
+// Per-workspace sections need an active workspace. Shown when none is open.
+function NoWorkspaceNote() {
+  return (
+    <div className="settings-section">
+      <div className="settings-empty">Open a workspace to configure this.</div>
+    </div>
+  );
+}
 
 export default function SettingsModal({
   initialSection,
@@ -55,6 +63,10 @@ export default function SettingsModal({
   templates,
   onTemplatesChange,
   templateOptions,
+  builtinSkills,
+  onBuiltinSkillToggle,
+  globalBuiltinSkills,
+  onGlobalBuiltinSkillToggle,
   tree,
   workspacePath,
   codingAgent,
@@ -78,12 +90,6 @@ export default function SettingsModal({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-
-  const caSkills = codingAgent?.skills ?? { global: {}, workspaces: {} };
-  const onSkillsChange = (nextSkills) => onCodingAgentChange?.({
-    ...codingAgent,
-    skills: nextSkills,
-  });
 
   return (
     <div className="settings-backdrop" onClick={onClose}>
@@ -143,21 +149,43 @@ export default function SettingsModal({
               onSyncDisabledChange={onSyncDisabledChange}
             />
           )}
+          {/* Per-workspace config — applies to the ACTIVE workspace, stored in
+              its `.shockwave/workspace.json`. */}
           {active === SETTINGS_SECTIONS.DAILY_NOTE && (
-            <DailyNoteSection
-              dailyNote={dailyNote}
-              onDailyNoteChange={onDailyNoteChange}
-              tree={tree}
-              workspacePath={workspacePath}
-              templateOptions={templateOptions}
-            />
+            workspacePath ? (
+              <DailyNoteSection
+                dailyNote={dailyNote}
+                onDailyNoteChange={onDailyNoteChange}
+                tree={tree}
+                workspacePath={workspacePath}
+                templateOptions={templateOptions}
+              />
+            ) : <NoWorkspaceNote />
           )}
           {active === SETTINGS_SECTIONS.TEMPLATES && (
-            <TemplatesSection
-              templates={templates}
-              onTemplatesChange={onTemplatesChange}
-              tree={tree}
-              workspacePath={workspacePath}
+            workspacePath ? (
+              <TemplatesSection
+                templates={templates}
+                onTemplatesChange={onTemplatesChange}
+                tree={tree}
+                workspacePath={workspacePath}
+              />
+            ) : <NoWorkspaceNote />
+          )}
+          {active === SETTINGS_SECTIONS.WORKSPACE_SKILLS && (
+            workspacePath ? (
+              <WorkspaceSkillsSection
+                workspacePath={workspacePath}
+                builtinSkills={builtinSkills}
+                globalBuiltinSkills={globalBuiltinSkills}
+                onBuiltinSkillToggle={onBuiltinSkillToggle}
+              />
+            ) : <NoWorkspaceNote />
+          )}
+          {active === SETTINGS_SECTIONS.AGENT_BUILTIN_SKILLS && (
+            <BuiltinSkillsSection
+              globalBuiltinSkills={globalBuiltinSkills}
+              onGlobalBuiltinSkillToggle={onGlobalBuiltinSkillToggle}
             />
           )}
           {active === SETTINGS_SECTIONS.SYNC && (
@@ -180,29 +208,6 @@ export default function SettingsModal({
               codingAgent={codingAgent}
               onCodingAgentChange={onCodingAgentChange}
             />
-          )}
-          {active === SETTINGS_SECTIONS.AGENT_BUILTIN_SKILLS && (
-            <div className="settings-section">
-              <h2 className="settings-section-title">Built-in Skills</h2>
-              <BuiltinSkillsTab skills={caSkills} onSkillsChange={onSkillsChange} />
-            </div>
-          )}
-          {active === SETTINGS_SECTIONS.AGENT_SKILLS && (
-            <div className="settings-section">
-              <h2 className="settings-section-title">Global Skills</h2>
-              <AiSkillsTab skills={caSkills} onSkillsChange={onSkillsChange} />
-            </div>
-          )}
-          {active === SETTINGS_SECTIONS.AGENT_WORKSPACE_SKILLS && (
-            <div className="settings-section">
-              <h2 className="settings-section-title">Workspace Skills</h2>
-              <WorkspaceSkillsTab
-                skills={caSkills}
-                onSkillsChange={onSkillsChange}
-                workspaces={workspaces}
-                activeWorkspaceId={activeWorkspaceId}
-              />
-            </div>
           )}
           {active === SETTINGS_SECTIONS.AGENT_SECRETS && (
             <AgentSecretsSection

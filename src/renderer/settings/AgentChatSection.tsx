@@ -190,7 +190,6 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caBaseUrl = codingAgent?.baseUrl ?? '';
   const caContextWindow = codingAgent?.contextWindow;
   const caSystemPrompt = codingAgent?.systemPrompt ?? '';
-  const caSkills = codingAgent?.skills ?? { global: {}, workspaces: {} };
   const updateCa = (patch) => onCodingAgentChange?.({
     provider: caProvider,
     model: caModel,
@@ -198,7 +197,6 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
     baseUrl: caBaseUrl,
     contextWindow: caContextWindow,
     systemPrompt: caSystemPrompt,
-    skills: caSkills,
     ...patch,
   });
 

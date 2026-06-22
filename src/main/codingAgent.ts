@@ -12,7 +12,7 @@
 
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import { getModel } from '@earendil-works/pi-ai';
-import { agentDirFor, ensureDirs, listInstalled, computeEffectivePaths, writePiSettings } from './skillLibrary.js';
+import { agentDirFor, ensureDirs, listBuiltinSkills, listWorkspaceSkills, computeEffectivePaths, writePiSettings } from './skillLibrary.js';
 import { ensureAgentTokensExtension } from './agentTokensExtension.js';
 import { ensureOpenFileExtension } from './openFileExtension.js';
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from './agentSystemPrompt.js';
@@ -42,16 +42,17 @@ async function teardown() {
   }
 }
 
-async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt, userDataDir, builtinDir, skillsState, workspaceId }, emitEvent) {
+async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt, userDataDir, builtinDir, globalBuiltinSkills, wsBuiltinSkills }, emitEvent) {
   const effectiveSystemPrompt = (systemPrompt ?? '').trim() || DEFAULT_AGENT_SYSTEM_PROMPT;
   const key = makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt: effectiveSystemPrompt });
-  // We always recompute the effective skill list before session create so the
-  // skills array reflects the current global+workspace state. If the session
-  // is already up but the skill set has changed, the user can hit Clear in the
-  // chat sidebar to tear it down — pi reads `skills` only at session boot.
+  // Recompute the explicit skill list before session create: enabled built-ins
+  // (per-workspace toggles) + the active workspace's uploaded `.shockwave/skills`.
+  // Pi additionally auto-discovers `.agents/skills` on its own. Pi reads `skills`
+  // only at session boot — the user can hit Clear in the chat to apply a change.
   await ensureDirs(userDataDir);
-  const installed = await listInstalled(userDataDir, builtinDir);
-  const effectivePaths = computeEffectivePaths(installed, skillsState, workspaceId);
+  const builtins = await listBuiltinSkills(builtinDir);
+  const wsSkills = await listWorkspaceSkills(workspacePath);
+  const effectivePaths = computeEffectivePaths(builtins, globalBuiltinSkills, wsBuiltinSkills, wsSkills);
   // Materialize the agent-tokens extension every boot so it always reflects
   // the current source. Pi reads `extensions: []` from <agentDir>/settings.json
   // to discover it.

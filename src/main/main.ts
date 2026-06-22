@@ -9,7 +9,7 @@ import { createRenameCorrelator } from './renameCorrelator.js';
 import { agentSend, agentAbort, agentReset } from './codingAgent.js';
 import { isMdFile, uniquePath, uniqueInWorkspace, walkMarkdownPaths, collectMarkdownBasenamesLower } from './pathResolver.js';
 import { getProviders, getModels } from '@earendil-works/pi-ai';
-import { listInstalled, importFromPath, removeSkill, libraryDirFor } from './skillLibrary.js';
+import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from './skillLibrary.js';
 import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { installOpenFileBridge } from './openFileExtension.js';
 import { ensureCliShims, prependPath } from './cliTools.js';
@@ -84,13 +84,7 @@ const DEFAULT_SETTINGS = {
   workspaces: [],
   activeWorkspaceId: null,
   appearance: { themeMode: 'system', hideLineNumbers: false, dailyNotesInBookmarks: false },
-  // Daily-note settings. `format` is a dayjs format string (Obsidian-style).
-  // It may contain "/" — those become folder boundaries beneath `folder`.
-  // `folder` is a workspace-relative path ('' or '/' = workspace root).
-  dailyNote: { format: 'YYYY-MM-DD', folder: '', templatePath: '' },
-  // Template library. `folder` is a workspace-relative folder; its `.md` files
-  // are offered in the template picker. '' = no templates configured.
-  templates: { folder: '' },
+  // Daily-note + template config moved to per-workspace `.shockwave/workspace.json`.
   codingAgent: {
     provider: 'anthropic',
     model: 'claude-sonnet-4-5',
@@ -100,13 +94,10 @@ const DEFAULT_SETTINGS = {
     // Pre-filled with the default on first install so users can read + edit.
     // "Reset to default" in the UI writes the current default back into here.
     systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
-    // Skill enable/disable state. Source of truth for what's actually loaded into
-    // the pi session — the on-disk skill folder is the source of truth for what
-    // EXISTS (read from pi-agent/skill-library/ at request time).
-    //   builtin[name]              = 'enabled' | 'disabled'   (absent ⇒ enabled)
-    //   global[name]               = 'enabled' | 'disabled'   (absent ⇒ disabled)
-    //   workspaces[wsId][name]     = 'inherit' | 'enabled' | 'disabled'
-    skills: { builtin: {}, global: {}, workspaces: {} },
+    // GLOBAL built-in skill on/off (folderName → 'enabled'|'disabled'; absent ⇒
+    // enabled). A workspace can override per-skill in its workspace.json. User
+    // uploads live in `<workspace>/.shockwave/skills/`.
+    builtinSkills: {},
   },
   // Global, user-managed API tokens. Each entry: { name, description, token, createdAt, updatedAt }.
   // `name` is the unique identifier (case-insensitive). `token` is encrypted on disk
@@ -208,14 +199,14 @@ function cliToolsDir() {
 async function ensureBuiltinSecretSlots() {
   try {
     const settings = await readSettings();
-    const installed = await listInstalled(app.getPath('userData'), builtinSkillsDir());
-    const builtinState = settings.codingAgent?.skills?.builtin ?? {};
+    const installed = await listBuiltinSkills(builtinSkillsDir());
     const have = new Set((settings.agentSecrets ?? []).map((s) => s.name));
     const additions: any[] = [];
     const now = Date.now();
+    // Built-in on/off is per-workspace now, but agent secrets are global — so we
+    // provision a slot for every built-in's required secret regardless of any
+    // single workspace's toggle (we only ADD missing names, never overwrite).
     for (const sk of installed) {
-      if (sk.source !== 'builtin') continue;
-      if (builtinState[sk.folderName] === 'disabled') continue; // default-on
       for (const name of (sk.requiredSecrets ?? [])) {
         if (have.has(name) || additions.some((a) => a.name === name)) continue;
         additions.push({ name, description: `Used by the ${sk.name} skill`, token: '', createdAt: now, updatedAt: now });
@@ -237,16 +228,10 @@ async function readSettings() {
       ...DEFAULT_SETTINGS,
       ...parsed,
       appearance: { ...DEFAULT_SETTINGS.appearance, ...(parsed.appearance ?? {}) },
-      dailyNote: { ...DEFAULT_SETTINGS.dailyNote, ...(parsed.dailyNote ?? {}) },
-      templates: { ...DEFAULT_SETTINGS.templates, ...(parsed.templates ?? {}) },
       codingAgent: {
         ...DEFAULT_SETTINGS.codingAgent,
         ...(parsed.codingAgent ?? {}),
-        skills: {
-          builtin: { ...(parsed.codingAgent?.skills?.builtin ?? {}) },
-          global: { ...(parsed.codingAgent?.skills?.global ?? {}) },
-          workspaces: { ...(parsed.codingAgent?.skills?.workspaces ?? {}) },
-        },
+        builtinSkills: { ...(parsed.codingAgent?.builtinSkills ?? {}) },
       },
       agentSecrets: Array.isArray(parsed.agentSecrets) ? parsed.agentSecrets : [],
       transcription: {
@@ -502,18 +487,8 @@ async function buildTree(dirPath) {
   return children;
 }
 
-// TEMP switch-freeze instrumentation — writes per-op durations to /tmp/sw-timing.log
-async function swtime(label, fn) {
-  const s = Date.now();
-  try { return await fn(); }
-  finally {
-    const d = Date.now() - s;
-    fs.appendFile('/tmp/sw-timing.log', `${new Date().toISOString()} ${label} ${d}ms\n`).catch(() => {});
-  }
-}
-
 ipcMain.handle('fs:readTree', async (_evt, dirPath) => {
-  return swtime('readTree', () => buildTree(dirPath));
+  return buildTree(dirPath);
 });
 
 async function readAllMarkdown(dirPath) {
@@ -534,7 +509,7 @@ async function readAllMarkdown(dirPath) {
 }
 
 ipcMain.handle('fs:readAllMarkdown', async (_evt, dirPath) => {
-  return swtime('readAllMarkdown', () => readAllMarkdown(dirPath));
+  return readAllMarkdown(dirPath);
 });
 
 ipcMain.handle('fs:readFile', async (_evt, filePath) => {
@@ -783,44 +758,124 @@ ipcMain.handle('fs:ensureDir', async (_evt, dirPath) => {
   return dirPath;
 });
 
-// ─── Bookmarks ──────────────────────────────────────────────────────────────
-// Stored at `<workspace>/.shockwave/bookmarks.json` as:
-//   { "version": 1, "names": ["recipes", ...] }
-// `names` are `.md` basenames (no folder, no extension). Only `.md` files can
-// be bookmarked and their basenames are workspace-unique, so the name alone
-// identifies the file; its location is resolved on click via the link index.
-// Tracking by name means moves need no bookkeeping (the basename is unchanged).
-// The `.shockwave` segment starts with a dot, which matches the watcher's
-// `ignored` predicate — our own writes don't trigger fs:changed events.
-
-function bookmarksPath(workspacePath) {
+// ─── Per-workspace settings (.shockwave/workspace.json) ──────────────────────
+// One file per workspace holding everything workspace-scoped: bookmarks, daily-
+// note config, templates config, and built-in skill toggles. It lives under the
+// `.shockwave/` dotfile segment the watcher ignores, so our writes don't echo
+// back as fs:changed events. `bookmarks` are `.md` basenames (no folder, no
+// extension); the rest mirror the shapes the renderer uses.
+function workspaceFilePath(workspacePath) {
+  return path.join(workspacePath, '.shockwave', 'workspace.json');
+}
+function legacyBookmarksPath(workspacePath) {
   return path.join(workspacePath, '.shockwave', 'bookmarks.json');
 }
 
-ipcMain.handle('bookmarks:read', async (_evt, workspacePath) => {
-  if (!workspacePath) return [];
-  try {
-    const raw = await fs.readFile(bookmarksPath(workspacePath), 'utf8');
-    const parsed = JSON.parse(raw);
-    const names = Array.isArray(parsed?.names) ? parsed.names : [];
-    // De-dupe + keep only non-empty strings.
-    return Array.from(new Set(names.filter((n) => typeof n === 'string' && n.length > 0)));
-  } catch {
-    // Missing or corrupt — treat as empty. A subsequent write will replace it.
-    return [];
+function workspaceDefaults() {
+  return {
+    schemaVersion: 1,
+    bookmarks: [],
+    dailyNote: { format: 'YYYY-MM-DD', folder: '', templatePath: '' },
+    templates: { folder: '' },
+    // Built-in skill folderName → 'enabled' | 'disabled'. Absent ⇒ enabled.
+    builtinSkills: {},
+  };
+}
+
+function normalizeWorkspaceData(raw) {
+  const d = workspaceDefaults();
+  if (raw && typeof raw === 'object') {
+    if (Array.isArray(raw.bookmarks)) {
+      d.bookmarks = Array.from(new Set(raw.bookmarks.filter((n) => typeof n === 'string' && n.length > 0)));
+    }
+    if (raw.dailyNote && typeof raw.dailyNote === 'object') {
+      d.dailyNote = {
+        format: raw.dailyNote.format || d.dailyNote.format,
+        folder: raw.dailyNote.folder ?? '',
+        templatePath: raw.dailyNote.templatePath ?? '',
+      };
+    }
+    if (raw.templates && typeof raw.templates === 'object') {
+      d.templates = { folder: raw.templates.folder ?? '' };
+    }
+    if (raw.builtinSkills && typeof raw.builtinSkills === 'object') {
+      d.builtinSkills = { ...raw.builtinSkills };
+    }
   }
+  return d;
+}
+
+// Serialize all reads/writes of a given workspace file so a bookmarks write and
+// a settings update (both read-modify-write the same JSON) can't clobber each
+// other. One promise chain per workspace path.
+const workspaceFileQueues = new Map();
+function queueWorkspaceFile(workspacePath, fn) {
+  const prev = workspaceFileQueues.get(workspacePath) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  workspaceFileQueues.set(workspacePath, next.then(() => {}, () => {}));
+  return next;
+}
+
+async function writeWorkspaceFileRaw(workspacePath, data) {
+  const file = workspaceFilePath(workspacePath);
+  const tmp = `${file}.tmp`;
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
+  await fs.rename(tmp, file);
+}
+
+async function readWorkspaceFileRaw(workspacePath) {
+  try {
+    const raw = await fs.readFile(workspaceFilePath(workspacePath), 'utf8');
+    return normalizeWorkspaceData(JSON.parse(raw));
+  } catch {
+    // No unified file yet — migrate a legacy bookmarks.json into it if present,
+    // then remove the legacy file. Otherwise return defaults.
+    try {
+      const raw = await fs.readFile(legacyBookmarksPath(workspacePath), 'utf8');
+      const parsed = JSON.parse(raw);
+      const data = normalizeWorkspaceData({ bookmarks: Array.isArray(parsed?.names) ? parsed.names : [] });
+      await writeWorkspaceFileRaw(workspacePath, data);
+      await fs.rm(legacyBookmarksPath(workspacePath), { force: true });
+      return data;
+    } catch {
+      return workspaceDefaults();
+    }
+  }
+}
+
+ipcMain.handle('workspaceSettings:read', async (_evt, workspacePath) => {
+  if (!workspacePath) return workspaceDefaults();
+  return queueWorkspaceFile(workspacePath, () => readWorkspaceFileRaw(workspacePath));
 });
 
-// The renderer passes the name list under the legacy `paths` preload param —
-// they are `.md` basenames now.
+// Merge `patch` (a partial of the workspace data) into the current file and
+// write the whole thing back. Returns the merged object.
+ipcMain.handle('workspaceSettings:update', async (_evt, { workspacePath, patch }) => {
+  if (!workspacePath) return workspaceDefaults();
+  return queueWorkspaceFile(workspacePath, async () => {
+    const cur = await readWorkspaceFileRaw(workspacePath);
+    const next = normalizeWorkspaceData({ ...cur, ...(patch || {}) });
+    await writeWorkspaceFileRaw(workspacePath, next);
+    return next;
+  });
+});
+
+// Bookmarks live in the `bookmarks` array of the unified file. These thin
+// handlers keep the renderer's existing bookmarks API working.
+ipcMain.handle('bookmarks:read', async (_evt, workspacePath) => {
+  if (!workspacePath) return [];
+  const data = await queueWorkspaceFile(workspacePath, () => readWorkspaceFileRaw(workspacePath));
+  return Array.from(new Set(data.bookmarks));
+});
+
 ipcMain.handle('bookmarks:write', async (_evt, { workspacePath, paths: names }) => {
   if (!workspacePath) return;
-  const file = bookmarksPath(workspacePath);
-  const tmp = `${file}.tmp`;
-  const body = JSON.stringify({ version: 1, names: Array.isArray(names) ? names : [] }, null, 2);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(tmp, body, 'utf8');
-  await fs.rename(tmp, file);
+  await queueWorkspaceFile(workspacePath, async () => {
+    const cur = await readWorkspaceFileRaw(workspacePath);
+    cur.bookmarks = Array.isArray(names) ? Array.from(new Set(names.filter((n) => typeof n === 'string' && n.length > 0))) : [];
+    await writeWorkspaceFileRaw(workspacePath, cur);
+  });
 });
 
 ipcMain.handle('fs:moveItem', async (_evt, { srcPath, destDir }) => {
@@ -946,7 +1001,7 @@ ipcMain.handle('settings:read', async () => {
 });
 
 ipcMain.handle('settings:write', async (_evt, obj) => {
-  await swtime('settings:write', () => writeSettings(obj));
+  await writeSettings(obj);
 });
 
 // Mint a short-lived AssemblyAI streaming token. The long-lived API key sits
@@ -1233,7 +1288,10 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
     const settings = await readSettings();
     const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
     const workspacePath = ws?.path ?? null;
-    const { provider, model, apiKey, baseUrl, contextWindow, skills, systemPrompt } = settings.codingAgent ?? {};
+    const { provider, model, apiKey, baseUrl, contextWindow, systemPrompt, builtinSkills } = settings.codingAgent ?? {};
+    // Per-workspace built-in override lives in the workspace file; it wins over
+    // the global default above.
+    const wsData = workspacePath ? await readWorkspaceFileRaw(workspacePath) : null;
 
     await agentSend(
       {
@@ -1248,8 +1306,8 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
         systemPrompt,
         userDataDir: app.getPath('userData'),
         builtinDir: builtinSkillsDir(),
-        skillsState: skills,
-        workspaceId: ws?.id ?? null,
+        globalBuiltinSkills: builtinSkills ?? {},
+        wsBuiltinSkills: wsData?.builtinSkills ?? {},
       },
       (event) => emit('agent:event', event),
     );
@@ -1258,32 +1316,42 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
   }
 });
 
-// ---- Skills ----
-ipcMain.handle('skills:list', async () => {
-  return listInstalled(app.getPath('userData'), builtinSkillsDir());
+// ---- Skills (built-in = bundled, app-global; uploaded = per-workspace) ----
+// `skills:list` returns both sets for the given workspace; built-in toggle state
+// is read by the renderer from the workspace file.
+ipcMain.handle('skills:list', async (_evt, workspacePath) => {
+  const [builtin, workspace] = await Promise.all([
+    listBuiltinSkills(builtinSkillsDir()),
+    listWorkspaceSkills(workspacePath),
+  ]);
+  return { builtin, workspace };
 });
 
-ipcMain.handle('skills:libraryDir', async () => {
-  return libraryDirFor(app.getPath('userData'));
+// The active workspace's uploaded-skills folder (for a "Reveal" button).
+ipcMain.handle('skills:libraryDir', async (_evt, workspacePath) => {
+  return workspacePath ? workspaceSkillsDir(workspacePath) : null;
 });
 
-ipcMain.handle('skills:importPicker', async () => {
+ipcMain.handle('skills:importPicker', async (_evt, workspacePath) => {
+  if (!workspacePath) throw new Error('Open a workspace first.');
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory'],
     title: 'Choose a skill folder (must contain SKILL.md)',
   });
   if (result.canceled || result.filePaths.length === 0) return null;
-  return importFromPath(app.getPath('userData'), result.filePaths[0]);
+  return importSkillToWorkspace(workspacePath, result.filePaths[0]);
 });
 
-ipcMain.handle('skills:importFromPath', async (_evt, srcPath) => {
+ipcMain.handle('skills:importFromPath', async (_evt, { workspacePath, srcPath }) => {
+  if (!workspacePath) throw new Error('Open a workspace first.');
   if (typeof srcPath !== 'string' || !srcPath) throw new Error('No path provided.');
-  return importFromPath(app.getPath('userData'), srcPath);
+  return importSkillToWorkspace(workspacePath, srcPath);
 });
 
-ipcMain.handle('skills:remove', async (_evt, folderName) => {
+ipcMain.handle('skills:remove', async (_evt, { workspacePath, folderName }) => {
+  if (!workspacePath) throw new Error('Open a workspace first.');
   if (typeof folderName !== 'string' || !folderName) throw new Error('No skill name provided.');
-  return removeSkill(app.getPath('userData'), folderName);
+  return removeWorkspaceSkill(workspacePath, folderName);
 });
 
 ipcMain.handle('agent:abort', async () => {
@@ -1611,14 +1679,13 @@ async function stopWatcher() {
 }
 
 ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
-  await swtime('watchStart:stopWatcher', () => stopWatcher());
+  await stopWatcher();
   const win = BrowserWindow.fromWebContents(evt.sender);
   if (!win) return;
   watcherWindowId = win.id;
   watcherRootDir = dirPath;
   setupCorrelator();
-  await swtime('watchStart:seedCorrelator', () => seedCorrelator(dirPath));
-  const __cwStart = Date.now();
+  await seedCorrelator(dirPath);
   currentWatcher = chokidar.watch(dirPath, {
     ignored: (p) => {
       // Skip if any path segment within the watched root starts with '.'
@@ -1631,10 +1698,6 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     persistent: true,
   });
-  fs.appendFile('/tmp/sw-timing.log', `${new Date().toISOString()} watchStart:chokidar.watch(sync-construct) ${Date.now() - __cwStart}ms\n`).catch(() => {});
-  currentWatcher.on('ready', () => {
-    fs.appendFile('/tmp/sw-timing.log', `${new Date().toISOString()} watchStart:chokidar-ready(scan) ${Date.now() - __cwStart}ms\n`).catch(() => {});
-  });
   currentWatcher
     .on('add', onChokidarAdd)
     .on('change', onChokidarChange)
@@ -1643,9 +1706,9 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
     .on('unlinkDir', () => { pendingTreeOnly = true; scheduleFlush(); });
 
   // The main watcher ignores everything under `.shockwave/`, so changes to the
-  // bookmarks file (sync pull, another machine, a hand edit) never reach the
+  // workspace file (sync pull, another machine, a hand edit) never reach the
   // renderer. Watch that one file on its own and tell the renderer to re-read.
-  bookmarksWatcher = chokidar.watch(bookmarksPath(dirPath), {
+  bookmarksWatcher = chokidar.watch(workspaceFilePath(dirPath), {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     persistent: true,
@@ -1745,18 +1808,6 @@ installOpenFileBridge(async (relPath) => {
     console.warn('[cli-tools] shim setup failed:', err?.message ?? err);
   }
 })();
-
-// TEMP: main event-loop heartbeat. Continuous logs = loop alive (starvation);
-// a gap = loop synchronously blocked.
-{
-  let __hbLast = Date.now();
-  setInterval(() => {
-    const now = Date.now();
-    const drift = now - __hbLast - 250;
-    if (drift > 200) fs.appendFile('/tmp/sw-timing.log', `${new Date(now).toISOString()} MAIN-LOOP-STALL drift=${drift}ms\n`).catch(() => {});
-    __hbLast = now;
-  }, 250);
-}
 
 app.whenReady().then(async () => {
   protocol.handle('app', async (req) => {

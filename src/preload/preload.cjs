@@ -195,19 +195,28 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('fs:changed', listener);
   },
 
-  // ---- Bookmarks (per-workspace, persisted to .shockwave/bookmarks.json) -
+  // ---- Bookmarks (per-workspace, persisted in .shockwave/workspace.json) -
 
   bookmarks: {
-    /** @param {string} workspacePath @returns {Promise<{ version: number, paths: string[] }>} Workspace-relative POSIX paths. */
+    /** @param {string} workspacePath @returns {Promise<string[]>} `.md` basenames. */
     read: (workspacePath) => ipcRenderer.invoke('bookmarks:read', workspacePath),
-    /** @param {string} workspacePath @param {string[]} paths Workspace-relative POSIX paths. @returns {Promise<void>} */
+    /** @param {string} workspacePath @param {string[]} paths `.md` basenames. @returns {Promise<void>} */
     write: (workspacePath, paths) => ipcRenderer.invoke('bookmarks:write', { workspacePath, paths }),
-    /** Fires when bookmarks.json changes on disk (sync, another machine, hand edit). @param {() => void} cb @returns {() => void} unsubscribe */
+    /** Fires when the workspace file changes on disk (sync, another machine, hand edit). @param {() => void} cb @returns {() => void} unsubscribe */
     onChanged: (cb) => {
       const listener = () => cb();
       ipcRenderer.on('bookmarks:changed', listener);
       return () => ipcRenderer.removeListener('bookmarks:changed', listener);
     },
+  },
+
+  // ---- Per-workspace settings (.shockwave/workspace.json) ----------------
+
+  workspaceSettings: {
+    /** @param {string} workspacePath @returns {Promise<object>} The full workspace data object. */
+    read: (workspacePath) => ipcRenderer.invoke('workspaceSettings:read', workspacePath),
+    /** @param {string} workspacePath @param {object} patch Partial workspace data to merge. @returns {Promise<object>} The merged object. */
+    update: (workspacePath, patch) => ipcRenderer.invoke('workspaceSettings:update', { workspacePath, patch }),
   },
 
   // ---- Settings -----------------------------------------------------------
@@ -236,18 +245,18 @@ contextBridge.exposeInMainWorld('api', {
   // ---- Skill library ------------------------------------------------------
 
   skills: {
-    /** @returns {Promise<InstalledSkill[]>} Installed skills under <userData>/pi-agent/skill-library. */
-    list: () => ipcRenderer.invoke('skills:list'),
-    /** @returns {Promise<string>} Absolute path of the skill library directory. */
-    libraryDir: () => ipcRenderer.invoke('skills:libraryDir'),
-    /** Open a folder picker and import the chosen folder as a skill.
-     *  @returns {Promise<string|null>} Destination folder path, or null if cancelled. */
-    importPicker: () => ipcRenderer.invoke('skills:importPicker'),
-    /** Import a folder as a skill (must contain SKILL.md).
-     *  @param {string} srcPath @returns {Promise<string>} Destination folder path. */
-    importFromPath: (srcPath) => ipcRenderer.invoke('skills:importFromPath', srcPath),
-    /** Remove an installed skill folder. @param {string} folderName @returns {Promise<void>} */
-    remove: (folderName) => ipcRenderer.invoke('skills:remove', folderName),
+    /** @param {string} workspacePath @returns {Promise<{ builtin: InstalledSkill[], workspace: InstalledSkill[] }>} Built-in (bundled) + the workspace's uploaded skills. */
+    list: (workspacePath) => ipcRenderer.invoke('skills:list', workspacePath),
+    /** @param {string} workspacePath @returns {Promise<string|null>} Absolute path of the workspace's `.shockwave/skills` dir. */
+    libraryDir: (workspacePath) => ipcRenderer.invoke('skills:libraryDir', workspacePath),
+    /** Open a folder picker and import the chosen folder into the workspace's skills.
+     *  @param {string} workspacePath @returns {Promise<string|null>} Destination folder path, or null if cancelled. */
+    importPicker: (workspacePath) => ipcRenderer.invoke('skills:importPicker', workspacePath),
+    /** Import a folder as a workspace skill (must contain SKILL.md).
+     *  @param {string} workspacePath @param {string} srcPath @returns {Promise<string>} Destination folder path. */
+    importFromPath: (workspacePath, srcPath) => ipcRenderer.invoke('skills:importFromPath', { workspacePath, srcPath }),
+    /** Remove a workspace skill folder. @param {string} workspacePath @param {string} folderName @returns {Promise<void>} */
+    remove: (workspacePath, folderName) => ipcRenderer.invoke('skills:remove', { workspacePath, folderName }),
     /** Resolves the absolute disk path of a drag-dropped File (via Electron's
      *  webUtils.getPathForFile). Returns '' for File objects not backed by disk.
      *  @param {File} file @returns {string} */

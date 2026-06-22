@@ -13,16 +13,16 @@ export {
 
 export const SETTINGS_SECTIONS = Object.freeze({
   APPEARANCE: 'appearance',
-  WORKSPACES: 'workspaces',
-  DAILY_NOTE: 'daily-note',
-  TEMPLATES: 'templates',
   SYNC: 'sync',
   TRANSCRIPTION: 'transcription',
   UPDATES: 'updates',
+  // Workspace group — Workspaces list + per-(active-)workspace config.
+  WORKSPACES: 'workspaces',
+  DAILY_NOTE: 'daily-note',
+  TEMPLATES: 'templates',
+  WORKSPACE_SKILLS: 'workspace-skills',
   AGENT_LLM: 'agent-llm',
   AGENT_BUILTIN_SKILLS: 'agent-builtin-skills',
-  AGENT_SKILLS: 'agent-skills',
-  AGENT_WORKSPACE_SKILLS: 'agent-workspace-skills',
   AGENT_SECRETS: 'agent-secrets',
 });
 

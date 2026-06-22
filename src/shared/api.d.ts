@@ -6,7 +6,7 @@
 // sync with the preload: add a method there → add it here.
 
 import type { FileAction, FolderAction, EditorAction } from './constants';
-import type { Settings } from './settings';
+import type { Settings, WorkspaceData } from './settings';
 
 /** A node in the workspace file tree. Folders have `children`; files don't. */
 export interface TreeNode {
@@ -69,8 +69,8 @@ export interface InstalledSkill {
   name: string;
   description: string;
   hasSkillMd?: boolean;
-  /** 'builtin' = bundled with the app; 'global' = user-imported. */
-  source?: 'builtin' | 'global';
+  /** 'builtin' = bundled with the app; 'workspace' = uploaded into the workspace. */
+  source?: 'builtin' | 'workspace';
   /** Agent-secret names the skill declares (SKILL.md `required-secrets`). */
   requiredSecrets?: string[];
 }
@@ -146,8 +146,14 @@ export interface ShockwaveApi {
   bookmarks: {
     read(workspacePath: string): Promise<string[]>;
     write(workspacePath: string, paths: string[]): Promise<void>;
-    /** Fires when bookmarks.json changes on disk (sync, another machine, hand edit). */
+    /** Fires when the workspace file changes on disk (sync, another machine, hand edit). */
     onChanged(cb: () => void): Unsubscribe;
+  };
+
+  /** Per-workspace settings persisted to `<workspace>/.shockwave/workspace.json`. */
+  workspaceSettings: {
+    read(workspacePath: string): Promise<WorkspaceData>;
+    update(workspacePath: string, patch: Partial<WorkspaceData>): Promise<WorkspaceData>;
   };
 
   settings: {
@@ -161,11 +167,11 @@ export interface ShockwaveApi {
   };
 
   skills: {
-    list(): Promise<InstalledSkill[]>;
-    libraryDir(): Promise<string>;
-    importPicker(): Promise<string | null>;
-    importFromPath(srcPath: string): Promise<string>;
-    remove(folderName: string): Promise<void>;
+    list(workspacePath: string | null): Promise<{ builtin: InstalledSkill[]; workspace: InstalledSkill[] }>;
+    libraryDir(workspacePath: string | null): Promise<string | null>;
+    importPicker(workspacePath: string | null): Promise<string | null>;
+    importFromPath(workspacePath: string | null, srcPath: string): Promise<string>;
+    remove(workspacePath: string | null, folderName: string): Promise<void>;
     pathForFile(file: File): string;
   };
 

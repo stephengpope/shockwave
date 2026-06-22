@@ -217,12 +217,12 @@ export default function App() {
 
   const {
     themeMode, hideLineNumbers, dailyNotesInBookmarks, bookmarkFilterActive,
-    dailyNote, dailyNoteRef, templates, treeSortOrder,
+    dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, sync, syncRef,
-    saveStatus, persistSettings, hydrateSettings,
+    saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onDailyNotesInBookmarksChange,
-    onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onTreeSortOrderChange,
-    onCodingAgentChange, onAgentSecretsChange, onTranscriptionChange,
+    onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
+    onCodingAgentChange, onGlobalBuiltinSkillToggle, onAgentSecretsChange, onTranscriptionChange,
     onSyncChange, onSyncDisabledChange,
   } = useSettings({ activeWorkspacePath: workspacePath });
 
@@ -621,15 +621,17 @@ export default function App() {
     setGraphMode(false);
     setSaveState(SAVE_STATES.SAVED);
     resetBookmarks();
-    const [treeData, files, bookmarkNames] = await Promise.all([
+    const [treeData, files, wsData] = await Promise.all([
       window.api.readTree(workspace.path),
       window.api.readAllMarkdown(workspace.path),
-      window.api.bookmarks.read(workspace.path),
+      window.api.workspaceSettings.read(workspace.path),
     ]);
     setTree(treeData);
     linkIndex.rebuild(files);
     // Seed the bookmark set from disk, pruning names whose .md file is gone.
-    seedBookmarks(bookmarkNames, new Set(files.map((f) => bookmarkKey(f.path))));
+    seedBookmarks(wsData.bookmarks, new Set(files.map((f) => bookmarkKey(f.path))));
+    // Seed this workspace's daily-note + templates config from its own file.
+    loadWorkspaceData(wsData);
     await window.api.watchStart(workspace.path);
     // Kick the sync engine. It self-checks whether the workspace has an
     // origin and what the PAT is, so we don't gate on those here. Status
@@ -638,7 +640,7 @@ export default function App() {
       workspacePath: workspace.path,
       intervalSeconds: syncRef.current?.pullIntervalSeconds,
     }).catch(() => {});
-  }, [writeNow, resetTabs, linkIndex]);
+  }, [writeNow, resetTabs, linkIndex, loadWorkspaceData]);
 
   const switchWorkspace = useCallback(async (id) => {
     const ws = workspaces.find((w) => w.id === id);
@@ -1868,6 +1870,10 @@ export default function App() {
           templates={templates}
           onTemplatesChange={onTemplatesChange}
           templateOptions={templateOptions}
+          builtinSkills={builtinSkills}
+          onBuiltinSkillToggle={onBuiltinSkillToggle}
+          globalBuiltinSkills={codingAgentSettings.builtinSkills ?? {}}
+          onGlobalBuiltinSkillToggle={onGlobalBuiltinSkillToggle}
           tree={tree}
           workspacePath={workspacePath}
           codingAgent={codingAgentSettings}

@@ -35,14 +35,9 @@ export interface CodingAgentSettings {
   // unused there. Empty/undefined → 128000 default.
   contextWindow?: number;
   systemPrompt: string;
-  skills: {
-    // Bundled built-in skills. Absent key ⇒ enabled (default-on). Read-only set.
-    builtin: Record<string, SkillState>;
-    // User-imported global skills. Absent key ⇒ disabled.
-    global: Record<string, SkillState>;
-    // Per-workspace overrides over either scope, keyed by folder name.
-    workspaces: Record<string, Record<string, WorkspaceSkillState>>;
-  };
+  // GLOBAL built-in skill on/off, per folderName. Absent ⇒ enabled (default-on).
+  // A workspace can override this in its own `WorkspaceData.builtinSkills`.
+  builtinSkills: Record<string, SkillState>;
 }
 
 export interface AgentSecret {
@@ -61,16 +56,31 @@ export interface WindowBounds {
   maximized: boolean;
 }
 
+// Per-workspace data persisted to `<workspace>/.shockwave/workspace.json`.
+// Everything scoped to a single workspace lives here (not in global settings):
+// bookmarks, daily-note config, templates config, and built-in skill toggles.
+export interface WorkspaceData {
+  schemaVersion: number;
+  // `.md` basenames (no folder, no extension), lowercased.
+  bookmarks: string[];
+  // `templatePath` is the workspace-relative path of the template seeded into a
+  // newly-created daily note ('' = none).
+  dailyNote: { format: string; folder: string; templatePath: string };
+  // `folder` is the workspace-relative folder whose `.md` files are offered as
+  // templates ('' = templates disabled / none configured).
+  templates: { folder: string };
+  // Per-workspace OVERRIDE of a built-in skill's on/off, by folderName. Absent
+  // key ⇒ inherit the global `CodingAgentSettings.builtinSkills` default.
+  builtinSkills: Record<string, SkillState>;
+}
+
 export interface Settings {
   workspaces: WorkspaceEntry[];
   activeWorkspaceId: string | null;
   appearance: { themeMode: ThemeMode; hideLineNumbers: boolean; dailyNotesInBookmarks: boolean };
-  // `templatePath` is the workspace-relative path of the template seeded into a
-  // newly-created daily note ('' = none).
-  dailyNote: { format: string; folder: string; templatePath: string };
-  // Template files: `folder` is the workspace-relative folder whose `.md` files
-  // are offered as templates ('' = templates disabled / none configured).
-  templates: { folder: string };
+  // NOTE: `dailyNote` and `templates` are no longer global — they're per-
+  // workspace, stored in `<workspace>/.shockwave/workspace.json` (see
+  // `WorkspaceData` below), loaded on workspace switch.
   codingAgent: CodingAgentSettings;
   agentSecrets: AgentSecret[];
   transcription: { provider: string; apiKey: string };

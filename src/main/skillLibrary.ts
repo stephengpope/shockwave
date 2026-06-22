@@ -1,10 +1,14 @@
-// Skill library: shockwave-managed folder of pi skills.
+// Skill sources for the pi coding agent.
 //
-// Layout: <userData>/pi-agent/skill-library/<skill-name>/SKILL.md
+// Two kinds of skill, both fed to pi as explicit paths at session boot:
+//   • Built-in — bundled with the app (read from `builtinDir`). Always present;
+//     enabled/disabled PER WORKSPACE via the workspace's `.shockwave/workspace.json`
+//     `builtinSkills` map (absent ⇒ enabled).
+//   • Uploaded — user-dropped folders under `<workspace>/.shockwave/skills/`.
+//     Per-workspace, git-synced with the workspace. Presence ⇒ enabled.
 //
-// Pi never auto-discovers this directory. At session boot we compute the
-// effective list of enabled skills (global + workspace overrides) and write
-// it as `skills: []` to <userData>/pi-agent/settings.json, which pi reads.
+// Pi ALSO auto-discovers `<workspace>/.agents/skills` (and `~/.agents/skills`)
+// on its own — those are the agent's own scratch skills and need no wiring here.
 
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -13,11 +17,10 @@ export function agentDirFor(userDataDir) {
   return path.join(userDataDir, 'pi-agent');
 }
 
-// User-managed ("global") skills live here. Renamed from 'skill-library' →
-// 'global-skills' to mirror the bundled 'built-in-skills' scope. No migration:
-// any pre-rename data under the old name is simply not read.
-export function libraryDirFor(userDataDir) {
-  return path.join(agentDirFor(userDataDir), 'global-skills');
+// User-uploaded skills live inside each workspace, under our `.shockwave/`
+// config area: `<workspace>/.shockwave/skills/<skill>/SKILL.md`.
+export function workspaceSkillsDir(workspacePath) {
+  return path.join(workspacePath, '.shockwave', 'skills');
 }
 
 function piSettingsPath(userDataDir) {
@@ -25,23 +28,39 @@ function piSettingsPath(userDataDir) {
 }
 
 export async function ensureDirs(userDataDir) {
-  await fs.mkdir(libraryDirFor(userDataDir), { recursive: true });
+  await fs.mkdir(agentDirFor(userDataDir), { recursive: true });
 }
 
-// Pull `name` and `description` out of `--- … ---` YAML frontmatter.
-// Pi already validates these — we just need them to display in the UI.
+// Pull `name` and `description` out of `--- … ---` YAML frontmatter. Handles
+// inline values and block scalars (`description: |` / `: >` with the text on the
+// following indented lines) — common in SKILL.md files.
 function parseFrontmatter(text): any {
   const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
   if (!m) return {};
+  const lines = m[1].split('\n');
   const out = {};
-  for (const line of m[1].split('\n')) {
-    const kv = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
     if (!kv) continue;
+    const key = kv[1];
     let val = kv[2].trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+    if (/^[|>][+-]?$/.test(val)) {
+      // Block scalar: gather the following more-indented lines. `>` folds onto
+      // one line (spaces); `|` keeps newlines.
+      const fold = val[0] === '>';
+      const collected: string[] = [];
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        if (lines[j].trim() === '') { collected.push(''); continue; }
+        if (/^\s/.test(lines[j])) collected.push(lines[j].replace(/^\s+/, ''));
+        else break;
+      }
+      i = j - 1;
+      val = collected.join(fold ? ' ' : '\n').trim();
+    } else if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
       val = val.slice(1, -1);
     }
-    out[kv[1]] = val;
+    out[key] = val;
   }
   return out;
 }
@@ -56,8 +75,8 @@ async function readSkillFolder(folderPath, source) {
   }
   const fm = parseFrontmatter(text);
   // `required-secrets` (comma-separated) declares agent-secret names the skill
-  // needs. Shockwave auto-provisions an empty slot per name when the skill is
-  // enabled (see ensureBuiltinSecretSlots in main).
+  // needs. Shockwave auto-provisions an empty slot per name (see
+  // ensureBuiltinSecretSlots in main).
   const requiredSecrets = String(fm['required-secrets'] || '')
     .split(',').map((s) => s.trim()).filter(Boolean);
   return {
@@ -72,8 +91,7 @@ async function readSkillFolder(folderPath, source) {
 }
 
 // Scan one skill dir; one entry per direct child folder, tagged with `source`.
-// Missing dir → []. Folders without SKILL.md surface with hasSkillMd:false so
-// the UI can flag them (only for the user-writable 'global' scope).
+// Missing dir → []. Folders without SKILL.md surface with hasSkillMd:false.
 async function scanSkillDir(dir, source) {
   let entries;
   try {
@@ -93,21 +111,25 @@ async function scanSkillDir(dir, source) {
   return out;
 }
 
-// Read both skill scopes: bundled built-ins (read from `builtinDir`, omit for
-// none) and user-managed global skills (under userData). Each entry carries
-// `source: 'builtin' | 'global'`. Sorted by display name.
-export async function listInstalled(userDataDir, builtinDir?) {
-  await ensureDirs(userDataDir);
-  const out: any[] = [];
-  if (builtinDir) out.push(...await scanSkillDir(builtinDir, 'builtin'));
-  out.push(...await scanSkillDir(libraryDirFor(userDataDir), 'global'));
+// Bundled built-in skills (shipped with the app).
+export async function listBuiltinSkills(builtinDir?) {
+  const out = builtinDir ? await scanSkillDir(builtinDir, 'builtin') : [];
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
 
-// Copy a folder from `srcPath` into the skill library. Validates that a
-// SKILL.md exists at the root and rejects on folder-name collision.
-export async function importFromPath(userDataDir, srcPath) {
+// User-uploaded skills inside a workspace's `.shockwave/skills/`.
+export async function listWorkspaceSkills(workspacePath?) {
+  if (!workspacePath) return [];
+  const out = await scanSkillDir(workspaceSkillsDir(workspacePath), 'workspace');
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+// Copy a skill folder into the active workspace's `.shockwave/skills/`.
+// Validates a root SKILL.md and rejects name collisions.
+export async function importSkillToWorkspace(workspacePath, srcPath) {
+  if (!workspacePath) throw new Error('No workspace open.');
   let stat;
   try { stat = await fs.stat(srcPath); }
   catch { throw new Error(`Source folder not found: ${srcPath}`); }
@@ -117,62 +139,50 @@ export async function importFromPath(userDataDir, srcPath) {
   try { await fs.access(skillFile); }
   catch { throw new Error(`"${path.basename(srcPath)}" has no SKILL.md at its root.`); }
 
-  await ensureDirs(userDataDir);
+  const dir = workspaceSkillsDir(workspacePath);
+  await fs.mkdir(dir, { recursive: true });
   const destName = path.basename(srcPath);
-  const destPath = path.join(libraryDirFor(userDataDir), destName);
+  const destPath = path.join(dir, destName);
   try {
     await fs.access(destPath);
-    throw new Error(`A skill named "${destName}" already exists. Delete it first to replace.`);
+    throw new Error(`A skill named "${destName}" already exists in this workspace. Delete it first to replace.`);
   } catch (err: any) {
     if (err.code !== 'ENOENT') throw err;
   }
-
   await fs.cp(srcPath, destPath, { recursive: true, errorOnExist: true });
   return destPath;
 }
 
-// Delete the skill folder. Caller is responsible for clearing the skill's
-// entries out of `global[name]` and `workspaces[*][name]` in settings.
-export async function removeSkill(userDataDir, folderName) {
-  const dir = path.join(libraryDirFor(userDataDir), folderName);
-  await fs.rm(dir, { recursive: true, force: true });
+export async function removeWorkspaceSkill(workspacePath, folderName) {
+  if (!workspacePath) return;
+  await fs.rm(path.join(workspaceSkillsDir(workspacePath), folderName), { recursive: true, force: true });
 }
 
-// Compute the absolute paths pi should load for a given workspace.
-//   builtin[name]           = 'enabled' | 'disabled'   (absent ⇒ enabled — default-on)
-//   global[name]            = 'enabled' | 'disabled'   (absent ⇒ disabled)
-//   workspaces[wsId][name]  = 'inherit' | 'enabled' | 'disabled'
-// Workspace override wins; 'inherit'/missing falls back to the per-scope default.
-// Cascade: if a built-in and a global skill share a folder name and both resolve
-// on, the GLOBAL one wins (lets a user override a built-in with their own upload).
-export function computeEffectivePaths(installed, skillsState, workspaceId) {
-  const globalState = skillsState?.global ?? {};
-  const builtinState = skillsState?.builtin ?? {};
-  const wsState = (workspaceId && skillsState?.workspaces?.[workspaceId]) || {};
+// The absolute skill-folder paths pi should load for a workspace:
+//   • each built-in that resolves ON — the workspace override wins, else the
+//     global default, else enabled (default-on).
+//   • every uploaded workspace skill
+// Uploaded skills win a folder-name collision (a user copy can shadow a built-in).
+export function computeEffectivePaths(builtins, globalToggles, wsToggles, workspaceSkills) {
+  const g = globalToggles ?? {};
+  const w = wsToggles ?? {};
   const byName = new Map<string, any>(); // folderName(lower) → { path, source }
-  for (const skill of installed) {
-    if (!skill.hasSkillMd) continue;
-    const isBuiltin = skill.source === 'builtin';
-    const wsValue = wsState[skill.folderName];
-    let on;
-    if (wsValue === 'enabled') on = true;
-    else if (wsValue === 'disabled') on = false;
-    else if (isBuiltin) on = builtinState[skill.folderName] !== 'disabled'; // default-on
-    else on = globalState[skill.folderName] === 'enabled';
-    if (!on) continue;
-    const key = skill.folderName.toLowerCase();
-    const existing = byName.get(key);
-    if (!existing || (existing.source === 'builtin' && !isBuiltin)) {
-      byName.set(key, { path: skill.path, source: skill.source });
-    }
+  for (const sk of builtins) {
+    if (!sk.hasSkillMd) continue;
+    const state = w[sk.folderName] ?? g[sk.folderName]; // ws override wins, else global
+    if (state === 'disabled') continue; // absent ⇒ enabled (default-on)
+    byName.set(sk.folderName.toLowerCase(), { path: sk.path, source: 'builtin' });
+  }
+  for (const sk of workspaceSkills) {
+    if (!sk.hasSkillMd) continue;
+    byName.set(sk.folderName.toLowerCase(), { path: sk.path, source: 'workspace' });
   }
   return [...byName.values()].map((v) => v.path);
 }
 
 // Write `skills: []` and `extensions: []` to <agentDir>/settings.json so pi
 // loads exactly that set on next session boot. Merges into any existing pi
-// settings file to preserve anything pi has put there itself. Either field
-// may be omitted; the existing value is kept untouched.
+// settings file. Either field may be omitted; the existing value is kept.
 export async function writePiSettings(userDataDir, { skills, extensions }: any = {}) {
   await ensureDirs(userDataDir);
   const file = piSettingsPath(userDataDir);

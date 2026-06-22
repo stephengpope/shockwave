@@ -1,10 +1,11 @@
 import { useState, useRef, useCallback } from 'react';
 import { useSyncRef } from './useSyncRef';
 import { THEME_MODES, VIEW_MODES, TREE_SORT_ORDERS, DEFAULT_PROVIDER_SLUG } from '../constants';
-import type { Settings, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret } from '../../shared/settings';
+import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret } from '../../shared/settings';
 
-type DailyNote = Settings['dailyNote'];
-type Templates = Settings['templates'];
+// dailyNote + templates moved to the per-workspace WorkspaceData.
+type DailyNote = WorkspaceData['dailyNote'];
+type Templates = WorkspaceData['templates'];
 type Transcription = Settings['transcription'];
 type SyncSettings = Settings['sync'];
 
@@ -14,9 +15,7 @@ const DEFAULT_CANONICAL: Settings = {
   workspaces: [],
   activeWorkspaceId: null,
   appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, dailyNotesInBookmarks: false },
-  dailyNote: { format: 'YYYY-MM-DD', folder: '', templatePath: '' },
-  templates: { folder: '' },
-  codingAgent: { provider: DEFAULT_PROVIDER_SLUG, model: 'claude-sonnet-4-5', apiKey: '', baseUrl: '', systemPrompt: '', skills: { builtin: {}, global: {}, workspaces: {} } },
+  codingAgent: { provider: DEFAULT_PROVIDER_SLUG, model: 'claude-sonnet-4-5', apiKey: '', baseUrl: '', systemPrompt: '', builtinSkills: {} },
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
   sync: { pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] },
@@ -50,6 +49,9 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
   const [dailyNote, setDailyNote] = useState<DailyNote>({ format: 'YYYY-MM-DD', folder: '', templatePath: '' });
   const dailyNoteRef = useSyncRef(dailyNote);
   const [templates, setTemplates] = useState<Templates>({ folder: '' });
+  // Per-workspace built-in skill toggles: folderName → 'enabled' | 'disabled'.
+  // Absent ⇒ enabled (default-on). Loaded with the workspace; written to its file.
+  const [builtinSkills, setBuiltinSkills] = useState<Record<string, 'enabled' | 'disabled'>>({});
   const [treeSortOrder, setTreeSortOrder] = useState<TreeSortOrder>(TREE_SORT_ORDERS.NAME_ASC);
   const [codingAgentSettings, setCodingAgentSettings] = useState<CodingAgentSettings>(DEFAULT_CANONICAL.codingAgent);
   const [agentSecrets, setAgentSecrets] = useState<AgentSecret[]>([]);
@@ -80,8 +82,6 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
         workspaces: s.workspaces,
         activeWorkspaceId: s.activeWorkspaceId,
         appearance: { themeMode: s.appearance.themeMode, hideLineNumbers: s.appearance.hideLineNumbers, dailyNotesInBookmarks: s.appearance.dailyNotesInBookmarks },
-        dailyNote: s.dailyNote,
-        templates: s.templates,
         treeSortOrder: s.treeSortOrder,
         bookmarkFilterActive: s.bookmarkFilterActive,
         codingAgent: s.codingAgent,
@@ -132,16 +132,45 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     persistSettings({ bookmarkFilterActive: next });
   }, [persistSettings]);
 
+  // Daily-note + templates are per-workspace now: they live in the active
+  // workspace's `.shockwave/workspace.json`, not global settings.json. Writes
+  // go through workspaceSettings.update (active workspace only); loads happen on
+  // workspace switch via loadWorkspaceData().
   const onDailyNoteChange = useCallback(async (next: DailyNote) => {
     setDailyNote(next);
     dailyNoteRef.current = next;
-    await persistSettings({ dailyNote: next });
-  }, [persistSettings, dailyNoteRef]);
+    if (activeWorkspacePath) await window.api.workspaceSettings.update(activeWorkspacePath, { dailyNote: next });
+  }, [dailyNoteRef, activeWorkspacePath]);
 
   const onTemplatesChange = useCallback(async (next: Templates) => {
     setTemplates(next);
-    await persistSettings({ templates: next });
-  }, [persistSettings]);
+    if (activeWorkspacePath) await window.api.workspaceSettings.update(activeWorkspacePath, { templates: next });
+  }, [activeWorkspacePath]);
+
+  // Seed daily-note + templates from a loaded workspace-data object (called by
+  // App's loadWorkspace). Resets to defaults when data is null.
+  const loadWorkspaceData = useCallback((data: any) => {
+    const dn: DailyNote = {
+      format: data?.dailyNote?.format || 'YYYY-MM-DD',
+      folder: data?.dailyNote?.folder ?? '',
+      templatePath: data?.dailyNote?.templatePath ?? '',
+    };
+    const tpl: Templates = { folder: data?.templates?.folder ?? '' };
+    setDailyNote(dn);
+    dailyNoteRef.current = dn;
+    setTemplates(tpl);
+    setBuiltinSkills(data?.builtinSkills && typeof data.builtinSkills === 'object' ? data.builtinSkills : {});
+  }, [dailyNoteRef]);
+
+  // Per-workspace OVERRIDE of a built-in's on/off (wins over the global default).
+  // Writes an explicit value so it sticks regardless of the global setting.
+  const onBuiltinSkillToggle = useCallback(async (folderName: string, enabled: boolean) => {
+    setBuiltinSkills((prev) => {
+      const next = { ...prev, [folderName]: enabled ? 'enabled' : 'disabled' } as Record<string, 'enabled' | 'disabled'>;
+      if (activeWorkspacePath) window.api.workspaceSettings.update(activeWorkspacePath, { builtinSkills: next }).catch(() => {});
+      return next;
+    });
+  }, [activeWorkspacePath]);
 
   const onTreeSortOrderChange = useCallback(async (next: TreeSortOrder) => {
     setTreeSortOrder(next);
@@ -149,6 +178,17 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
   }, [persistSettings]);
 
   const onCodingAgentChange = useCallback(async (next: CodingAgentSettings) => {
+    setCodingAgentSettings(next);
+    await persistSettings({ codingAgent: next });
+  }, [persistSettings]);
+
+  // GLOBAL built-in skill on/off (the master default; a workspace can override).
+  const onGlobalBuiltinSkillToggle = useCallback(async (folderName: string, enabled: boolean) => {
+    const cur = settingsRef.current.codingAgent;
+    const nextBuiltin = { ...(cur.builtinSkills ?? {}) };
+    if (enabled) delete nextBuiltin[folderName]; // absent ⇒ enabled (keep file minimal)
+    else nextBuiltin[folderName] = 'disabled';
+    const next = { ...cur, builtinSkills: nextBuiltin } as CodingAgentSettings;
     setCodingAgentSettings(next);
     await persistSettings({ codingAgent: next });
   }, [persistSettings]);
@@ -191,8 +231,6 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
   // Seed everything from the on-disk settings object at boot, BEFORE any save can
   // fire (so an unchanged field isn't written as its default and clobbered).
   const hydrateSettings = useCallback((disk: any) => {
-    const dn: DailyNote = { format: disk.dailyNote?.format || 'YYYY-MM-DD', folder: disk.dailyNote?.folder ?? '', templatePath: disk.dailyNote?.templatePath ?? '' };
-    const tpl: Templates = { folder: disk.templates?.folder ?? '' };
     const tr: Transcription = { provider: disk.transcription?.provider || 'assemblyai', apiKey: disk.transcription?.apiKey || '' };
     const sy: SyncSettings = {
       pat: disk.sync?.pat || '',
@@ -211,8 +249,6 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
       workspaces: disk.workspaces || [],
       activeWorkspaceId: disk.activeWorkspaceId ?? null,
       appearance: { themeMode: tm, hideLineNumbers: hln, dailyNotesInBookmarks: dnb },
-      dailyNote: dn,
-      templates: tpl,
       codingAgent: ca,
       agentSecrets: secrets,
       transcription: tr,
@@ -229,9 +265,6 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     setHideLineNumbers(hln);
     setDailyNotesInBookmarks(dnb);
     setBookmarkFilterActiveState(bfa);
-    setDailyNote(dn);
-    dailyNoteRef.current = dn;
-    setTemplates(tpl);
     setTreeSortOrder(tso);
     if (disk.codingAgent) setCodingAgentSettings(ca);
     if (Array.isArray(disk.agentSecrets)) setAgentSecrets(secrets);
@@ -241,12 +274,12 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
 
   return {
     themeMode, hideLineNumbers, dailyNotesInBookmarks, bookmarkFilterActive,
-    dailyNote, dailyNoteRef, templates, treeSortOrder,
+    dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, sync, syncRef,
-    settingsRef, saveStatus, persistSettings, hydrateSettings,
+    settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onDailyNotesInBookmarksChange,
-    onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onTreeSortOrderChange,
-    onCodingAgentChange, onAgentSecretsChange, onTranscriptionChange,
+    onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
+    onCodingAgentChange, onGlobalBuiltinSkillToggle, onAgentSecretsChange, onTranscriptionChange,
     onSyncChange, onSyncDisabledChange,
   };
 }
