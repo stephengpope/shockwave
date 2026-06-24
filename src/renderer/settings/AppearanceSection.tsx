@@ -20,8 +20,9 @@ export default function AppearanceSection({
       <h2 className="settings-section-title">Appearance</h2>
       <p className="settings-section-desc">Choose the color theme and editor display options.</p>
 
+      <h3 className="settings-subsection-title">Theme</h3>
       <div className="settings-field">
-        <label className="settings-field-label" htmlFor="theme-mode">Theme</label>
+        <label className="settings-field-label" htmlFor="theme-mode">Color theme</label>
         <select
           id="theme-mode"
           className="settings-select"
@@ -34,6 +35,7 @@ export default function AppearanceSection({
         </select>
       </div>
 
+      <h3 className="settings-subsection-title">Editor</h3>
       <div className="settings-field">
         <label className="settings-checkbox-row">
           <input
@@ -45,6 +47,7 @@ export default function AppearanceSection({
         </label>
       </div>
 
+      <h3 className="settings-subsection-title">Bookmarks</h3>
       <div className="settings-field">
         <label className="settings-checkbox-row">
           <input

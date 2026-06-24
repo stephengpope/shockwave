@@ -192,6 +192,14 @@ The convention is **"look at the nearest similar component and copy its class us
 - New settings section → copy `settings/AgentSecretsSection.jsx` (form + list pattern) or `settings/TranscriptionSection.jsx` (single-field-plus-test pattern). Wire into `SettingsModal.jsx`'s NAV and add an entry to `SETTINGS_SECTIONS` in `constants.js`.
 - New modal dialog → use `Dialog.jsx`. Buttons go in the `footer` slot using `dialog-button` / `dialog-button-primary` / `dialog-button-destructive`. Body fields use the settings-* classes below.
 
+**Settings page visual layout (the standard shape — every section follows it):**
+
+1. **One `<h2 className="settings-section-title">` per section**, immediately followed by **one `<p className="settings-section-desc">`** intro line. These are the page header — never more than one of each, never skip the desc.
+2. **Group related fields under `<h3 className="settings-subsection-title">` headers** whenever a section covers more than one distinct concern. A section with two-plus unrelated controls (e.g. Appearance = Theme + Editor + Bookmarks) should NOT stack bare `settings-field`s — give each concern its own subsection header. A single-topic section (e.g. Transcription) doesn't need subsections.
+3. **Spacing is owned by the CSS, not by inline styles.** `.settings-subsection-title` already carries `margin: 24px 0 8px 0` and `.settings-field + .settings-field` already carries `margin-top: 12px`. Do NOT add `style={{ marginTop: 24 }}` to a subsection title — it double-spaces and is redundant (some older sections like `SyncSection`/`AgentChatSection` still do this; don't copy it, and clean it up if you touch those files).
+4. **Every control sits in a `settings-field`** (label + input + optional `settings-field-hint`), or the right-aligned `settings-field-row` variant (label/help on the left, control on the right — see `DailyNoteSection`). Pick one variant per section and stay consistent within it.
+5. **Labels describe the control, not the section.** Under a "Theme" subsection the select's label is "Color theme", not "Theme" again — don't echo the header.
+
 **Standard class palette:**
 
 | Class | Use |

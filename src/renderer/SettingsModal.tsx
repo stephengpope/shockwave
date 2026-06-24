@@ -16,22 +16,29 @@ import UpdatesSection from './settings/UpdatesSection.jsx';
 // Sidebar layout: section headers group related items. Header rows are
 // non-interactive labels; item rows are the actual nav buttons. To add a new
 // page, drop a new { kind: 'item', id, label } row under the relevant header.
-const NAV = [
-  { kind: 'header', label: 'General' },
-  { kind: 'item', id: SETTINGS_SECTIONS.APPEARANCE, label: 'Appearance' },
-  { kind: 'item', id: SETTINGS_SECTIONS.SYNC, label: 'GitHub Sync' },
-  { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
-  { kind: 'item', id: SETTINGS_SECTIONS.UPDATES, label: 'Updates' },
-  { kind: 'header', label: 'Workspaces' },
-  { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Manage' },
-  { kind: 'item', id: SETTINGS_SECTIONS.DAILY_NOTE, label: 'Daily Notes' },
-  { kind: 'item', id: SETTINGS_SECTIONS.TEMPLATES, label: 'Templates' },
-  { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACE_SKILLS, label: 'Manage Skills' },
-  { kind: 'header', label: 'AI Agent' },
-  { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
-  { kind: 'item', id: SETTINGS_SECTIONS.AGENT_BUILTIN_SKILLS, label: 'Built-in Skills' },
-  { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
-];
+//
+// "Workspaces" (the list/create/switch picker) is a GLOBAL concern, so it lives
+// under General — it's not configuration *of* a workspace. The second group
+// holds per-(active-)workspace pages and is labeled with the active workspace's
+// name so it reads as scoped to it. `workspaceLabel` is passed in at render.
+function buildNav(workspaceLabel) {
+  return [
+    { kind: 'header', label: 'General' },
+    { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
+    { kind: 'item', id: SETTINGS_SECTIONS.APPEARANCE, label: 'Appearance' },
+    { kind: 'item', id: SETTINGS_SECTIONS.SYNC, label: 'GitHub Sync' },
+    { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
+    { kind: 'item', id: SETTINGS_SECTIONS.UPDATES, label: 'Updates' },
+    { kind: 'header', label: workspaceLabel },
+    { kind: 'item', id: SETTINGS_SECTIONS.DAILY_NOTE, label: 'Daily Notes' },
+    { kind: 'item', id: SETTINGS_SECTIONS.TEMPLATES, label: 'Templates' },
+    { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACE_SKILLS, label: 'Manage Skills' },
+    { kind: 'header', label: 'AI Agent' },
+    { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
+    { kind: 'item', id: SETTINGS_SECTIONS.AGENT_BUILTIN_SKILLS, label: 'Built-in Skills' },
+    { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
+  ];
+}
 
 const DEFAULT_SECTION = SETTINGS_SECTIONS.APPEARANCE;
 
@@ -82,6 +89,10 @@ export default function SettingsModal({
   saveStatus,
 }) {
   const [active, setActive] = useState(initialSection || DEFAULT_SECTION);
+
+  const activeWs = (workspaces || []).find((w) => w.id === activeWorkspaceId);
+  const workspaceLabel = activeWs ? `Workspace (${activeWs.name})` : 'Workspace';
+  const NAV = buildNav(workspaceLabel);
 
   useEffect(() => {
     const onKey = (e) => {
