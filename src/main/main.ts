@@ -1707,13 +1707,22 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
 
   // The main watcher ignores everything under `.shockwave/`, so changes to the
   // workspace file (sync pull, another machine, a hand edit) never reach the
-  // renderer. Watch that one file on its own and tell the renderer to re-read.
-  bookmarksWatcher = chokidar.watch(workspaceFilePath(dirPath), {
+  // renderer. Watch for it here and tell the renderer to re-read.
+  //
+  // Watch the `.shockwave/` DIR (depth 0), not the file itself: in chokidar 5 a
+  // single-file watch unreliably drops the first/only change event — it missed
+  // git-merge updates entirely, so synced daily-note/template/bookmark changes
+  // never reloaded. A directory watch fires reliably. We filter to
+  // `workspace.json` so sibling files (bookmarks.json, skills/) don't notify.
+  const shockwaveDir = path.dirname(workspaceFilePath(dirPath));
+  bookmarksWatcher = chokidar.watch(shockwaveDir, {
     ignoreInitial: true,
+    depth: 0,
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
     persistent: true,
   });
-  const notifyBookmarks = () => {
+  const notifyBookmarks = (p) => {
+    if (typeof p !== 'string' || path.basename(p) !== 'workspace.json') return;
     const w = watcherWindowId != null ? BrowserWindow.fromId(watcherWindowId) : null;
     if (w && !w.isDestroyed()) w.webContents.send('bookmarks:changed');
   };

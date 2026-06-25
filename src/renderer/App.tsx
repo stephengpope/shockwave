@@ -201,7 +201,6 @@ export default function App() {
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || null;
   const workspacePath = activeWorkspace?.path ?? null;
   const workspacePathRef = useSyncRef(workspacePath);
-  const treeRef = useSyncRef(tree);
 
   // Conflict files surfaced by the sync engine on its paused status (relative
   // POSIX paths → workspace-absolute). Drives the conflict-resolution view.
@@ -322,6 +321,7 @@ export default function App() {
     bookmarks,
     resetBookmarks,
     seedBookmarks,
+    replaceBookmarks,
     toggleBookmark,
     setBookmarksForPaths,
     isBookmarked,
@@ -329,14 +329,6 @@ export default function App() {
     removeBookmarkName,
     persistBookmarks,
   } = useBookmarks({ workspacePath, showError });
-
-  // Resolvable bookmark keys = basenames of every .md file currently in the
-  // workspace. Used to prune dead bookmarks on seed and to resolve a name → path
-  // on click (via the link index's pageIndex).
-  const bookmarkResolvableKeys = useCallback(
-    () => new Set(flattenAll(treeRef.current).filter((n) => !n.children && /\.md$/i.test(n.id)).map((n) => bookmarkKey(n.id))),
-    [treeRef],
-  );
 
   const sortedTree = useMemo(() => {
     // Conflict view is its own pre-sorted tree from the git conflict list.
@@ -1193,18 +1185,22 @@ export default function App() {
     drawingMtimesRef,
   });
 
-  // Re-seed bookmarks when bookmarks.json changes on disk out from under us
+  // Re-read the whole workspace file when it changes on disk out from under us
   // (sync pull, another machine, a hand edit). The main watcher ignores
-  // .shockwave/, so main emits a dedicated `bookmarks:changed`. Subscribe once
-  // per workspace; read the current tree via ref (no IPC) to prune dead paths.
+  // .shockwave/, so main emits a dedicated `bookmarks:changed`. The file holds
+  // ALL workspace-scoped settings (bookmarks, dailyNote, templates, builtin
+  // skills) — re-apply every one, not just bookmarks. Bookmarks are set without
+  // pruning (replaceBookmarks): the tree may lag a co-arriving file, and pruning
+  // here would drop + push-delete a just-synced bookmark. Subscribe once per ws.
   useEffect(() => {
     if (!workspacePath) return;
     const unsub = window.api.bookmarks.onChanged(async () => {
-      const names = await window.api.bookmarks.read(workspacePath);
-      seedBookmarks(names, bookmarkResolvableKeys());
+      const wsData = await window.api.workspaceSettings.read(workspacePath);
+      loadWorkspaceData(wsData);
+      replaceBookmarks(wsData.bookmarks);
     });
     return unsub;
-  }, [workspacePath, seedBookmarks, bookmarkResolvableKeys]);
+  }, [workspacePath, loadWorkspaceData, replaceBookmarks]);
 
   // Agent `open_file` tool → open the file in a new tab. Main has already
   // confined the path to the active workspace; we re-gate on displayable types.

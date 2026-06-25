@@ -75,6 +75,18 @@ export function useBookmarks({ workspacePath, showError }: UseBookmarksOpts) {
     if (needsRewrite) writeNames(next).catch(() => {});
   }, [bookmarksRef, writeNames]);
 
+  // Replace the in-memory set from an external update (sync pull / hand edit),
+  // WITHOUT pruning or writing back. Pruning here is unsafe: the tree may not
+  // yet reflect files that arrived in the same merge, so a just-synced bookmark
+  // would be dropped and the pruned set pushed back, deleting it everywhere.
+  // Unresolvable names are harmless — they're resolved lazily on click and get
+  // cleaned up by the next full workspace load (which prunes against fresh data).
+  const replaceBookmarks = useCallback((names: string[]) => {
+    const next = new Set(names.map((n) => n.toLowerCase()));
+    setBookmarks(next);
+    bookmarksRef.current = next;
+  }, [bookmarksRef]);
+
   // Toggle one file's bookmark; writes the new set to disk.
   const toggleBookmark = useCallback(async (absPath: string) => {
     if (!workspacePath || !absPath) return;
@@ -153,6 +165,7 @@ export function useBookmarks({ workspacePath, showError }: UseBookmarksOpts) {
     bookmarks,
     resetBookmarks,
     seedBookmarks,
+    replaceBookmarks,
     toggleBookmark,
     setBookmarksForPaths,
     isBookmarked,
