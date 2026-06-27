@@ -356,7 +356,7 @@ const Editor = forwardRef<any, any>(function Editor(
       indentOnInput(),
       indentGuides,
       markdown({ addKeymap: false, extensions: [{ remove: ['SetextHeading'] }] }),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      syntaxHighlighting(defaultHighlightStyle),
       livePreviewCompartment.of(initialLive),
       imagePaste({
         getActiveFilePath: () => getActiveFilePathRef?.current ?? null,

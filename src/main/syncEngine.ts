@@ -30,6 +30,8 @@
 // step 1 MUST bail before step 3 ever runs.
 
 import { BrowserWindow } from 'electron';
+import { promises as fs } from 'fs';
+import path from 'path';
 import { gitSpawn, workspaceStatus, parseGithubUrl } from './sync.js';
 
 // ─── Engine state ──────────────────────────────────────────────────────────
@@ -168,15 +170,55 @@ function isAuthError(stderr) {
   return s.includes('authentication') || s.includes('401') || s.includes('could not read username');
 }
 
+// A leftover `.git/index.lock` (from a git process killed mid-write — our own
+// SIGKILL-on-timeout, an app crash, sleep, or an external git) makes every
+// later `git add`/`commit` fail with "Unable to create '…/index.lock': File
+// exists", which would wedge sync permanently (the tick just retry-fails
+// forever, surfaced as a misleading "offline"). git only holds the lock for
+// well under a second during a normal index write, and our ticks never overlap,
+// so a lock older than this is certainly orphaned and safe to remove.
+const STALE_INDEX_LOCK_MS = 10_000;
+
+function isIndexLockError(stderr) {
+  const s = (stderr || '').toLowerCase();
+  return s.includes('index.lock') && s.includes('file exists');
+}
+
+// Remove an orphaned index.lock if it's older than STALE_INDEX_LOCK_MS. Returns
+// true if a stale lock was cleared (so the caller should retry the command).
+async function clearStaleIndexLock(workspacePath) {
+  const lockPath = path.join(workspacePath, '.git', 'index.lock');
+  try {
+    const st = await fs.stat(lockPath);
+    if (Date.now() - st.mtimeMs < STALE_INDEX_LOCK_MS) return false; // maybe a live writer — leave it
+    await fs.unlink(lockPath);
+    console.warn(`[sync] removed stale ${lockPath} (orphaned ${Math.round((Date.now() - st.mtimeMs) / 1000)}s ago)`);
+    return true;
+  } catch {
+    return false; // no lock present, or it vanished — nothing to recover
+  }
+}
+
+// Run an index-writing git command; if it fails because of an orphaned
+// index.lock, clear the stale lock and retry once. Self-heals the wedge that
+// would otherwise make every future tick fail.
+async function gitLocking(workspacePath, args, timeoutMs) {
+  let res = await gitSpawn(workspacePath, args, { timeoutMs });
+  if (!res.ok && isIndexLockError(res.stderr) && (await clearStaleIndexLock(workspacePath))) {
+    res = await gitSpawn(workspacePath, args, { timeoutMs });
+  }
+  return res;
+}
+
 // Commit any dirty changes in the working tree. Returns true if everything is
 // clean by the end, false on a git error (status emitted by caller).
 async function commitDirty(workspacePath) {
   const status = await gitSpawn(workspacePath, ['status', '--porcelain'], { timeoutMs: 10_000 });
   if (!status.ok) { enterOffline(); return false; }       // local git hiccup → retry, never disable
   if (status.stdout.trim().length === 0) return true;
-  const add = await gitSpawn(workspacePath, ['add', '-A'], { timeoutMs: 30_000 });
+  const add = await gitLocking(workspacePath, ['add', '-A'], 30_000);
   if (!add.ok) { enterOffline(); return false; }
-  const commit = await gitSpawn(workspacePath, ['commit', '-m', `Shockwave sync: ${new Date().toISOString()}`], { timeoutMs: 30_000 });
+  const commit = await gitLocking(workspacePath, ['commit', '-m', `Shockwave sync: ${new Date().toISOString()}`], 30_000);
   if (!commit.ok) { enterOffline(); return false; }
   return true;
 }
