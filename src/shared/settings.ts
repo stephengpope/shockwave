@@ -23,6 +23,12 @@ export interface WorkspaceEntry {
 export type SkillState = 'enabled' | 'disabled';
 export type WorkspaceSkillState = 'inherit' | 'enabled' | 'disabled';
 
+// Pi's thinking/reasoning levels. 'off' disables extended thinking; the rest map
+// to pi's ModelThinkingLevel and are clamped to what each model actually supports
+// (via getSupportedThinkingLevels in main). Kept as a local literal union so this
+// shared file has no dependency on the pi SDK.
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface CodingAgentSettings {
   provider: string;
   model: string;
@@ -34,6 +40,10 @@ export interface CodingAgentSettings {
   // size pi can't know. Built-in providers carry authoritative values, so it's
   // unused there. Empty/undefined → 128000 default.
   contextWindow?: number;
+  // Extended-thinking level applied at session boot. Clamped per-model by pi.
+  // Note: an unset/omitted level makes pi fall back to 'medium' for reasoning-
+  // capable models — this field makes the choice explicit and user-controllable.
+  thinkingLevel: ThinkingLevel;
   systemPrompt: string;
   // GLOBAL built-in skill on/off, per folderName. Absent ⇒ enabled (default-on).
   // A workspace can override this in its own `WorkspaceData.builtinSkills`.

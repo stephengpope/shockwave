@@ -268,11 +268,64 @@ const MessageRow = memo(function MessageRow({ message: m }: any) {
       </div>
     );
   }
+  if (m.kind === 'thinking') {
+    return <div className="chat-message chat-tool-row"><ThinkingEntry entry={m} /></div>;
+  }
   if (m.kind === 'tool') {
     return <div className="chat-message chat-tool-row"><ToolEntry entry={m} /></div>;
   }
   return null;
 });
+
+// Rotating loader ring — the same mark as the "Working" indicator (below).
+function SpinnerIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg
+      className="chat-spinner"
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      width={size}
+      height={size}
+      aria-hidden="true"
+    >
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  );
+}
+
+// Collapsible extended-thinking block. While streaming it shows the same
+// spinner + shimmering label as the "Working" indicator ("Thinking"); once
+// thinking_end fires it freezes to a static "Thought" summary, collapsed by
+// default. Body is the raw reasoning text.
+function ThinkingEntry({ entry }) {
+  const streaming = !entry.done;
+  // Auto-expand while streaming so the reasoning is visible live; collapse once
+  // done (unless the user has toggled it open).
+  const [open, setOpen] = useState(true);
+  const collapsedDone = entry.done && !open;
+  return (
+    <div className="chat-thinking-block">
+      <button
+        type="button"
+        className="chat-thinking-summary"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="chat-tool-caret">{collapsedDone ? '▸' : '▾'}</span>
+        {streaming
+          ? (<><SpinnerIcon /><span className="thinking-shimmer">Thinking</span></>)
+          : (<span className="chat-thinking-label">Thought</span>)}
+      </button>
+      {(!entry.done || open) && entry.text && (
+        <div className="chat-thinking-body">{entry.text}</div>
+      )}
+    </div>
+  );
+}
 
 function ToolEntry({ entry }) {
   const [open, setOpen] = useState(false);
@@ -318,6 +371,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   const [partialText, setPartialText] = useState('');
   const voiceVolumeRef = useRef(0);
   const currentAssistantIdRef = useRef<any>(null);
+  const currentThinkingIdRef = useRef<any>(null);
   const idCounterRef = useRef(0);
   const scrollRef = useRef<any>(null);
   const textareaRef = useRef<any>(null);
@@ -383,6 +437,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     if (!evt || !evt.type) return;
     if (evt.type === 'agent_start') {
       setRunning(true);
+      currentThinkingIdRef.current = null;
       setError(null);
       setTokens(0);
       setElapsedMs(0);
@@ -396,6 +451,9 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     if (evt.type === 'agent_end') {
       setRunning(false);
       currentAssistantIdRef.current = null;
+      // Freeze any still-open thinking block (guards a missing thinking_end).
+      currentThinkingIdRef.current = null;
+      setMessages((prev) => prev.map((m) => (m.kind === 'thinking' && !m.done ? { ...m, done: true } : m)));
       if (runStartRef.current) setElapsedMs(Date.now() - runStartRef.current);
       if (tickerRef.current) { clearInterval(tickerRef.current); tickerRef.current = null; }
       return;
@@ -411,6 +469,34 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     if (evt.type === 'message_update') {
       const inner = evt.assistantMessageEvent;
       if (!inner) return;
+      // Extended-thinking stream. Rendered as a collapsible block above the
+      // assistant text — live "Thinking" (shimmer + spinner) while streaming,
+      // frozen to a static "Thought" block on thinking_end.
+      if (inner.type === 'thinking_start') {
+        const id = nextId();
+        currentThinkingIdRef.current = id;
+        currentAssistantIdRef.current = null;
+        setMessages((prev) => [...prev, { id, kind: 'thinking', text: '', done: false }]);
+        return;
+      }
+      if (inner.type === 'thinking_delta') {
+        const id = currentThinkingIdRef.current;
+        const delta = inner.delta ?? '';
+        if (!id) {
+          const newId = nextId();
+          currentThinkingIdRef.current = newId;
+          setMessages((prev) => [...prev, { id: newId, kind: 'thinking', text: delta, done: false }]);
+          return;
+        }
+        setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, text: m.text + delta } : m)));
+        return;
+      }
+      if (inner.type === 'thinking_end') {
+        const id = currentThinkingIdRef.current;
+        currentThinkingIdRef.current = null;
+        if (id) setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, done: true } : m)));
+        return;
+      }
       if (inner.type === 'text_start') {
         const id = nextId();
         currentAssistantIdRef.current = id;
@@ -432,6 +518,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     }
     if (evt.type === 'tool_execution_start') {
       currentAssistantIdRef.current = null;
+      currentThinkingIdRef.current = null;
       const id = nextId();
       setMessages((prev) => [...prev, {
         id,
@@ -751,21 +838,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         </ChatWorkspaceContext.Provider>
         {running && (
           <div className="chat-thinking">
-            <svg
-              className="chat-spinner"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              width={12}
-              height={12}
-              aria-hidden="true"
-            >
-              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-            </svg>
+            <SpinnerIcon />
             <span className="thinking-shimmer">Working</span>
             <span className="chat-thinking-stats">
               {formatElapsed(elapsedMs)}

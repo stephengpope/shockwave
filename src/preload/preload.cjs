@@ -280,6 +280,10 @@ contextBridge.exposeInMainWorld('api', {
     listProviders: () => ipcRenderer.invoke('agent:listProviders'),
     /** @param {string} provider @returns {Promise<Array<{ id: string, label: string }>>} Models for that provider. */
     listModels: (provider) => ipcRenderer.invoke('agent:listModels', provider),
+    /** Thinking levels the given (provider, model) supports (['off'] if none).
+     *  @param {{ provider: string, model: string }} opts
+     *  @returns {Promise<string[]>} */
+    listThinkingLevels: (opts) => ipcRenderer.invoke('agent:listThinkingLevels', opts),
     /** Test an OpenAI-compatible endpoint via its `/models` endpoint (no inference).
      *  @param {{ baseUrl: string, apiKey?: string }} opts
      *  @returns {Promise<{ ok: boolean, models?: string[], error?: string }>} */

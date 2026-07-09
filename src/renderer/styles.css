@@ -2873,6 +2873,44 @@ html, body, #root {
     thinking-pulse 3s ease-in-out infinite;
 }
 
+/* Extended-thinking block (streamed reasoning). Header reuses the "Working"
+   spinner + shimmer while streaming, then freezes to a static "Thought" label. */
+.chat-thinking-block {
+  font-size: 12px;
+}
+
+.chat-thinking-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 4px 0;
+  cursor: pointer;
+  color: var(--fg-muted);
+  text-align: left;
+}
+
+.chat-thinking-summary .chat-spinner {
+  align-self: center;
+}
+
+.chat-thinking-label {
+  color: var(--fg-muted);
+}
+
+.chat-thinking-body {
+  margin: 2px 0 4px 16px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--border);
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .chat-error {
   color: var(--fg-error);
   font-size: 12px;

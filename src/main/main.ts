@@ -6,9 +6,10 @@ import crypto from 'node:crypto';
 import chokidar from 'chokidar';
 import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
-import { agentSend, agentAbort, agentReset } from './codingAgent.js';
+import { agentSend, agentAbort, agentReset, listThinkingLevels } from './codingAgent.js';
 import { isMdFile, uniquePath, uniqueInWorkspace, walkMarkdownPaths, collectMarkdownBasenamesLower } from './pathResolver.js';
-import { getProviders, getModels } from '@earendil-works/pi-ai';
+// Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
+import { getProviders, getModels } from '@earendil-works/pi-ai/compat';
 import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from './skillLibrary.js';
 import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { installOpenFileBridge } from './openFileExtension.js';
@@ -91,6 +92,11 @@ const DEFAULT_SETTINGS = {
     apiKey: '',
     // OpenAI-compatible endpoint URL; only set when provider is 'openai-compatible'.
     baseUrl: '',
+    // Extended-thinking level. 'medium' preserves pi's implicit default for
+    // reasoning-capable hosted models (no behavior change); openai-compatible
+    // endpoints stay effectively off because their model is registered
+    // reasoning:false unless a level > off is chosen.
+    thinkingLevel: 'medium',
     // Pre-filled with the default on first install so users can read + edit.
     // "Reset to default" in the UI writes the current default back into here.
     systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -1288,7 +1294,7 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
     const settings = await readSettings();
     const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
     const workspacePath = ws?.path ?? null;
-    const { provider, model, apiKey, baseUrl, contextWindow, systemPrompt, builtinSkills } = settings.codingAgent ?? {};
+    const { provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, systemPrompt, builtinSkills } = settings.codingAgent ?? {};
     // Per-workspace built-in override lives in the workspace file; it wins over
     // the global default above.
     const wsData = workspacePath ? await readWorkspaceFileRaw(workspacePath) : null;
@@ -1303,6 +1309,7 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
         apiKey,
         baseUrl,
         contextWindow,
+        thinkingLevel,
         systemPrompt,
         userDataDir: app.getPath('userData'),
         builtinDir: builtinSkillsDir(),
@@ -1383,6 +1390,13 @@ ipcMain.handle('agent:listModels', (_evt, provider) => {
   // openai-compatible has no static catalog — models come from the Validate
   // call (GET /v1/models) or are typed free-form. getModels returns [] here.
   return getModels(provider).map((m) => m.id).sort();
+});
+
+// Thinking levels supported by the given (provider, model), for the Settings
+// dropdown. Returns ['off'] for non-reasoning / unknown models — the UI hides
+// the control when the list has a single entry.
+ipcMain.handle('agent:listThinkingLevels', (_evt, { provider, model }) => {
+  return listThinkingLevels(provider, model);
 });
 
 // Validate an OpenAI-compatible endpoint by hitting `{baseUrl}/models` — no

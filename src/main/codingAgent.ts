@@ -11,7 +11,10 @@
 // system prompt. Pi never auto-scans our skill-library folder.
 
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
-import { getModel } from '@earendil-works/pi-ai';
+// Static-catalog reads (getModel) moved off the pi-ai root to the `/compat`
+// entrypoint in pi-ai 0.80.0. getSupportedThinkingLevels remains on the root.
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
+import { getModel } from '@earendil-works/pi-ai/compat';
 import { agentDirFor, ensureDirs, listBuiltinSkills, listWorkspaceSkills, computeEffectivePaths, writePiSettings } from './skillLibrary.js';
 import { ensureAgentTokensExtension } from './agentTokensExtension.js';
 import { ensureOpenFileExtension } from './openFileExtension.js';
@@ -23,11 +26,32 @@ const state: any = {
   key: null,
 };
 
-function makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt }) {
+function makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, systemPrompt }) {
   // systemPrompt is part of the key so changing it forces a fresh session
   // (pi's system prompt is baked at session boot). baseUrl/contextWindow are in
   // the key too so editing the openai-compatible endpoint reboots the session.
-  return [workspacePath, provider, model, apiKey, baseUrl ?? '', contextWindow ?? '', systemPrompt ?? ''].join(' ');
+  // thinkingLevel is baked at session boot, so it's in the key too — changing it
+  // in Settings reboots the session on the next send.
+  return [workspacePath, provider, model, apiKey, baseUrl ?? '', contextWindow ?? '', thinkingLevel ?? '', systemPrompt ?? ''].join(' ');
+}
+
+// Thinking levels the given (provider, model) supports, for the Settings dropdown.
+// Built-in providers carry per-model reasoning metadata in pi-ai's catalog;
+// openai-compatible has no catalog, so we offer the levels a generic reasoning
+// model supports (pi excludes 'xhigh' without an explicit thinkingLevelMap) and
+// let the user pick — pi clamps at stream time. A model with reasoning:false (or
+// unknown) yields just ['off'], which the UI treats as "no thinking control".
+export function listThinkingLevels(provider, model) {
+  if (!provider) return ['off'];
+  if (provider === 'openai-compatible') return ['off', 'minimal', 'low', 'medium', 'high'];
+  if (!model) return ['off'];
+  try {
+    const m = getModel(provider, model);
+    if (!m) return ['off'];
+    return getSupportedThinkingLevels(m);
+  } catch {
+    return ['off'];
+  }
 }
 
 async function teardown() {
@@ -42,9 +66,10 @@ async function teardown() {
   }
 }
 
-async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt, userDataDir, builtinDir, globalBuiltinSkills, wsBuiltinSkills }, emitEvent) {
+async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, systemPrompt, userDataDir, builtinDir, globalBuiltinSkills, wsBuiltinSkills }, emitEvent) {
   const effectiveSystemPrompt = (systemPrompt ?? '').trim() || DEFAULT_AGENT_SYSTEM_PROMPT;
-  const key = makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, systemPrompt: effectiveSystemPrompt });
+  const level = thinkingLevel || 'off';
+  const key = makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel: level, systemPrompt: effectiveSystemPrompt });
   // Recompute the explicit skill list before session create: enabled built-ins
   // (per-workspace toggles) + the active workspace's uploaded `.shockwave/skills`.
   // Pi additionally auto-discovers `.agents/skills` on its own. Pi reads `skills`
@@ -83,7 +108,11 @@ async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, 
       models: [{
         id: model,
         name: model,
-        reasoning: false,
+        // Enable reasoning on the custom model only when the user picked a level
+        // above 'off'. Local models that don't understand reasoning params stay
+        // untouched at the default 'off'. Pi sends reasoning_effort (its default
+        // thinkingFormat) once reasoning is true.
+        reasoning: level !== 'off',
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: contextWindow || 128000,
@@ -110,6 +139,11 @@ async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, 
     cwd: workspacePath,
     agentDir: agentDirFor(userDataDir),
     model: modelObj,
+    // Pass the level explicitly (pi clamps it to the model's supported set at
+    // boot). 'off' is a valid runtime value even though the SDK's TS type omits
+    // it — clampThinkingLevel always includes 'off'. Without this, an omitted
+    // level silently defaults to 'medium' for reasoning-capable models.
+    thinkingLevel: level as any,
     authStorage,
     modelRegistry,
     sessionManager: SessionManager.inMemory(workspacePath),

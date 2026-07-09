@@ -182,6 +182,7 @@ export interface ShockwaveApi {
     getDefaultSystemPrompt(): Promise<string>;
     listProviders(): Promise<Array<{ slug: string; label: string }>>;
     listModels(provider: string): Promise<Array<{ id: string; label: string }>>;
+    listThinkingLevels(opts: { provider: string; model: string }): Promise<string[]>;
     validateConnection(opts: { baseUrl: string; apiKey?: string }): Promise<{ ok: boolean; models?: string[]; error?: string }>;
     onEvent(cb: (evt: unknown) => void): Unsubscribe;
     onError(cb: (payload: { message: string }) => void): Unsubscribe;

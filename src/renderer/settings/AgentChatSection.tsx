@@ -5,10 +5,21 @@ import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
 // Our generic OpenAI-compatible endpoint slug (Ollama, LM Studio, vLLM, gateways).
 const COMPATIBLE_SLUG = 'openai-compatible';
 
-function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextWindow, onChange }) {
+// Human labels for pi's thinking levels (dropdown display).
+const THINKING_LABELS: Record<string, string> = {
+  off: 'Off',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+};
+
+function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, onChange }) {
   const [showKey, setShowKey] = useState(false);
   const [providers, setProviders] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
+  const [thinkingLevels, setThinkingLevels] = useState<string[]>([]);
   const [validateState, setValidateState] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle');
   const [validateMsg, setValidateMsg] = useState('');
 
@@ -35,6 +46,19 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
     });
     return () => { active = false; };
   }, [provider]);
+
+  // Supported thinking levels for the chosen provider+model. Built-in models
+  // carry per-model reasoning metadata; openai-compatible returns a static list.
+  // A single-entry (['off']) result means the model has no reasoning — the
+  // dropdown is then hidden.
+  useEffect(() => {
+    if (!provider) { setThinkingLevels([]); return; }
+    let active = true;
+    window.api.agent.listThinkingLevels({ provider, model }).then((list) => {
+      if (active) setThinkingLevels(list ?? []);
+    });
+    return () => { active = false; };
+  }, [provider, model]);
 
   // Reset the transient Test result whenever the inputs it validated change.
   useEffect(() => { setValidateState('idle'); setValidateMsg(''); }, [provider, baseUrl, apiKey]);
@@ -112,8 +136,19 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
           options={models}
           value={model}
           onChange={(next) => onChange({ model: next })}
-          freeForm
+          // Built-in providers: validated dropdown — you can filter by typing but
+          // can only commit a real catalog model, so a nonexistent id can't be
+          // saved. openai-compatible has no catalog (local/custom endpoints), so
+          // it stays free-form (type the id yourself; Test populates the list).
+          freeForm={isCompatible}
         />
+        {/* Surface a saved model that isn't in the current catalog (e.g. a stale
+            or mistyped id from before validation) so it's obvious it won't run. */}
+        {!isCompatible && model && models.length > 0 && !models.includes(model) && (
+          <p className="settings-field-hint" style={{ color: 'var(--fg-error)' }}>
+            “{model}” isn’t in {provider}’s catalog — pick a model from the list.
+          </p>
+        )}
       </div>
 
       {isCompatible && (
@@ -129,6 +164,26 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
             onChange={(e) => onChange({ contextWindow: e.target.value ? Number(e.target.value) : undefined })}
           />
           <p className="settings-field-hint">Tokens the model can hold. Leave blank for 128000.</p>
+        </div>
+      )}
+
+      {thinkingLevels.length > 1 && (
+        <div className="settings-field">
+          <label className="settings-field-label" htmlFor={`${idPrefix}-thinking`}>Reasoning</label>
+          <select
+            id={`${idPrefix}-thinking`}
+            className="settings-input"
+            value={thinkingLevel ?? 'off'}
+            onChange={(e) => onChange({ thinkingLevel: e.target.value })}
+          >
+            {thinkingLevels.map((l) => (
+              <option key={l} value={l}>{THINKING_LABELS[l] ?? l}</option>
+            ))}
+          </select>
+          <p className="settings-field-hint">
+            Extended thinking before each reply. Higher = more reasoning, more tokens and latency.
+            Streamed live in the chat sidebar.
+          </p>
         </div>
       )}
 
@@ -189,6 +244,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caApiKey = codingAgent?.apiKey ?? '';
   const caBaseUrl = codingAgent?.baseUrl ?? '';
   const caContextWindow = codingAgent?.contextWindow;
+  const caThinkingLevel = codingAgent?.thinkingLevel ?? 'medium';
   const caSystemPrompt = codingAgent?.systemPrompt ?? '';
   const updateCa = (patch) => onCodingAgentChange?.({
     provider: caProvider,
@@ -196,6 +252,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
     apiKey: caApiKey,
     baseUrl: caBaseUrl,
     contextWindow: caContextWindow,
+    thinkingLevel: caThinkingLevel,
     systemPrompt: caSystemPrompt,
     ...patch,
   });
@@ -229,6 +286,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
         apiKey={caApiKey}
         baseUrl={caBaseUrl}
         contextWindow={caContextWindow}
+        thinkingLevel={caThinkingLevel}
         onChange={updateCa}
       />
 
