@@ -1,7 +1,7 @@
 import React, { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { PaperclipIcon, PlayIcon, StopIcon, RotateCcwIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon, CopyIcon, CheckIcon } from './Icons.jsx';
+import { PaperclipIcon, PlayIcon, StopIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon, CopyIcon, CheckIcon, SearchIcon, PlusIcon, TrashIcon } from './Icons.jsx';
 import { resolveImageUrl } from './imageWidgets.js';
 import {
   classify,
@@ -356,6 +356,224 @@ function ToolEntry({ entry }) {
   );
 }
 
+// Star (filled when active). Used in the header + each history row.
+function StarIcon({ size = 14, filled = false }: { size?: number; filled?: boolean }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+    </svg>
+  );
+}
+
+// Rebuild the UI transcript from stored DB message rows (chat:getMessages).
+// The DB keeps one row per pi message: an assistant turn carries its text +
+// thinking + tool CALLS (tool_calls JSON); each tool RESULT is its own role='tool'
+// row. We re-pair them here into the sidebar's flat kind-tagged model, absorbing
+// each result into the tool row created from the matching call (by tool_call_id).
+// Order within an assistant turn: thinking → text → tool calls. (isError isn't
+// persisted, so hydrated tool rows render as non-error; images degrade to text.)
+function hydrateMessages(rows) {
+  const results = new Map();
+  for (const r of rows) {
+    if (r.role === 'tool' && r.toolCallId) results.set(r.toolCallId, r.content ?? '');
+  }
+  const out: any[] = [];
+  for (const r of rows) {
+    if (r.role === 'user') {
+      out.push({ id: `h${r.seq}`, kind: 'user', text: r.content ?? '' });
+    } else if (r.role === 'assistant') {
+      if (r.reasoning) out.push({ id: `h${r.seq}-k`, kind: 'thinking', text: r.reasoning, done: true });
+      if (r.content) out.push({ id: `h${r.seq}-t`, kind: 'assistant', text: r.content });
+      if (r.toolCalls) {
+        let calls: any[] = [];
+        try { calls = JSON.parse(r.toolCalls) || []; } catch { /* corrupt row → skip its tools */ }
+        calls.forEach((c, i) => {
+          out.push({
+            id: `h${r.seq}-c${i}`,
+            kind: 'tool',
+            toolCallId: c.id,
+            toolName: c.name,
+            args: c.arguments,
+            output: results.get(c.id) ?? '',
+            isError: false,
+            done: true,
+          });
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// "3m", "2h", "5d", or a date past a week — for the history list.
+function formatAgo(ms) {
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return 'now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d`;
+  try { return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch { return `${d}d`; }
+}
+
+// Popover of recent + searchable chats. Anchored under the header history button.
+// Recents paginate on scroll (keyset via the last row's updatedAt); a non-empty
+// query switches to full-text search across the workspace's chats.
+function HistoryPopover({ currentSessionId, onSelect, onClose }: any) {
+  const [query, setQuery] = useState('');
+  const [items, setItems] = useState<any[]>([]);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const rootRef = useRef<any>(null);
+  const searching = query.trim().length > 0;
+
+  // Dismiss on any click/focus outside the popover (ignoring the header toggle,
+  // which owns its own open/close), or on Escape.
+  useEffect(() => {
+    const onDown = (e) => {
+      const t = e.target;
+      if (rootRef.current?.contains(t)) return;
+      if (t?.closest?.('.chat-sidebar-history')) return; // let the toggle handle itself
+      onClose();
+    };
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('focusin', onDown, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('focusin', onDown, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+
+  const [starred, setStarredList] = useState<any[]>([]);
+
+  const loadRecents = useCallback(async (before?: number) => {
+    setLoading(true);
+    try {
+      const rows = await window.api.chat.listSessions(before ? { before } : {});
+      setItems((prev) => (before ? [...prev, ...rows] : rows));
+      setHasMore(rows.length >= 30);
+    } finally { setLoading(false); }
+  }, []);
+
+  const loadStarred = useCallback(async () => {
+    try { setStarredList(await window.api.chat.listStarred()); } catch { /* best-effort */ }
+  }, []);
+
+  // Debounced search / initial recents + starred.
+  useEffect(() => {
+    let cancelled = false;
+    const q = query.trim();
+    if (!q) { loadRecents(); loadStarred(); return () => { cancelled = true; }; }
+    const t = setTimeout(async () => {
+      const rows = await window.api.chat.searchSessions({ query: q });
+      if (!cancelled) { setItems(rows); setHasMore(false); }
+    }, 180);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [query, loadRecents, loadStarred]);
+
+  const onScroll = useCallback((e) => {
+    if (searching || loading || !hasMore) return;
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40) {
+      const last = items[items.length - 1];
+      if (last) loadRecents(last.updatedAt);
+    }
+  }, [searching, loading, hasMore, items, loadRecents]);
+
+  const onDelete = useCallback(async (e, sessionId) => {
+    e.stopPropagation();
+    await window.api.chat.deleteSession(sessionId);
+    setItems((prev) => prev.filter((x) => x.sessionId !== sessionId));
+    setStarredList((prev) => prev.filter((x) => x.sessionId !== sessionId));
+  }, []);
+
+  const onToggleStar = useCallback(async (e, sessionId, currentlyStarred) => {
+    e.stopPropagation();
+    await window.api.chat.setStarred({ sessionId, starred: !currentlyStarred });
+    loadRecents();
+    loadStarred();
+  }, [loadRecents, loadStarred]);
+
+  const renderRow = (it, isStarred) => (
+    <button
+      key={it.sessionId}
+      type="button"
+      className={`chat-history-row ${it.sessionId === currentSessionId ? 'chat-history-row-active' : ''}`}
+      onClick={() => onSelect(it.sessionId)}
+    >
+      <span
+        role="button"
+        tabIndex={0}
+        className={`chat-history-row-star ${isStarred ? 'chat-history-row-star-on' : ''}`}
+        onClick={(e) => onToggleStar(e, it.sessionId, isStarred)}
+        aria-label={isStarred ? 'Unstar chat' : 'Star chat'}
+        title={isStarred ? 'Unstar' : 'Star'}
+      ><StarIcon size={13} filled={isStarred} /></span>
+      <span className="chat-history-row-main">
+        <span className="chat-history-row-title">{it.title || 'Untitled chat'}</span>
+        {searching && it.snippet && <span className="chat-history-row-snippet">{it.snippet}</span>}
+      </span>
+      {!searching && <span className="chat-history-row-time">{formatAgo(it.updatedAt)}</span>}
+      <span
+        role="button"
+        tabIndex={0}
+        className="chat-history-row-delete"
+        onClick={(e) => onDelete(e, it.sessionId)}
+        aria-label="Delete chat"
+        title="Delete chat"
+      ><TrashIcon size={12} /></span>
+    </button>
+  );
+
+  const showStarred = !searching && starred.length > 0;
+  const empty = items.length === 0 && !showStarred && !loading;
+
+  return (
+    <div className="chat-history-popover" role="dialog" aria-label="Chat history" ref={rootRef}>
+      <div className="chat-history-search">
+        <SearchIcon size={13} />
+        <input
+          type="text"
+          className="chat-history-input"
+          placeholder="Search chats…"
+          value={query}
+          autoFocus
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+      <div className="chat-history-list" onScroll={onScroll}>
+        {empty && (
+          <div className="chat-history-empty">{searching ? 'No matches' : 'No saved chats yet'}</div>
+        )}
+        {showStarred && (
+          <>
+            <div className="chat-history-section">Starred</div>
+            {starred.map((it) => renderRow(it, true))}
+            {items.length > 0 && <div className="chat-history-section">Recent</div>}
+          </>
+        )}
+        {items.map((it) => renderRow(it, false))}
+      </div>
+    </div>
+  );
+}
+
 const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath }, ref) {
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
@@ -366,6 +584,13 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   const [attachments, setAttachments] = useState<any[]>([]);
   const [rejected, setRejected] = useState<any>(null); // { name, reason }
   const [dragOver, setDragOver] = useState(false);
+  // Saved-chat identity + the history popover.
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessionTitle, setSessionTitle] = useState<string | null>(null);
+  const [sessionStarred, setSessionStarred] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [renamingTitle, setRenamingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
   // Voice input — partialText is the in-flight AssemblyAI partial transcript
   // (replaced as the model refines, then committed into `input` on end_of_turn).
   const [partialText, setPartialText] = useState('');
@@ -548,6 +773,21 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
       )));
       return;
     }
+    if (evt.type === 'shockwave_session') {
+      // Main tells us which saved chat is now active (on create/open/continue).
+      setCurrentSessionId(evt.sessionId ?? null);
+      setSessionTitle(evt.title ?? null);
+      setSessionStarred(!!evt.starred);
+      return;
+    }
+    if (evt.type === 'shockwave_session_titled') {
+      // Auto-title landed (fire-and-forget) — reflect it if it's the live chat.
+      setCurrentSessionId((cur) => {
+        if (cur === evt.sessionId) setSessionTitle(evt.title ?? null);
+        return cur;
+      });
+      return;
+    }
     if (evt.type === 'agent_send_failed') {
       // Main popped the bad user+failure messages from pi state. Mirror by
       // removing the matching user message from our transcript and surfacing
@@ -620,7 +860,63 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     setElapsedMs(0);
     setAttachments([]);
     setRejected(null);
+    setCurrentSessionId(null);
+    setSessionTitle(null);
+    setSessionStarred(false);
+    setRenamingTitle(false);
   }, []);
+
+  // Star / unstar the active chat (header star button).
+  const onToggleHeaderStar = useCallback(async () => {
+    if (!currentSessionId) return;
+    const next = !sessionStarred;
+    setSessionStarred(next);
+    try { await window.api.chat.setStarred({ sessionId: currentSessionId, starred: next }); }
+    catch { setSessionStarred(!next); }
+  }, [currentSessionId, sessionStarred]);
+
+  // Inline rename of the active chat's title (double-click the header title).
+  const startRename = useCallback(() => {
+    if (!currentSessionId) return;
+    setTitleDraft(sessionTitle ?? '');
+    setRenamingTitle(true);
+  }, [currentSessionId, sessionTitle]);
+
+  const commitRename = useCallback(async () => {
+    const title = titleDraft.trim();
+    setRenamingTitle(false);
+    if (!currentSessionId || !title || title === sessionTitle) return;
+    setSessionTitle(title);
+    try { await window.api.chat.renameSession({ sessionId: currentSessionId, title }); }
+    catch { /* rename is best-effort */ }
+  }, [currentSessionId, titleDraft, sessionTitle]);
+
+  // Open a saved chat from the history popover: hydrate the transcript from the
+  // DB and hand pi the session so the next send continues it.
+  const onOpenSession = useCallback(async (sessionId) => {
+    setShowHistory(false);
+    if (sessionId === currentSessionId) return;
+    try {
+      const { session, messages: rows } = await window.api.chat.openSession(sessionId);
+      if (tickerRef.current) { clearInterval(tickerRef.current); tickerRef.current = null; }
+      currentAssistantIdRef.current = null;
+      currentThinkingIdRef.current = null;
+      lastSentUserIdRef.current = null;
+      setMessages(hydrateMessages(rows || []));
+      setCurrentSessionId(sessionId);
+      setSessionTitle(session?.title ?? null);
+      setSessionStarred(!!session?.starred);
+      setRenamingTitle(false);
+      setError(null);
+      setRunning(false);
+      setTokens(0);
+      setElapsedMs(0);
+      setAttachments([]);
+      setRejected(null);
+    } catch (err: any) {
+      setError(err?.message ?? String(err));
+    }
+  }, [currentSessionId]);
 
   const ingestFiles = useCallback(async (fileList) => {
     const files = [...(fileList ?? [])];
@@ -797,16 +1093,22 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           type="button"
           className="chat-sidebar-clear"
           onClick={onClear}
-          title="Start a new session (clears the chat, picks up new skills)"
-          aria-label="New session"
-        ><RotateCcwIcon size={14} /></button>
-        <span className="chat-sidebar-title">
+          title="Start a new chat"
+          aria-label="New chat"
+        ><PlusIcon size={15} /></button>
+        <button
+          type="button"
+          className={`chat-sidebar-history ${showHistory ? 'chat-sidebar-history-active' : ''}`}
+          onClick={() => setShowHistory((v) => !v)}
+          title="Chat history"
+          aria-label="Chat history"
+          aria-expanded={showHistory}
+        >
           <svg
-            className="chat-sidebar-icon"
             xmlns="http://www.w3.org/2000/svg"
             viewBox="0 0 24 24"
-            width={16}
-            height={16}
+            width={15}
+            height={15}
             fill="none"
             stroke="currentColor"
             strokeWidth={2}
@@ -814,15 +1116,42 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
             strokeLinejoin="round"
             aria-hidden="true"
           >
-            <path d="M12 8V4H8" />
-            <rect width={16} height={12} x={4} y={8} rx={2} />
-            <path d="M2 14h2" />
-            <path d="M20 14h2" />
-            <path d="M15 13v2" />
-            <path d="M9 13v2" />
+            <path d="M3 3v5h5" />
+            <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+            <path d="M12 7v5l4 2" />
           </svg>
-          <span className="chat-sidebar-title-text">Agent Chat</span>
+        </button>
+        <span className="chat-sidebar-title">
+          {renamingTitle ? (
+            <input
+              className="chat-sidebar-title-input"
+              value={titleDraft}
+              autoFocus
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+                else if (e.key === 'Escape') { e.preventDefault(); setRenamingTitle(false); }
+              }}
+            />
+          ) : (
+            <span
+              className="chat-sidebar-title-text"
+              onDoubleClick={startRename}
+              title={currentSessionId ? 'Double-click to rename' : undefined}
+            >{sessionTitle || 'Agent Chat'}</span>
+          )}
         </span>
+        {currentSessionId && (
+          <button
+            type="button"
+            className={`chat-sidebar-star ${sessionStarred ? 'chat-sidebar-star-on' : ''}`}
+            onClick={onToggleHeaderStar}
+            title={sessionStarred ? 'Unstar chat' : 'Star chat'}
+            aria-label={sessionStarred ? 'Unstar chat' : 'Star chat'}
+            aria-pressed={sessionStarred}
+          ><StarIcon size={15} filled={sessionStarred} /></button>
+        )}
         <button
           type="button"
           className="chat-sidebar-close"
@@ -831,6 +1160,13 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           aria-label="Collapse coding agent"
         ><PanelRightCloseIcon size={14} /></button>
       </div>
+      {showHistory && (
+        <HistoryPopover
+          currentSessionId={currentSessionId}
+          onSelect={onOpenSession}
+          onClose={() => setShowHistory(false)}
+        />
+      )}
 
       <div ref={scrollRef} className="chat-messages">
         <ChatWorkspaceContext.Provider value={workspacePath}>

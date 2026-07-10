@@ -20,7 +20,7 @@ function readThemeColors() {
   };
 }
 
-export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVersion, onOpenFile, dark }) {
+export default function GraphView({ tree, resolvedLinks, linkIndexVersion, onOpenFile, dark }) {
   const hostRef = useRef<any>(null);
   const fgRef = useRef<any>(null);
   const colorsRef = useRef(readThemeColors());
@@ -50,19 +50,19 @@ export default function GraphView({ tree, pageIndex, outgoingByFile, linkIndexVe
     for (const id of [...nodeCache.keys()]) {
       if (!seen.has(id)) nodeCache.delete(id);
     }
+    // Edges come straight from the cache's resolvedLinks (source → dest paths) —
+    // already resolved, no per-edge resolution needed.
     const links: any[] = [];
-    for (const [source, targets] of outgoingByFile.entries()) {
+    for (const [source, dests] of resolvedLinks.entries()) {
       if (!seen.has(source)) continue;
-      for (const t of targets) {
-        const targetPath = pageIndex.get(t);
-        if (!targetPath || !seen.has(targetPath)) continue;
-        if (targetPath === source) continue;
-        links.push({ source, target: targetPath });
+      for (const dest of dests.keys()) {
+        if (!seen.has(dest) || dest === source) continue;
+        links.push({ source, target: dest });
       }
     }
     return { nodes, links };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkIndexVersion, tree, pageIndex]);
+  }, [linkIndexVersion, tree, resolvedLinks]);
 
   useEffect(() => {
     if (!hostRef.current) return;

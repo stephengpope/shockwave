@@ -2,8 +2,8 @@
 //
 // Simulates the full pipeline with no Electron:
 //   - A real on-disk workspace in a tmp dir.
-//   - The main-process pieces: chokidar + the rename correlator + the
-//     parseLinks parser + the stat-and-hash helpers.
+//   - The main-process pieces: @parcel/watcher + the shared watcherDispatch +
+//     the rename correlator + the parseLinks parser + the stat-and-hash helpers.
 //   - The renderer-side link index (createLinkIndex) wired into a
 //     simulated `fs:changed` handler that mirrors src/App.jsx's logic
 //     (rename -> renameFile + applyParsedLinks + rewriteReferences).
@@ -15,15 +15,18 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import chokidar from 'chokidar';
+import watcher from '@parcel/watcher';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { createRenameCorrelator } from '../src/main/renameCorrelator.js';
+import { createWatcherDispatch } from '../src/main/watcherDispatch.js';
 import { parseLinks } from '../src/main/linkParser.js';
-import { createLinkIndex } from '../src/renderer/linkIndex.js';
-import { rewriteReferences } from '../src/renderer/renameOps.js';
+import { createMetadataCache } from '../src/renderer/metadataCache.js';
+import { rewriteReferences, captureRewriteContext } from '../src/renderer/renameOps.js';
+
+const baseOf = (p) => p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/i, '').toLowerCase();
 
 async function hashOf(p) {
   try { return crypto.createHash('sha1').update(await fs.readFile(p)).digest('hex'); }
@@ -52,24 +55,56 @@ async function listMd(root) {
 // Build the harness:
 //   - tmp workspace dir
 //   - link index (renderer-side)
-//   - correlator + chokidar (main-side)
+//   - correlator + @parcel/watcher + watcherDispatch (main-side)
 //   - simulated fs:changed handler matching src/App.jsx
 async function setupWorkspace(initialFiles) {
-  const ROOT = await fs.mkdtemp(path.join(os.tmpdir(), 'sw-e2e-'));
+  // realpath so the seeded/asserted paths match @parcel/watcher's realpath-
+  // resolved event paths (macOS os.tmpdir() is a symlink).
+  const ROOT = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sw-e2e-')));
   for (const [rel, content] of Object.entries(initialFiles)) {
     const full = path.join(ROOT, rel);
     await fs.mkdir(path.dirname(full), { recursive: true });
     await fs.writeFile(full, content);
   }
 
-  // Renderer-side index, seeded the same way main.js does on workspace load.
-  const linkIndex = createLinkIndex();
+  // Renderer-side metadata cache, seeded the way main.js does on workspace load.
+  const cache = createMetadataCache();
+  cache.setWorkspacePath(ROOT);
   const seedFiles = [];
   for (const p of await listMd(ROOT)) {
     const [content, st] = await Promise.all([fs.readFile(p, 'utf8'), fs.stat(p)]);
     seedFiles.push({ path: p, mtime: st.mtimeMs, outgoingLinks: parseLinks(content) });
   }
-  linkIndex.rebuild(seedFiles);
+  cache.rebuild(seedFiles);
+
+  // Thin shim exposing the methods the harness + assertions use. getOutgoing /
+  // getBacklinks translate the cache's resolvedLinks/backlinks into the flat
+  // basename-keyed shapes the tests assert against.
+  const linkIndex = {
+    cache,
+    cacheRef: { current: cache },
+    rebuild: (f) => cache.rebuild(f),
+    removeFile: (p) => cache.removeFile(p),
+    renameFile: (a, b) => cache.renameFile(a, b),
+    applyParsedLinks: (p, l, m) => cache.applyParsedLinks(p, l, m),
+    updateFile: (p, c) => cache.updateFile(p, c),
+    getMtime: (p) => cache.getMtime(p),
+    getOutgoing: (p) => {
+      const out = [];
+      const r = cache.resolvedLinks.get(p); if (r) for (const d of r.keys()) out.push(baseOf(d));
+      const u = cache.unresolvedLinks.get(p); if (u) for (const k of u.keys()) out.push(k);
+      return out;
+    },
+    getBacklinks: (basename) => {
+      const entries = [];
+      for (const dest of cache.candidatesFor(basename)) {
+        for (const g of cache.getBacklinksForFile(dest)) {
+          for (const mm of g.matches) entries.push({ fromPath: g.fromPath, lineNumber: mm.lineNumber });
+        }
+      }
+      return entries;
+    },
+  };
 
   // Renderer-side `api` stub that the rewriter calls. Production uses
   // window.api.{readFile,writeFile}; here we use fs directly.
@@ -87,22 +122,23 @@ async function setupWorkspace(initialFiles) {
       return;
     }
     if (evt.type === 'rename') {
-      linkIndex.renameFile(evt.oldPath, evt.newPath);
-      const stored = linkIndex.getMtime(evt.newPath);
-      if (stored == null || evt.mtime > stored) {
-        linkIndex.applyParsedLinks(evt.newPath, evt.outgoingLinks, evt.mtime);
-      }
       const oldBaseName = evt.oldPath.split('/').pop().replace(/\.md$/i, '');
       const newBaseName = evt.newPath.split('/').pop().replace(/\.md$/i, '');
+      // Capture context BEFORE re-keying (mirrors App/watcher), then re-key.
+      const ctx = captureRewriteContext(cache, evt.oldPath);
+      cache.renameFile(evt.oldPath, evt.newPath);
+      const stored = cache.getMtime(evt.newPath);
+      if (stored == null || evt.mtime > stored) {
+        cache.applyParsedLinks(evt.newPath, evt.outgoingLinks, evt.mtime);
+      }
       if (oldBaseName !== newBaseName) {
         await rewriteReferences({
-          api, linkIndex,
-          oldBaseName, newBaseName,
-          selfPath: evt.newPath,
+          api, cache, sources: ctx.sources, candidatesFor: ctx.candidatesFor,
+          workspacePath: ROOT, oldPath: evt.oldPath, finalPath: evt.newPath, oldBaseName, newBaseName,
         });
         try {
           const content = await fs.readFile(evt.newPath, 'utf8');
-          linkIndex.updateFile(evt.newPath, content);
+          cache.updateFile(evt.newPath, content);
         } catch { /* file may be gone in delete-race scenarios */ }
       }
       return;
@@ -114,10 +150,18 @@ async function setupWorkspace(initialFiles) {
     }
   }
 
-  // Set up the correlator + chokidar, mirroring electron/main.js.
-  const eventQueue = [];
+  // Set up the correlator + the shared dispatch + parcel, mirroring main.ts.
+  // correlator emits (rename/add/unlink) and the dispatch's setPending feed a
+  // single pendingByPath + renameQueue, exactly as main's setupCorrelator does;
+  // `flush()` below is the test's stand-in for main's flushWatcher.
+  const pendingByPath = new Map();
+  const renameQueue = [];
   const correlator = createRenameCorrelator({
-    emit: (e) => eventQueue.push(e),
+    emit: (e) => {
+      if (e.type === 'rename') renameQueue.push(e);
+      else if (e.type === 'unlink') pendingByPath.set(e.path, 'unlink');
+      else if (e.type === 'add') pendingByPath.set(e.path, pendingByPath.get(e.path) === 'unlink' ? 'change' : 'add');
+    },
     graceMs: 600,
   });
   // Seed identity for every existing .md.
@@ -126,89 +170,69 @@ async function setupWorkspace(initialFiles) {
     correlator.onPathSeen(p, ino, hash);
   }
 
-  const watcher = chokidar.watch(ROOT, {
-    ignored: (p) => {
-      const rel = path.relative(ROOT, p);
-      if (!rel || rel.startsWith('..')) return false;
-      return rel.split(path.sep).some((seg) => seg.startsWith('.'));
-    },
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    persistent: true,
+  const isIgnored = (p) => {
+    const rel = path.relative(ROOT, p);
+    if (!rel || rel.startsWith('..')) return false;
+    return rel.split(path.sep).some((seg) => seg.startsWith('.'));
+  };
+  const dispatch = createWatcherDispatch({
+    correlator,
+    isMdFile: (p) => p.toLowerCase().endsWith('.md'),
+    isDrawingFile: (p) => /\.excalidraw$/i.test(p),
+    statPath: (p) => fs.stat(p, { bigint: true }).catch(() => null),
+    hashFile: hashOf,
+    walkMarkdown: listMd,
+    isIgnored,
+    getPending: (p) => pendingByPath.get(p),
+    setPending: (p, type) => pendingByPath.set(p, type),
+    markTreeOnly: () => {},   // tree events aren't asserted here
   });
 
-  watcher
-    .on('add', async (p) => {
-      if (!p.toLowerCase().endsWith('.md')) return;
-      const [ino, hash] = await Promise.all([inoOf(p), hashOf(p)]);
-      correlator.onPathAppeared(p, ino, hash);
-    })
-    .on('change', async (p) => {
-      if (!p.toLowerCase().endsWith('.md')) return;
-      const [ino, hash] = await Promise.all([inoOf(p), hashOf(p)]);
-      correlator.onPathSeen(p, ino, hash);
-      // Synthesize a 'change' event the renderer would receive.
-      const [content, st] = await Promise.all([fs.readFile(p, 'utf8'), fs.stat(p)]);
-      eventQueue.push({ type: 'change', path: p, mtime: st.mtimeMs, outgoingLinks: parseLinks(content) });
-    })
-    .on('unlink', (p) => {
-      if (!p.toLowerCase().endsWith('.md')) return;
-      correlator.onPathGone(p);
-    });
+  let seen = 0;
+  let inFlight = Promise.resolve();
+  const sub = await watcher.subscribe(ROOT, (err, events) => {
+    if (err) return;
+    seen += events.length;
+    inFlight = inFlight.then(() => dispatch.handleBatch(events));
+  }, { ignore: ['**/.*', '**/.*/**'] });
 
-  await new Promise((r) => watcher.on('ready', r));
-
-  // Process raw correlator events: enrich rename/add with the same payload
-  // shape the main process ships to the renderer (mtime + outgoingLinks),
-  // then apply via applyEvent.
-  async function drainAndApply() {
-    while (eventQueue.length) {
-      const raw = eventQueue.shift();
-      if (raw.type === 'rename') {
-        const [content, st] = await Promise.all([
-          fs.readFile(raw.newPath, 'utf8').catch(() => null),
-          fs.stat(raw.newPath).catch(() => null),
-        ]);
-        if (content == null || st == null) continue;
-        await applyEvent({
-          type: 'rename',
-          oldPath: raw.oldPath,
-          newPath: raw.newPath,
-          mtime: st.mtimeMs,
-          outgoingLinks: parseLinks(content),
-        });
-      } else if (raw.type === 'add') {
-        const [content, st] = await Promise.all([
-          fs.readFile(raw.path, 'utf8').catch(() => null),
-          fs.stat(raw.path).catch(() => null),
-        ]);
-        if (content == null || st == null) continue;
-        await applyEvent({
-          type: 'add',
-          path: raw.path,
-          mtime: st.mtimeMs,
-          outgoingLinks: parseLinks(content),
-        });
-      } else if (raw.type === 'unlink') {
-        await applyEvent({ type: 'unlink', path: raw.path });
-      } else if (raw.type === 'change') {
-        await applyEvent(raw);
-      }
+  // main's flushWatcher stand-in: renames first (so the renderer re-keys before
+  // any follow-up), then the coalesced per-path entries.
+  async function flush() {
+    await inFlight;
+    const renames = renameQueue.splice(0);
+    const entries = [...pendingByPath.entries()];
+    pendingByPath.clear();
+    for (const { oldPath, newPath } of renames) {
+      const [content, st] = await Promise.all([
+        fs.readFile(newPath, 'utf8').catch(() => null),
+        fs.stat(newPath).catch(() => null),
+      ]);
+      if (content == null || st == null) { await applyEvent({ type: 'unlink', path: oldPath }); continue; }
+      await applyEvent({ type: 'rename', oldPath, newPath, mtime: st.mtimeMs, outgoingLinks: parseLinks(content) });
+    }
+    for (const [p, type] of entries) {
+      if (type === 'unlink') { await applyEvent({ type: 'unlink', path: p }); continue; }
+      const [content, st] = await Promise.all([
+        fs.readFile(p, 'utf8').catch(() => null),
+        fs.stat(p).catch(() => null),
+      ]);
+      if (content == null || st == null) continue;
+      await applyEvent({ type, path: p, mtime: st.mtimeMs, outgoingLinks: parseLinks(content) });
     }
   }
 
-  // Wait for all watcher/correlator activity to settle, then drain.
+  // Wait for parcel to stop delivering events (one quiet window > the correlator
+  // grace, so buffered unlinks have committed), then flush once.
   async function settle(quiet = 1100) {
-    let lastTotal = -1;
+    let last = -1;
     while (true) {
-      const total = eventQueue.length;
-      if (total === lastTotal) {
-        await drainAndApply();
-        return;
-      }
-      lastTotal = total;
+      const c = seen;
+      if (c === last) break;
+      last = c;
       await new Promise((r) => setTimeout(r, quiet));
     }
+    await flush();
   }
 
   return {
@@ -230,7 +254,7 @@ async function setupWorkspace(initialFiles) {
     p(rel) { return path.join(ROOT, rel); },
     settle,
     async teardown() {
-      await watcher.close();
+      await sub.unsubscribe();
       await fs.rm(ROOT, { recursive: true, force: true });
     },
   };
@@ -284,7 +308,8 @@ test('e2e: external rename rewrites SELF-references', async () => {
     assert.equal(await w.readFile('Bar.md'), 'I am [[Bar]] linking to myself\n');
     assert.equal(await w.readFile('Other.md'), 'I reference [[Bar]] too\n');
     assert.equal(w.linkIndex.getBacklinks('foo').length, 0);
-    assert.equal(w.linkIndex.getBacklinks('bar').length, 2);
+    // Backlinks exclude a file's own self-reference, so only Other.md counts.
+    assert.equal(w.linkIndex.getBacklinks('bar').length, 1);
   } finally {
     await w.teardown();
   }
@@ -316,10 +341,11 @@ test('e2e: external delete removes file from index, leaves orphan refs as unreso
     await w.unlink('Target.md');
     await w.settle();
     assert.equal(w.linkIndex.getOutgoing(w.p('Target.md')).length, 0);
-    // Backlinks still exist (other files still reference "target"); that's how
-    // unresolved links work — pageIndex won't resolve "target" and the editor
-    // renders it as the dim "unresolved" style.
-    assert.equal(w.linkIndex.getBacklinks('target').length, 1);
+    // In the resolved-links model an unresolved link has no backlink entry (it
+    // lives in unresolvedLinks). A's [[Target]] is now unresolved: no backlink,
+    // but A still carries the outgoing (unresolved) reference on disk + in cache.
+    assert.equal(w.linkIndex.getBacklinks('target').length, 0);
+    assert.deepEqual(w.linkIndex.getOutgoing(w.p('A.md')), ['target']);
     assert.equal(await w.readFile('A.md'), '[[Target]] ref\n');
   } finally {
     await w.teardown();

@@ -12,17 +12,21 @@
     "dist": "electron-vite build && electron-builder",
     "test": "node --test \"tests/**/*.test.js\"",
     "lint": "eslint \"src/**/*.{js,jsx,cjs,ts,tsx}\" \"tests/**/*.js\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "keywords": [],
   "author": "Stephen G. Pope",
   "license": "MIT",
   "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
     "@eslint/js": "^9.39.4",
     "@types/node": "^25.9.1",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
+    "drizzle-kit": "^0.31.10",
     "electron": "^42.2.0",
     "electron-builder": "^26.8.1",
     "electron-vite": "^5.0.0",
@@ -45,10 +49,12 @@
     "@earendil-works/pi-ai": "0.80.5",
     "@earendil-works/pi-coding-agent": "0.80.5",
     "@excalidraw/excalidraw": "^0.18.1",
-    "chokidar": "^5.0.0",
+    "@parcel/watcher": "^2.5.6",
+    "better-sqlite3": "^12.11.1",
     "codemirror": "^6.0.2",
     "dayjs": "^1.11.20",
     "diff": "^9.0.0",
+    "drizzle-orm": "^0.45.2",
     "force-graph": "^1.51.4",
     "fuzzysort": "^3.1.0",
     "react": "^19.2.6",
@@ -75,12 +81,17 @@
       "!cli-tools/node_modules/.bin/**"
     ],
     "asarUnpack": [
-      "cli-tools/**"
+      "cli-tools/**",
+      "**/node_modules/better-sqlite3/**"
     ],
     "extraResources": [
       {
         "from": "resources/built-in-skills",
         "to": "built-in-skills"
+      },
+      {
+        "from": "drizzle",
+        "to": "drizzle"
       }
     ],
     "mac": {

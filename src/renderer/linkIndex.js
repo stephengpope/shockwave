@@ -1,10 +1,25 @@
 export const LINK_RE = /\[\[([^\]\n]+?)\]\]/g;
 
-export function normalizeTarget(raw) {
+// Parse a raw [[…]] body into path segments + basename. Drops a |alias and a
+// #heading, strips a trailing .md, lowercases. "folder/Foo" → {segments:
+// ['folder'], basename:'foo'}; "Foo" → {segments:[], basename:'foo'}. The
+// segments let the resolver disambiguate when two files share a basename.
+export function parseTarget(raw) {
   const beforePipe = raw.split('|')[0];
   const beforeHash = beforePipe.split('#')[0];
-  const name = beforeHash.trim().replace(/\.md$/i, '');
-  return name.toLowerCase();
+  const cleaned = beforeHash.trim().replace(/\.md$/i, '');
+  const parts = cleaned.split('/').filter((s) => s.length > 0);
+  if (parts.length === 0) return { segments: [], basename: '' };
+  return {
+    segments: parts.slice(0, -1).map((s) => s.toLowerCase()),
+    basename: parts[parts.length - 1].toLowerCase(),
+  };
+}
+
+// The link-index key for a target: its basename, path prefix dropped. Two files
+// may share a basename; the resolver (linkResolver.js) disambiguates by path.
+export function normalizeTarget(raw) {
+  return parseTarget(raw).basename;
 }
 
 export function prettyName(fullPath, vaultPath) {
@@ -53,14 +68,15 @@ export function parseLinks(content) {
     let foundOnThisLine = false;
     let contextForThisLine = null;
     while ((m = LINK_RE.exec(line)) !== null) {
-      const target = normalizeTarget(m[1]);
-      if (!target) continue;
+      const parsed = parseTarget(m[1]);
+      if (!parsed.basename) continue;
       if (!foundOnThisLine) {
         contextForThisLine = collectContext(lines, i);
         foundOnThisLine = true;
       }
       out.push({
-        target,
+        target: parsed.basename,
+        targetParsed: parsed,
         lineNumber: i + 1,
         lineText: line,
         contextLines: contextForThisLine,
@@ -75,13 +91,16 @@ export function createLinkIndex() {
   const backlinks = new Map();
   const mtimes = new Map();
 
-  function addEntry(target, fromPath, lineNumber, lineText, contextLines) {
+  function addEntry(target, targetParsed, fromPath, lineNumber, lineText, contextLines) {
     let arr = backlinks.get(target);
     if (!arr) {
       arr = [];
       backlinks.set(target, arr);
     }
-    arr.push({ fromPath, lineNumber, lineText, contextLines });
+    // targetParsed ({segments, basename}) lets a consumer re-resolve this link
+    // against the current file set, so backlinks attribute to the correct file
+    // when two share a basename.
+    arr.push({ fromPath, targetParsed, lineNumber, lineText, contextLines });
   }
 
   function removeEntries(fromPath, targets) {
@@ -107,9 +126,9 @@ export function createLinkIndex() {
     }
     const parsed = parseLinks(content);
     const newTargets = [];
-    for (const { target, lineNumber, lineText, contextLines } of parsed) {
+    for (const { target, targetParsed, lineNumber, lineText, contextLines } of parsed) {
       newTargets.push(target);
-      addEntry(target, path, lineNumber, lineText, contextLines);
+      addEntry(target, targetParsed, path, lineNumber, lineText, contextLines);
     }
     outgoingByFile.set(path, newTargets);
     if (mtime !== undefined) mtimes.set(path, mtime);
@@ -145,9 +164,9 @@ export function createLinkIndex() {
     const oldTargets = outgoingByFile.get(path);
     if (oldTargets && oldTargets.length > 0) removeEntries(path, oldTargets);
     const newTargets = [];
-    for (const { target, lineNumber, lineText, contextLines } of parsed) {
+    for (const { target, targetParsed, lineNumber, lineText, contextLines } of parsed) {
       newTargets.push(target);
-      addEntry(target, path, lineNumber, lineText, contextLines);
+      addEntry(target, targetParsed, path, lineNumber, lineText, contextLines);
     }
     outgoingByFile.set(path, newTargets);
     if (mtime !== undefined) mtimes.set(path, mtime);
@@ -184,11 +203,15 @@ export function createLinkIndex() {
     return mtimes.get(path);
   }
 
-  function getEntriesGroupedBySource(targetLower) {
+  // `keep(entry)` is an optional predicate — used to filter a basename bucket
+  // down to the links that actually resolve to a specific file when two files
+  // share the basename (see useLinkIndex.getBacklinksForFile).
+  function getEntriesGroupedBySource(targetLower, keep) {
     const entries = backlinks.get(targetLower);
     if (!entries || entries.length === 0) return [];
     const byPath = new Map();
     for (const e of entries) {
+      if (keep && !keep(e)) continue;
       let group = byPath.get(e.fromPath);
       if (!group) {
         group = {

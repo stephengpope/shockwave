@@ -1,6 +1,6 @@
 import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
-import { LINK_RE, normalizeTarget } from './linkIndex.js';
+import { LINK_RE, parseTarget } from './linkIndex.js';
 
 function splitLink(raw) {
   const [beforePipe, ...rest] = raw.split('|');
@@ -10,19 +10,21 @@ function splitLink(raw) {
 }
 
 class LinkWidget extends WidgetType {
-  targetName; resolved; display; onClick;
-  constructor(targetName, display, resolved, onClick) {
+  targetName; resolved; display; onClick; sourcePath;
+  constructor(targetName, display, resolved, onClick, sourcePath) {
     super();
     this.targetName = targetName;
     this.display = display;
     this.resolved = resolved;
     this.onClick = onClick;
+    this.sourcePath = sourcePath;
   }
 
   eq(other) {
     return this.targetName === other.targetName
       && this.display === other.display
-      && this.resolved === other.resolved;
+      && this.resolved === other.resolved
+      && this.sourcePath === other.sourcePath;
   }
 
   toDOM() {
@@ -35,7 +37,7 @@ class LinkWidget extends WidgetType {
     a.addEventListener('mousedown', (e) => e.preventDefault());
     a.addEventListener('click', (e) => {
       e.preventDefault();
-      this.onClick(this.targetName);
+      this.onClick(this.targetName, this.sourcePath);
     });
     return a;
   }
@@ -45,7 +47,7 @@ class LinkWidget extends WidgetType {
   }
 }
 
-function buildDecorations(view, onClick, pageIndex) {
+function buildDecorations(view, onClick, cache, sourcePath) {
   const builder = new RangeSetBuilder();
   const ranges = view.state.selection.ranges;
   const touchesSelection = (from, to) => {
@@ -63,7 +65,9 @@ function buildDecorations(view, onClick, pageIndex) {
       while ((m = LINK_RE.exec(line.text)) !== null) {
         const { targetName, display } = splitLink(m[1]);
         if (!targetName) continue;
-        const resolved = pageIndex.has(normalizeTarget(targetName));
+        // Ask the metadata cache to resolve (path-qualified or bare, with the
+        // same-folder/shortest tiebreaker) — Obsidian's getFirstLinkpathDest.
+        const resolved = !!cache && cache.getFirstLinkpathDest(parseTarget(m[1]), sourcePath) != null;
         const start = line.from + m.index;
         const end = start + m[0].length;
         // Reveal raw [[name]] when the cursor/selection touches the link, so
@@ -72,7 +76,7 @@ function buildDecorations(view, onClick, pageIndex) {
         builder.add(
           start,
           end,
-          Decoration.replace({ widget: new LinkWidget(targetName, display, resolved, onClick) })
+          Decoration.replace({ widget: new LinkWidget(targetName, display, resolved, onClick, sourcePath) })
         );
       }
       pos = line.to + 1;
@@ -81,21 +85,23 @@ function buildDecorations(view, onClick, pageIndex) {
   return builder.finish();
 }
 
-export function wikiLinks(onClick, getPageIndex) {
+export function wikiLinks(onClick, getCache, getSourcePath) {
   return ViewPlugin.fromClass(
     class {
       decorations;
-      pageIndex;
+      sourcePath;
       constructor(view) {
-        this.pageIndex = getPageIndex();
-        this.decorations = buildDecorations(view, onClick, this.pageIndex);
+        this.sourcePath = getSourcePath?.() ?? null;
+        this.decorations = buildDecorations(view, onClick, getCache(), this.sourcePath);
       }
       update(update) {
-        const pageIndex = getPageIndex();
-        // Identity changes when the tree changes (useMemo in useLinkIndex).
-        if (update.docChanged || update.viewportChanged || update.selectionSet || pageIndex !== this.pageIndex) {
-          this.pageIndex = pageIndex;
-          this.decorations = buildDecorations(update.view, onClick, pageIndex);
+        const sourcePath = getSourcePath?.() ?? null;
+        // Rebuild on doc/viewport/selection change or when the active file
+        // switches — reading the live cache, so resolution is always current as
+        // of the last editor interaction.
+        if (update.docChanged || update.viewportChanged || update.selectionSet || sourcePath !== this.sourcePath) {
+          this.sourcePath = sourcePath;
+          this.decorations = buildDecorations(update.view, onClick, getCache(), sourcePath);
         }
       }
     },

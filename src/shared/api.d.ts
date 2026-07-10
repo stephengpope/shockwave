@@ -100,6 +100,44 @@ export interface SyncStatus {
   conflicts?: string[];
 }
 
+/** A saved chat (row of `chat_session`). */
+export interface ChatSession {
+  sessionId: string;
+  workspace: string;
+  jsonlPath: string;
+  title: string | null;
+  systemPrompt: string | null;
+  model: string | null;
+  createdAt: number;
+  updatedAt: number;
+  archived: number;
+  starred: number;
+}
+
+/** A stored chat message (row of `message`). Tool CALLS ride on the assistant
+ *  row (`toolCalls` JSON); each tool RESULT is a `role:'tool'` row keyed by
+ *  `toolCallId`. */
+export interface ChatMessage {
+  id: number;
+  sessionId: string;
+  seq: number;
+  role: 'user' | 'assistant' | 'tool' | string;
+  content: string | null;
+  reasoning: string | null;
+  toolCalls: string | null;
+  toolCallId: string | null;
+  toolName: string | null;
+  createdAt: number;
+}
+
+/** A search result: the matching chat + a highlighted snippet. */
+export interface ChatSearchHit {
+  sessionId: string;
+  title: string | null;
+  updatedAt: number;
+  snippet: string;
+}
+
 export interface ShockwaveApi {
   // Dialogs
   openFolder(): Promise<string | null>;
@@ -179,7 +217,6 @@ export interface ShockwaveApi {
     send(text: string, images?: Array<{ type: 'image'; source: unknown }>): Promise<void>;
     abort(): Promise<void>;
     reset(): Promise<void>;
-    getDefaultSystemPrompt(): Promise<string>;
     listProviders(): Promise<Array<{ slug: string; label: string }>>;
     listModels(provider: string): Promise<Array<{ id: string; label: string }>>;
     listThinkingLevels(opts: { provider: string; model: string }): Promise<string[]>;
@@ -187,6 +224,18 @@ export interface ShockwaveApi {
     onEvent(cb: (evt: unknown) => void): Unsubscribe;
     onError(cb: (payload: { message: string }) => void): Unsubscribe;
     onOpenFile(cb: (payload: { path: string }) => void): Unsubscribe;
+  };
+
+  chat: {
+    listSessions(opts?: { limit?: number; before?: number }): Promise<ChatSession[]>;
+    listStarred(): Promise<ChatSession[]>;
+    setStarred(opts: { sessionId: string; starred: boolean }): Promise<void>;
+    searchSessions(opts: { query: string; limit?: number }): Promise<ChatSearchHit[]>;
+    getMessages(sessionId: string): Promise<ChatMessage[]>;
+    newSession(): Promise<void>;
+    openSession(sessionId: string): Promise<{ session?: ChatSession; messages: ChatMessage[] }>;
+    deleteSession(sessionId: string): Promise<void>;
+    renameSession(opts: { sessionId: string; title: string }): Promise<void>;
   };
 
   voice: {

@@ -64,7 +64,7 @@ function computeStats(state) {
  *   clear()                        — empties the doc, resets cursor
  */
 const Editor = forwardRef<any, any>(function Editor(
-  { onLinkClick, onChange, getPageIndexRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, dark, viewMode, hideLineNumbers },
+  { onLinkClick, onChange, getCacheRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, dark, viewMode, hideLineNumbers },
   ref,
 ) {
   const hostRef = useRef<any>(null);
@@ -313,7 +313,8 @@ const Editor = forwardRef<any, any>(function Editor(
   useEffect(() => {
     if (!hostRef.current) return;
     const completionSource = wikiLinkCompletions(
-      () => getPageIndexRef?.current ?? new Map(),
+      () => getCacheRef?.current,
+      () => getVaultPathRef?.current ?? null,
     );
 
     const readOnlyCompartment = new Compartment();
@@ -339,8 +340,9 @@ const Editor = forwardRef<any, any>(function Editor(
         () => getVaultPathRef?.current ?? null,
       ),
       wikiLinks(
-        (name) => linkClickRef.current?.(name),
-        () => getPageIndexRef?.current ?? new Map(),
+        (name, sourcePath) => linkClickRef.current?.(name, sourcePath),
+        () => getCacheRef?.current,
+        () => getActiveFilePathRef?.current ?? null,
       ),
     ];
     livePreviewExtensionsRef.current = livePreviewExtensions;

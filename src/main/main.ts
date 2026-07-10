@@ -3,18 +3,19 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
-import chokidar from 'chokidar';
+import * as parcelWatcher from '@parcel/watcher';
 import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
-import { agentSend, agentAbort, agentReset, listThinkingLevels } from './codingAgent.js';
-import { isMdFile, uniquePath, uniqueInWorkspace, walkMarkdownPaths, collectMarkdownBasenamesLower } from './pathResolver.js';
+import { createWatcherDispatch } from './watcherDispatch.js';
+import { agentSend, agentAbort, agentReset, agentOpenSession, listThinkingLevels } from './codingAgent.js';
+import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred } from './db/index.js';
+import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
 import { getProviders, getModels } from '@earendil-works/pi-ai/compat';
 import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from './skillLibrary.js';
 import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { installOpenFileBridge } from './openFileExtension.js';
 import { ensureCliShims, prependPath } from './cliTools.js';
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from './agentSystemPrompt.js';
 import {
   verifyPat as syncVerifyPat,
   checkGit as syncCheckGit,
@@ -97,9 +98,9 @@ const DEFAULT_SETTINGS = {
     // endpoints stay effectively off because their model is registered
     // reasoning:false unless a level > off is chosen.
     thinkingLevel: 'medium',
-    // Pre-filled with the default on first install so users can read + edit.
-    // "Reset to default" in the UI writes the current default back into here.
-    systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+    // System prompt is no longer a setting — it's assembled at session boot from
+    // the workspace's SOUL.md (or a built-in default) + the internal Shockwave
+    // helper. See src/main/prompt/.
     // GLOBAL built-in skill on/off (folderName → 'enabled'|'disabled'; absent ⇒
     // enabled). A workspace can override per-skill in its workspace.json. User
     // uploads live in `<workspace>/.shockwave/skills/`.
@@ -294,8 +295,8 @@ async function doWriteSettings(patch) {
   }
   const out = { ...existing, ...patch };
   // Defensive deep-merge for codingAgent: a renderer caller that builds a
-  // partial sub-object (e.g. forgetting systemPrompt) would otherwise wipe
-  // sibling fields on disk via the shallow spread above.
+  // partial sub-object (e.g. forgetting apiKey) would otherwise wipe sibling
+  // fields on disk via the shallow spread above.
   if (patch.codingAgent && (existing as any).codingAgent) {
     (out as any).codingAgent = { ...(existing as any).codingAgent, ...patch.codingAgent };
   }
@@ -457,7 +458,7 @@ async function buildTree(dirPath) {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
   const children = await Promise.all(
     entries
-      .filter((e) => !e.name.startsWith('.'))
+      .filter((e) => !isIgnoredSegment(e.name))
       .map(async (e) => {
         const fullPath = path.join(dirPath, e.name);
         if (e.isDirectory()) {
@@ -497,25 +498,85 @@ ipcMain.handle('fs:readTree', async (_evt, dirPath) => {
   return buildTree(dirPath);
 });
 
+// --- Persisted parse cache (Obsidian-style metadata cache) -----------------
+// Stores each .md file's parsed wiki-links keyed by path, validated by mtime +
+// size, so a cold start re-parses only the files that changed while the app was
+// closed. Kept under userData (per-machine, NOT in the workspace) so it never
+// syncs — mtimes differ per machine and would churn git.
+//
+// Full rebuild-from-scratch happens when: (a) LINK_CACHE_VERSION doesn't match
+// the on-disk cache — bump it whenever parseLinks' output shape changes so a
+// cache written by an older build is discarded rather than trusted; (b) the
+// cache file is missing/corrupt; (c) the user triggers `fs:rebuildLinkCache`.
+// Per-file re-parse happens when a file's mtime OR size differs from the cache
+// (size guards against edits that preserve mtime).
+const LINK_CACHE_VERSION = 1;   // bump when parseLinks' output shape changes (e.g. added targetParsed)
+
+function linkCachePath(dirPath) {
+  const key = crypto.createHash('sha1').update(dirPath).digest('hex');
+  return path.join(app.getPath('userData'), 'link-cache', `${key}.json`);
+}
+
+async function loadLinkCache(dirPath) {
+  try {
+    const raw = await fs.readFile(linkCachePath(dirPath), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.version === LINK_CACHE_VERSION && parsed.entries) return parsed.entries;
+  } catch { /* missing / corrupt / version mismatch → cold parse */ }
+  return {};
+}
+
+async function saveLinkCache(dirPath, entries) {
+  try {
+    const file = linkCachePath(dirPath);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify({ version: LINK_CACHE_VERSION, entries }), 'utf8');
+    await fs.rename(tmp, file);
+  } catch { /* cache persistence is best-effort — never block a load */ }
+}
+
 async function readAllMarkdown(dirPath) {
+  const cache = await loadLinkCache(dirPath);
   const paths = await walkMarkdownPaths(dirPath);
   const out: any[] = [];
+  const nextEntries: Record<string, any> = {};
+  let hits = 0, misses = 0;
   for (const full of paths) {
+    let stat;
+    try { stat = await fs.stat(full); } catch { continue; }
+    const cached = cache[full];
+    if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
+      // Unchanged since last load → reuse the cached parse, skip read + parse.
+      out.push({ path: full, mtime: stat.mtimeMs, outgoingLinks: cached.outgoingLinks });
+      nextEntries[full] = cached;
+      hits++;
+      continue;
+    }
     try {
-      const [content, stat] = await Promise.all([
-        fs.readFile(full, 'utf8'),
-        fs.stat(full),
-      ]);
-      out.push({ path: full, mtime: stat.mtimeMs, outgoingLinks: parseLinks(content) });
+      const content = await fs.readFile(full, 'utf8');
+      const links = parseLinks(content);
+      out.push({ path: full, mtime: stat.mtimeMs, outgoingLinks: links });
+      nextEntries[full] = { mtime: stat.mtimeMs, size: stat.size, outgoingLinks: links };
+      misses++;
     } catch {
       // swallow per-file errors so one bad file doesn't kill the vault load
     }
   }
+  // Rebuild the cache from the current file set (drops entries for deleted files).
+  await saveLinkCache(dirPath, nextEntries);
+  if (misses > 0 || hits > 0) console.log(`[link-cache] ${hits} hits, ${misses} reparsed (${paths.length} files)`);
   return out;
 }
 
 ipcMain.handle('fs:readAllMarkdown', async (_evt, dirPath) => {
   return readAllMarkdown(dirPath);
+});
+
+// Escape hatch: discard the persisted cache so the next load re-parses fully.
+ipcMain.handle('fs:rebuildLinkCache', async (_evt, dirPath) => {
+  try { await fs.rm(linkCachePath(dirPath), { force: true }); } catch { /* ignore */ }
+  return { ok: true };
 });
 
 ipcMain.handle('fs:readFile', async (_evt, filePath) => {
@@ -533,8 +594,8 @@ ipcMain.handle('fs:writeFile', async (_evt, { filePath, content }) => {
 });
 
 // File identity helpers used by the rename correlator. Hash is computed
-// eagerly so we still have an identity when chokidar fires `unlink` (the file
-// is gone, so we can't read it then).
+// eagerly so we still have an identity when the watcher reports a delete (the
+// file is gone, so we can't read it then).
 async function statInoOf(p) {
   try {
     const st = await fs.stat(p, { bigint: true });
@@ -554,16 +615,17 @@ async function hashFileOf(p) {
 }
 
 ipcMain.handle('fs:createFile', async (_evt, { dirPath, name, content = '' }) => {
-  const base = name.replace(/\.md$/i, '');
-  // Workspace-wide uniqueness: the link index is keyed by basename, so two
-  // .md files sharing a basename in different folders would break it. Match
-  // fs:renameFile / fs:moveItem.
-  const target = await uniqueInWorkspace({
-    workspaceRoot: watcherRootDir,
-    destDir: dirPath,
-    base,
-    ext: '.md',
-  });
+  // Default new files to .md; honor an explicit extension in `name` (e.g.
+  // "Notes.txt"). Internal callers (wiki-link target, daily note) pass an
+  // explicit ".md"; a user-typed draft title may carry any extension or none.
+  const dot = name.lastIndexOf('.');
+  const hasExt = dot > 0 && dot < name.length - 1;   // not a leading/trailing dot
+  const base = hasExt ? name.slice(0, dot) : name.replace(/\.$/, '');
+  const ext = hasExt ? name.slice(dot) : '.md';
+  // Same-folder uniqueness only. Duplicate basenames across different folders
+  // are allowed now (the link resolver disambiguates by path); the filesystem
+  // still forbids two identical names in one folder.
+  const target = await uniquePath(dirPath, base, ext);
   await fs.writeFile(target, content, 'utf8');
   const st = await fs.stat(target);
   return { path: target, mtime: st.mtimeMs };
@@ -573,24 +635,24 @@ ipcMain.handle('fs:renameFile', async (_evt, { fromPath, toName }) => {
   const dir = path.dirname(fromPath);
   const base = toName.replace(/\.md$/i, '').trim();
   if (!base) throw new Error('Name cannot be empty');
-  const target = await uniqueInWorkspace({
-    workspaceRoot: watcherRootDir,
-    destDir: dir,
-    base,
-    ext: '.md',
-    excludePaths: [fromPath],
-  });
-  if (target === fromPath) return target;
-  await fs.rename(fromPath, target);
-  return target;
+  // Same-folder uniqueness, ignoring the file being renamed. Duplicate basenames
+  // in different folders are allowed (the resolver disambiguates by path).
+  let candidate = path.join(dir, `${base}.md`);
+  let i = 1;
+  while (candidate !== fromPath) {
+    try { await fs.access(candidate); candidate = path.join(dir, `${base} ${i}.md`); i++; }
+    catch { break; }
+  }
+  if (candidate === fromPath) return candidate;
+  await fs.rename(fromPath, candidate);
+  return candidate;
 });
 
-// Literal rename (file-browser): the new name is used verbatim — no `.md`
-// stripping or forcing. A name ending in `.md` stays markdown; anything else
-// is a plain file. Rejects (throws) on collision instead of auto-disambiguating
-// — for `.md` targets the link index is basename-keyed so uniqueness is
-// workspace-wide; for other files it's same-folder. The renderer blocks
-// collisions live; this is the backstop.
+// Literal rename (file-browser + title bar): the new name is used verbatim — no
+// `.md` stripping or forcing. A name ending in `.md` stays markdown; anything
+// else is a plain file. Rejects (throws) on a same-folder collision; duplicate
+// basenames across different folders are allowed. The renderer blocks collisions
+// live; this is the backstop.
 ipcMain.handle('fs:renameFileLiteral', async (_evt, { fromPath, toName }) => {
   const dir = path.dirname(fromPath);
   const name = (toName ?? '').trim();
@@ -598,15 +660,12 @@ ipcMain.handle('fs:renameFileLiteral', async (_evt, { fromPath, toName }) => {
   if (name.includes('/') || name.includes('\\')) throw new Error('Name cannot contain a path separator');
   const target = path.join(dir, name);
   if (target === fromPath) return fromPath;
-  if (isMdFile(name)) {
-    const baseLower = name.slice(0, -3).toLowerCase();
-    const taken = await collectMarkdownBasenamesLower(watcherRootDir, new Set([fromPath]));
-    if (taken.has(baseLower)) throw new Error(`A file named "${name}" already exists in the workspace.`);
-  } else {
-    let exists = true;
-    try { await fs.access(target); } catch { exists = false; }
-    if (exists) throw new Error(`"${name}" already exists in this folder.`);
-  }
+  // Same-folder collision only, for any extension. Duplicate basenames across
+  // different folders are allowed; the filesystem forbids two identical names
+  // in one folder.
+  let exists = true;
+  try { await fs.access(target); } catch { exists = false; }
+  if (exists) throw new Error(`"${name}" already exists in this folder.`);
   await fs.rename(fromPath, target);
   return target;
 });
@@ -897,47 +956,14 @@ ipcMain.handle('fs:moveItem', async (_evt, { srcPath, destDir }) => {
 
   let target;
   if (isMd && !isFolder) {
-    // .md file move: workspace-wide name uniqueness so the link index stays consistent.
+    // .md file move: same-folder uniqueness only. Duplicate basenames in
+    // different folders are allowed (the resolver disambiguates by path).
     const base = name.slice(0, -3);
-    target = await uniqueInWorkspace({
-      workspaceRoot: watcherRootDir,
-      destDir,
-      base,
-      ext: '.md',
-      excludePaths: [srcPath],
-    });
-  } else if (isFolder) {
-    // Folder move: same-dir uniqueness (folders don't share the link-index basename space),
-    // plus workspace-wide uniqueness for every .md file the folder contains, treating its
-    // own .md files as excluded (they move with it).
-    const inside = await walkMarkdownPaths(srcPath);
-    target = path.join(destDir, name);
-    // If the literal target dir already exists, append " 1", " 2", ...
-    let candidate = target;
-    let i = 1;
-    while (true) {
-      try { await fs.access(candidate); candidate = path.join(destDir, `${name} ${i}`); i++; }
-      catch { break; }
-    }
-    target = candidate;
-    // Verify no nested .md inside this folder will collide with a same-named file already
-    // in the workspace (outside this folder). If any do, auto-disambiguate the FOLDER name
-    // (simpler than renaming individual files mid-move).
-    if (watcherRootDir && inside.length > 0) {
-      const excludeSet = new Set(inside);
-      const taken = await collectMarkdownBasenamesLower(watcherRootDir, excludeSet);
-      const ourNames = new Set(inside.map((p) => path.basename(p).slice(0, -3).toLowerCase()));
-      for (const n of ourNames) {
-        if (taken.has(n)) {
-          // Bump the folder name once more — but at this point all collision is from the
-          // nested files, which keep their names. We cannot resolve this via folder rename
-          // alone. The least-surprising thing is to reject the move so the user picks
-          // explicit names.
-          throw new Error(`Cannot move "${name}": one or more files inside share a name with files elsewhere in the workspace.`);
-        }
-      }
-    }
+    target = await uniquePath(destDir, base, '.md');
   } else {
+    // Folder or non-.md file: same-dir uniqueness on the item's own name. A
+    // folder's nested .md files may now share basenames with files elsewhere —
+    // that's fine, so there's no cross-folder collision check anymore.
     target = path.join(destDir, name);
     let candidate = target;
     let i = 1;
@@ -1294,7 +1320,7 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
     const settings = await readSettings();
     const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
     const workspacePath = ws?.path ?? null;
-    const { provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, systemPrompt, builtinSkills } = settings.codingAgent ?? {};
+    const { provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, builtinSkills } = settings.codingAgent ?? {};
     // Per-workspace built-in override lives in the workspace file; it wins over
     // the global default above.
     const wsData = workspacePath ? await readWorkspaceFileRaw(workspacePath) : null;
@@ -1310,7 +1336,6 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
         baseUrl,
         contextWindow,
         thinkingLevel,
-        systemPrompt,
         userDataDir: app.getPath('userData'),
         builtinDir: builtinSkillsDir(),
         globalBuiltinSkills: builtinSkills ?? {},
@@ -1369,7 +1394,67 @@ ipcMain.handle('agent:reset', async () => {
   try { await agentReset(); } catch { /* reset is best-effort */ }
 });
 
-ipcMain.handle('agent:getDefaultSystemPrompt', async () => DEFAULT_AGENT_SYSTEM_PROMPT);
+// ---- Chat history (SQLite: display + search; pi's JSONL: continuation) ----
+// The active workspace scopes every list/search (chats are workspace-scoped).
+async function activeWorkspacePath(): Promise<string | null> {
+  const settings = await readSettings();
+  const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
+  return ws?.path ?? null;
+}
+
+// Recent chats for the picker (keyset paginated on updatedAt; pass `before`).
+ipcMain.handle('chat:listSessions', async (_evt, opts = {}) => {
+  const ws = await activeWorkspacePath();
+  if (!ws) return [];
+  return listSessions(ws, opts);
+});
+
+// Starred chats (the pinned section at the top of the picker).
+ipcMain.handle('chat:listStarred', async () => {
+  const ws = await activeWorkspacePath();
+  if (!ws) return [];
+  return listStarred(ws);
+});
+
+// Toggle a chat's starred flag.
+ipcMain.handle('chat:setStarred', async (_evt, { sessionId, starred }) => {
+  if (sessionId) setSessionStarred(sessionId, !!starred);
+});
+
+// Cross-chat full-text search over message content.
+ipcMain.handle('chat:searchSessions', async (_evt, { query, limit } = {}) => {
+  const ws = await activeWorkspacePath();
+  if (!ws || !query) return [];
+  return searchSessions(ws, query, { limit });
+});
+
+// Messages for one chat — the renderer rebuilds the transcript from these.
+ipcMain.handle('chat:getMessages', async (_evt, sessionId) => {
+  if (!sessionId) return [];
+  return getMessages(sessionId);
+});
+
+// Start a fresh chat (same as the chat "new session" button → agentReset).
+ipcMain.handle('chat:newSession', async () => {
+  try { await agentReset(); } catch { /* best-effort */ }
+});
+
+// Resume a saved chat: hand pi the JSONL + stored prompt for the next send.
+// Returns the messages so the renderer can hydrate the UI immediately.
+ipcMain.handle('chat:openSession', async (_evt, sessionId) => {
+  const row = getSession(sessionId);
+  if (!row) return { messages: [] };
+  await agentOpenSession({ jsonlPath: row.jsonlPath, systemPrompt: row.systemPrompt });
+  return { session: row, messages: getMessages(sessionId) };
+});
+
+ipcMain.handle('chat:deleteSession', async (_evt, sessionId) => {
+  if (sessionId) deleteSession(sessionId);
+});
+
+ipcMain.handle('chat:renameSession', async (_evt, { sessionId, title }) => {
+  if (sessionId && typeof title === 'string') setSessionTitle(sessionId, title.slice(0, 100));
+});
 
 // Provider + model lookups for the Settings UI. Pi-ai's `getProviders()` is
 // the source of truth; we intersect with this allowlist so OAuth /
@@ -1491,6 +1576,7 @@ let pendingByPath = new Map();    // path -> 'add' | 'change' | 'unlink'
 let pendingTreeOnly = false;       // folder events or non-.md events
 let flushTimer: any = null;
 let correlator: any = null;             // createRenameCorrelator instance, reset per workspace
+let watchDispatch: any = null;          // createWatcherDispatch instance, reset per workspace
 let renameQueue: any[] = [];              // emitted rename events awaiting flush to renderer
 
 function senderWindow() {
@@ -1581,7 +1667,7 @@ async function flushWatcher() {
   }
 }
 
-// Wire chokidar -> correlator -> pendingByPath. The correlator emits one of
+// Wire the watcher -> correlator -> pendingByPath. The correlator emits one of
 // 'add' | 'unlink' | 'rename'. The first two go through pendingByPath so they
 // pick up the per-path coalescing behavior; 'rename' goes through renameQueue
 // since it's already a paired event and shouldn't be merged with anything.
@@ -1604,6 +1690,18 @@ function setupCorrelator() {
     },
     graceMs: RENAME_GRACE_MS,
   });
+  watchDispatch = createWatcherDispatch({
+    correlator,
+    isMdFile,
+    isDrawingFile,
+    statPath: (p) => fs.stat(p, { bigint: true }).catch(() => null),
+    hashFile: hashFileOf,
+    walkMarkdown: walkMarkdownPaths,
+    isIgnored: isIgnoredWatchPath,
+    getPending: (p) => pendingByPath.get(p),
+    setPending: (p, type) => { pendingByPath.set(p, type); scheduleFlush(); },
+    markTreeOnly: () => { pendingTreeOnly = true; scheduleFlush(); },
+  });
 }
 
 // `.excalidraw` drawings get content events too (so an open drawing reloads
@@ -1613,56 +1711,30 @@ function setupCorrelator() {
 // fine: drawings carry no backlinks to rewrite.
 function isDrawingFile(p) { return /\.excalidraw$/i.test(p); }
 
-async function onChokidarAdd(p) {
-  if (isDrawingFile(p)) {
-    pendingByPath.set(p, pendingByPath.get(p) === 'unlink' ? 'change' : 'add');
-    scheduleFlush();
-    return;
-  }
-  if (!isMdFile(p)) {
-    pendingTreeOnly = true;
-    scheduleFlush();
-    return;
-  }
-  const [ino, hash] = await Promise.all([statInoOf(p), hashFileOf(p)]);
-  correlator.onPathAppeared(p, ino, hash);
+// Skip any event under a dotfile segment (mirrors buildTree's rule; excludes
+// .git / .obsidian / .shockwave). @parcel/watcher's `ignore` globs are a perf
+// hint that keeps the native watcher from reporting these at all; this
+// predicate is the authoritative filter in case a backend reports them anyway.
+function isIgnoredWatchPath(p) {
+  if (!watcherRootDir) return true;
+  const rel = path.relative(watcherRootDir, p);
+  if (!rel || rel.startsWith('..')) return false;
+  return rel.split(path.sep).some((seg) => isIgnoredSegment(seg));
 }
 
-async function onChokidarChange(p) {
-  if (isDrawingFile(p)) {
-    pendingByPath.set(p, pendingByPath.get(p) === 'add' ? 'add' : 'change');
-    scheduleFlush();
+// @parcel/watcher hands the callback a batch of events. The mapping from that
+// batch to correlator/pending-state updates lives in `watcherDispatch.js` so
+// main and the correlator tests exercise identical logic.
+async function onParcelEvents(err, events) {
+  if (err) {
+    console.warn('[watcher] subscribe error', err?.message ?? err);
     return;
   }
-  if (!isMdFile(p)) {
-    pendingTreeOnly = true;
-    scheduleFlush();
-    return;
-  }
-  // Atomic saves (vim/VS Code) arrive here, with a new inode. Update identity
-  // so a future unlink for this path has the latest ino+hash to correlate with.
-  const [ino, hash] = await Promise.all([statInoOf(p), hashFileOf(p)]);
-  correlator.onPathSeen(p, ino, hash);
-  pendingByPath.set(p, pendingByPath.get(p) === 'add' ? 'add' : 'change');
-  scheduleFlush();
-}
-
-function onChokidarUnlink(p) {
-  if (isDrawingFile(p)) {
-    pendingByPath.set(p, 'unlink');
-    scheduleFlush();
-    return;
-  }
-  if (!isMdFile(p)) {
-    pendingTreeOnly = true;
-    scheduleFlush();
-    return;
-  }
-  correlator.onPathGone(p);
+  if (watchDispatch) await watchDispatch.handleBatch(events);
 }
 
 // Seed the correlator with current identity for every .md file in the
-// workspace. Runs once on watchStart, before chokidar fires any events, so an
+// workspace. Runs once on watchStart, before parcel delivers any events, so an
 // unlink right after startup can still be correlated to its prior identity.
 async function seedCorrelator(root) {
   const paths = await walkMarkdownPaths(root);
@@ -1680,14 +1752,15 @@ async function stopWatcher() {
   if (currentWatcher) {
     const w = currentWatcher;
     currentWatcher = null;
-    try { await w.close(); } catch { /* ignore close errors */ }
+    try { await w.unsubscribe(); } catch { /* ignore teardown errors */ }
   }
   if (bookmarksWatcher) {
     const bw = bookmarksWatcher;
     bookmarksWatcher = null;
-    try { await bw.close(); } catch { /* ignore close errors */ }
+    try { await bw.unsubscribe(); } catch { /* ignore teardown errors */ }
   }
   correlator = null;
+  watchDispatch = null;
   watcherRootDir = null;
   watcherWindowId = null;
 }
@@ -1700,47 +1773,29 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
   watcherRootDir = dirPath;
   setupCorrelator();
   await seedCorrelator(dirPath);
-  currentWatcher = chokidar.watch(dirPath, {
-    ignored: (p) => {
-      // Skip if any path segment within the watched root starts with '.'
-      // (mirrors buildTree's dotfile rule, including .git, .obsidian, etc.).
-      const rel = path.relative(dirPath, p);
-      if (!rel || rel.startsWith('..')) return false;
-      return rel.split(path.sep).some((seg) => seg.startsWith('.'));
-    },
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    persistent: true,
+  // @parcel/watcher is recursive and reports only changes after subscribe (no
+  // initial scan), so seeding above is our only startup enumeration. The
+  // `ignore` globs keep the native backend from reporting dotfile trees at all;
+  // `isIgnoredWatchPath` in the callback is the authoritative backstop.
+  currentWatcher = await parcelWatcher.subscribe(dirPath, onParcelEvents, {
+    ignore: ['**/.*', '**/.*/**', '**/node_modules', '**/node_modules/**'],
   });
-  currentWatcher
-    .on('add', onChokidarAdd)
-    .on('change', onChokidarChange)
-    .on('unlink', onChokidarUnlink)
-    .on('addDir', () => { pendingTreeOnly = true; scheduleFlush(); })
-    .on('unlinkDir', () => { pendingTreeOnly = true; scheduleFlush(); });
 
   // The main watcher ignores everything under `.shockwave/`, so changes to the
   // workspace file (sync pull, another machine, a hand edit) never reach the
-  // renderer. Watch for it here and tell the renderer to re-read.
-  //
-  // Watch the `.shockwave/` DIR (depth 0), not the file itself: in chokidar 5 a
-  // single-file watch unreliably drops the first/only change event — it missed
-  // git-merge updates entirely, so synced daily-note/template/bookmark changes
-  // never reloaded. A directory watch fires reliably. We filter to
-  // `workspace.json` so sibling files (bookmarks.json, skills/) don't notify.
+  // renderer. Watch that dir separately and tell the renderer to re-read.
+  // @parcel/watcher requires the directory to exist before subscribing, so
+  // ensure it (it's created lazily on the first bookmarks/workspace write).
   const shockwaveDir = path.dirname(workspaceFilePath(dirPath));
-  bookmarksWatcher = chokidar.watch(shockwaveDir, {
-    ignoreInitial: true,
-    depth: 0,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    persistent: true,
-  });
-  const notifyBookmarks = (p) => {
-    if (typeof p !== 'string' || path.basename(p) !== 'workspace.json') return;
+  await fs.mkdir(shockwaveDir, { recursive: true }).catch(() => {});
+  bookmarksWatcher = await parcelWatcher.subscribe(shockwaveDir, (err, events) => {
+    if (err) return;
     const w = watcherWindowId != null ? BrowserWindow.fromId(watcherWindowId) : null;
-    if (w && !w.isDestroyed()) w.webContents.send('bookmarks:changed');
-  };
-  bookmarksWatcher.on('add', notifyBookmarks).on('change', notifyBookmarks);
+    if (!w || w.isDestroyed()) return;
+    for (const e of events) {
+      if (path.basename(e.path) === 'workspace.json') { w.webContents.send('bookmarks:changed'); return; }
+    }
+  });
 });
 
 ipcMain.handle('fs:watchStop', stopWatcher);
@@ -1787,7 +1842,7 @@ installAgentTokensBridge(async () => {
 // active workspace, then ask the renderer to open it in a new tab. Confined to
 // the workspace (the agent's cwd); only display-able types open. The extension
 // (cwd) ext list must stay in sync with the renderer's isOpenable (MediaView).
-const OPENABLE_RE = /\.(md|png|jpe?g|gif|webp|svg|bmp|ico|avif|mp4|webm|mov|m4v|ogv|ogg|excalidraw)$/i;
+const OPENABLE_RE = /\.(md|markdown|mdx|txt|text|log|org|rst|tex|bib|csv|tsv|json|jsonc|json5|ya?ml|toml|ini|cfg|conf|env|properties|xml|html?|css|scss|sass|less|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|kt|kts|c|h|cpp|hpp|cc|hh|cs|php|swift|m|mm|sh|bash|zsh|fish|ps1|bat|sql|graphql|gql|lua|pl|pm|r|dart|vue|svelte|astro|clj|cljs|ex|exs|erl|hs|ml|scala|groovy|gradle|proto|diff|patch|png|jpe?g|gif|webp|bmp|ico|avif|mp4|webm|mov|m4v|ogv|ogg|excalidraw)$/i;
 installOpenFileBridge(async (relPath) => {
   if (!watcherRootDir) return { ok: false, error: 'No workspace is open.' };
   if (typeof relPath !== 'string' || !relPath.trim()) return { ok: false, error: 'No path provided.' };
@@ -1798,7 +1853,7 @@ installOpenFileBridge(async (relPath) => {
     return { ok: false, error: 'Path is outside the workspace.' };
   }
   if (!OPENABLE_RE.test(abs)) {
-    return { ok: false, error: 'Only .md, image, video, or .excalidraw files can be opened.' };
+    return { ok: false, error: 'Only text, image, video, or .excalidraw files can be opened.' };
   }
   try {
     const st = await fs.stat(abs);

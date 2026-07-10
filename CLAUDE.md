@@ -64,9 +64,9 @@ Any code that creates, modifies, renames, or deletes a `.md` file — whether th
 1. **Link-index sync.** Create/change → `linkIndex.updateFile` or `applyParsedLinks`. Delete → `removeFile`. Rename → `renameFile`. Then `bump()` so consumers re-render.
 2. **Tree refresh.** Any add/remove of a file or folder must result in `refreshTree()` (in-app: call `fileOps.treeAndIndexChanged()`; external: handled by the fs watcher).
 3. **Folder rename re-keys nested files.** Renaming a folder changes every nested file's path. The handler (`onTreeRename` in `App.tsx`) walks `getOutgoingMap()` for paths under the old folder, calls `linkIndex.renameFile(oldP, newP)` and `renameTabsPath(oldP, newP)` for each, and shifts `selectedFolderPath` if it pointed inside. `onMoveItems` does the same for drag-and-drop moves. Without this, the index carries stale path keys until the watcher echoes per-file events, and open tabs inside the renamed folder break.
-4. **Parser parity.** `LINK_RE` / `normalizeTarget` / `parseLinks` / `leadingWidth` / `collectContext` must stay identical between `src/renderer/linkIndex.js` and `src/main/linkParser.js`. The watcher in main reuses `linkParser.js`, so this constraint is exercised on every external change. `tests/parserParity.test.js` enforces this.
+4. **Parser parity.** `LINK_RE` / `parseTarget` / `normalizeTarget` / `parseLinks` / `leadingWidth` / `collectContext` must stay identical between `src/renderer/linkIndex.js` and `src/main/linkParser.js`. The watcher in main reuses `linkParser.js`, so this constraint is exercised on every external change. `tests/parserParity.test.js` enforces this.
 5. **Save before mutating active file.** `writeNow()` first, awaited. See "Save lifecycle" in `src/renderer/CLAUDE.md`.
-6. **Real mtimes everywhere — never `Date.now()`.** Every place that stores or compares a mtime — main's `fs:writeFile` / `fs:createFile` return value, the watcher's `fs:changed` event, the renderer's `linkIndex.updateFile` call from `writeNow` — uses the file's `stat.mtimeMs` (a float with sub-ms precision on macOS/Linux). The self-echo guard works because the value stored via `linkIndex.updateFile(path, text, mtime)` is *exactly* the value chokidar's later stat returns for the same write, so `evt.mtime > stored` is false on the echo. Mixing `Date.now()` (integer ms) with a sub-ms float makes every save look fresh to the watcher → editor reloads from disk mid-typing → keystrokes lost, cursor jumps. The `useLinkIndex.updateFile` wrapper MUST forward the mtime arg through; shipped briefly with arity 2 in v1.0.1 and triggered exactly this.
+6. **Real mtimes everywhere — never `Date.now()`.** Every place that stores or compares a mtime — main's `fs:writeFile` / `fs:createFile` return value, the watcher's `fs:changed` event, the renderer's `linkIndex.updateFile` call from `writeNow` — uses the file's `stat.mtimeMs` (a float with sub-ms precision on macOS/Linux). The self-echo guard works because the value stored via `linkIndex.updateFile(path, text, mtime)` is *exactly* the value the watcher's later stat returns for the same write, so `evt.mtime > stored` is false on the echo. Mixing `Date.now()` (integer ms) with a sub-ms float makes every save look fresh to the watcher → editor reloads from disk mid-typing → keystrokes lost, cursor jumps. The `useLinkIndex.updateFile` wrapper MUST forward the mtime arg through; shipped briefly with arity 2 in v1.0.1 and triggered exactly this.
 7. **Workspace-scoped watcher.** One watcher per app. Switching or removing a workspace must `watchStop()` before doing anything else; `loadWorkspace` handles this. Don't start a watcher without stopping the previous one. Starting also seeds the rename correlator (stat + hash every `.md` under the root) so unlinks fired immediately after `watchStart` can still be correlated.
 8. **Idempotent watcher handlers.** Every in-app write self-echoes ~350ms later. Handlers must be safe to re-run on the same data. The mtime guard is the primary mechanism. For `rename` events, the renderer's handler is also idempotent (`linkIndex.renameFile` of an already-renamed path is a no-op; the regex rewrite matches nothing because refs are already rewritten).
 9. **Watcher reloads the active file on external change.** When `evt.path === activeFile` and the event is fresh (`evt.mtime > stored mtime`), the renderer reads the new content, calls `editor.setContent(text, viewState)` to preserve cursor/scroll, then flashes the added text green via `editor.flashRanges(ranges)`. The diff is word-level (`diff` npm, `diffWordsWithSpace`). Reload runs unconditionally — if a keystroke lands in the same instant the agent (or any external writer) modifies the file, the keystroke loses. The save-debounce window is 500ms so this is rare. The renderer's own writes don't trigger this path because the self-echo's mtime is equal to the stored mtime (see invariant #6). See `src/renderer/diffFlash.js` for the flash extension.
@@ -79,11 +79,31 @@ Any code that creates, modifies, renames, or deletes a `.md` file — whether th
 - Renderer-only constants (`SETTINGS_SECTIONS`, `THEME_MODES`, `VIEW_MODES`, `SAVE_STATES`, `TREE_SORT_ORDERS`, `TREE_SORT_LABELS`) live in `src/renderer/constants.ts`.
 - `DEFAULT_SETTINGS` and the `Settings` type both live in `src/shared/settings.ts` — single source of truth, imported by main (`src/main/main.ts` for the read/write code paths) and the renderer (`useSettings` hook for the in-memory shape). Top-level keys: `workspaces`, `activeWorkspaceId`, `appearance`, `dailyNote`, `codingAgent`, `agentSecrets[]`, `transcription`, `sync`, `chatSidebarOpen`, `chatSidebarWidth`, `treeSortOrder`, `windowBounds`. Adding a persisted field means updating the `Settings` type + `DEFAULT_SETTINGS`, the `readSettings` deep merge in `main.ts`, and the corresponding state slice in `useSettings` (which holds the canonical in-memory copy and is the only place that calls `persistSettings()`).
 
-## Workspace-wide name uniqueness
+## Duplicate basenames + path-prefixed links
 
-The link index is keyed by basename, so two files sharing a name break it. IPC handlers `fs:renameFile`, `fs:moveItem`, `fs:createFile` call `uniqueInWorkspace` (in `src/main/pathResolver.ts`) to auto-disambiguate workspace-wide: if a target basename already exists anywhere, the operation succeeds with `" 1"`, `" 2"`, … appended. The renderer-side `findNameConflict` (in `App.tsx`) does the matching live-warning check while the user types in the title input (workspace-wide, case-insensitive). Folder renames stay same-folder-unique because folders aren't part of the link index.
+Duplicate basenames across different folders are **allowed** (`clients/acme/Meeting.md`
+and `clients/globex/Meeting.md` coexist). Only same-folder collisions are rejected/
+auto-disambiguated (`" 1"`, `" 2"`, …) — the filesystem forbids them anyway. `fs:createFile`,
+`fs:renameFile`, `fs:renameFileLiteral`, `fs:moveItem`, and the renderer's `findNameConflict`
+/ `findTreeRenameConflict` are all same-folder-only now (the old workspace-wide
+`uniqueInWorkspace` / `collectMarkdownBasenamesLower` are gone).
 
-This is a deliberate simplification — Obsidian allows duplicate basenames and uses path-prefixed links (`[[folder/Foo]]`) to disambiguate. See `docs/path-prefixed-links.md` for the design of that future direction.
+Wiki-links resolve through `src/renderer/linkResolver.js` (`resolveLinkTarget`):
+
+- **Bare `[[Meeting]]`** → the file with that basename in the source's own folder,
+  else the shallowest path (Obsidian-style tiebreaker). `pageIndex` is
+  `Map<basename, path[]>`.
+- **Path-qualified `[[globex/Meeting]]`** → the exact folder match; if the path is
+  stale (target moved/renamed) it **falls back to basename resolution** so the link
+  still resolves.
+- Autocomplete inserts `shortestUniqueLinkFor` — bare when the name is unique, the
+  shortest disambiguating prefix when not — so ambiguous links are rarely authored.
+
+Backlinks are basename-keyed but each entry carries `targetParsed`; `getBacklinksForFile`
+resolve-filters the bucket so a link attributes to the correct duplicate. Rename
+reference-rewrite (`renameOps.js`) is resolution-aware (rewrites only links resolving
+to the renamed file; handles path-qualified links). See `docs/second-brain-revamp.md`
+for the full design and the deferred items (eager move-rewrite, offset-based cache).
 
 ## Tests
 

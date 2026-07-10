@@ -18,7 +18,7 @@ interface UseDailyNoteOpts {
   writeNow: () => Promise<unknown>;
   openInActiveTab: (path: string) => Promise<unknown> | unknown;
   linkIndex: {
-    pageIndexRef: MutableRefObject<Map<string, string>>;
+    cache: { candidatesFor: (basename: string) => string[] };
     updateFile: (path: string, text: string, mtime: number) => void;
   };
   fileOps: { treeAndIndexChanged: () => Promise<unknown> };
@@ -55,7 +55,11 @@ export function useDailyNote({
     const { dir, name } = resolveDailyNotePath(workspacePath, dn.folder, formatted);
     try {
       await writeNow();
-      const existing = linkIndex.pageIndexRef.current.get(name.toLowerCase());
+      // Daily notes are basename-keyed; if duplicates exist, open the shallowest.
+      const dnPaths = linkIndex.cache.candidatesFor(name.toLowerCase());
+      const existing = dnPaths && dnPaths.length
+        ? dnPaths.slice().sort((a, b) => a.split('/').length - b.split('/').length || a.length - b.length)[0]
+        : null;
       if (existing) {
         await openInActiveTab(existing);
         return;

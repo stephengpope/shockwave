@@ -1,46 +1,63 @@
 // Coding-agent integration via @earendil-works/pi-coding-agent.
 //
-// One pi AgentSession at a time, keyed by (workspacePath, provider, model, apiKey).
-// When any of those change, the previous session is aborted and a new one is created.
-// All pi events are forwarded to the renderer over the supplied emitter so the chat
-// sidebar can render assistant text deltas, tool calls, turn boundaries, etc.
+// One pi AgentSession at a time. Sessions are PERSISTED (pi writes a JSONL under
+// <agentDir>/sessions) so chats survive reload. The DB (src/main/db) is the source
+// of truth for DISPLAY + SEARCH; pi's JSONL is the source of truth for CONTINUATION.
+//
+// On session create we capture the exact assembled system prompt and store it in
+// the DB; on RESUME we hand that stored string back to pi via `systemPromptOverride`
+// so the chat continues with the same prompt it was created with (pi would
+// otherwise re-derive today's). After each successful turn we persist the new
+// messages to the DB; after the first exchange we fire-and-forget an auto-title.
 //
 // Skills: before each session create, we compute the effective skill list for the
-// active workspace (global enable/disable + workspace overrides) and write it to
-// <agentDir>/settings.json `skills: []`, which pi reads when constructing the
-// system prompt. Pi never auto-scans our skill-library folder.
+// active workspace and write it to <agentDir>/settings.json `skills: []`.
 
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
-// Static-catalog reads (getModel) moved off the pi-ai root to the `/compat`
-// entrypoint in pi-ai 0.80.0. getSupportedThinkingLevels remains on the root.
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
-import { getModel } from '@earendil-works/pi-ai/compat';
+import { getModel, completeSimple } from '@earendil-works/pi-ai/compat';
 import { agentDirFor, ensureDirs, listBuiltinSkills, listWorkspaceSkills, computeEffectivePaths, writePiSettings } from './skillLibrary.js';
 import { ensureAgentTokensExtension } from './agentTokensExtension.js';
 import { ensureOpenFileExtension } from './openFileExtension.js';
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from './agentSystemPrompt.js';
+import { assembleSystemPrompt } from './prompt/index.js';
+import { upsertSession, persistMessages, setSessionTitle, getSession } from './db/index.js';
 
 const state: any = {
   session: null,
   unsubscribe: null,
   key: null,
+  // Identity of the live chat.
+  sessionId: null,
+  jsonlPath: null,
+  workspacePath: null,
+  // Model handles stashed for the fire-and-forget title call.
+  modelObj: null,
+  modelRegistry: null,
+  // Pending lifecycle request applied on the next ensureSession:
+  //   { type: 'new' }                              → fresh persisted session
+  //   { type: 'open', jsonlPath, systemPrompt }    → resume an existing chat
+  request: null,
 };
 
-function makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, systemPrompt }) {
-  // systemPrompt is part of the key so changing it forces a fresh session
-  // (pi's system prompt is baked at session boot). baseUrl/contextWindow are in
-  // the key too so editing the openai-compatible endpoint reboots the session.
-  // thinkingLevel is baked at session boot, so it's in the key too — changing it
-  // in Settings reboots the session on the next send.
-  return [workspacePath, provider, model, apiKey, baseUrl ?? '', contextWindow ?? '', thinkingLevel ?? '', systemPrompt ?? ''].join(' ');
+// Prompt for the fire-and-forget title generation (hermes' wording).
+const TITLE_PROMPT = 'Generate a short, descriptive title (3-7 words) for a conversation that starts with the following exchange. The title should capture the main topic or intent. Return ONLY the title text, nothing else. No quotes, no punctuation at the end, no prefixes.';
+
+function makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel }) {
+  // Config-only key. The chat identity (sessionId/jsonlPath) is tracked
+  // separately in state, so a config change reboots pi but CONTINUES the same
+  // chat (re-opening its JSONL) rather than starting a new conversation.
+  return [workspacePath, provider, model, apiKey, baseUrl ?? '', contextWindow ?? '', thinkingLevel ?? ''].join(' ');
 }
 
-// Thinking levels the given (provider, model) supports, for the Settings dropdown.
-// Built-in providers carry per-model reasoning metadata in pi-ai's catalog;
-// openai-compatible has no catalog, so we offer the levels a generic reasoning
-// model supports (pi excludes 'xhigh' without an explicit thinkingLevelMap) and
-// let the user pick — pi clamps at stream time. A model with reasoning:false (or
-// unknown) yields just ['off'], which the UI treats as "no thinking control".
+// Flatten a pi message's content to plain text (for the title exchange).
+function textOf(content: any): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter((c) => c && c.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('');
+  }
+  return '';
+}
+
 export function listThinkingLevels(provider, model) {
   if (!provider) return ['off'];
   if (provider === 'openai-compatible') return ['off', 'minimal', 'low', 'medium', 'high'];
@@ -60,35 +77,58 @@ async function teardown() {
     state.unsubscribe = null;
   }
   if (state.session) {
-    try { await state.session.abort(); } catch { /* best-effort; session may already be stopped */ }
+    try { await state.session.abort(); } catch { /* best-effort */ }
     state.session = null;
     state.key = null;
+    state.sessionId = null;
+    state.jsonlPath = null;
+    state.modelObj = null;
+    state.modelRegistry = null;
   }
 }
 
-async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, systemPrompt, userDataDir, builtinDir, globalBuiltinSkills, wsBuiltinSkills }, emitEvent) {
-  const effectiveSystemPrompt = (systemPrompt ?? '').trim() || DEFAULT_AGENT_SYSTEM_PROMPT;
+async function ensureSession(opts, emitEvent) {
+  const { workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, userDataDir, builtinDir, globalBuiltinSkills, wsBuiltinSkills } = opts;
   const level = thinkingLevel || 'off';
-  const key = makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel: level, systemPrompt: effectiveSystemPrompt });
-  // Recompute the explicit skill list before session create: enabled built-ins
-  // (per-workspace toggles) + the active workspace's uploaded `.shockwave/skills`.
-  // Pi additionally auto-discovers `.agents/skills` on its own. Pi reads `skills`
-  // only at session boot — the user can hit Clear in the chat to apply a change.
+  const key = makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel: level });
+
+  const req = state.request;
+  // Reuse the live session only for a plain send (no pending request) whose
+  // config + workspace are unchanged.
+  if (!req && state.session && state.key === key && state.workspacePath === workspacePath) {
+    return state.session;
+  }
+
+  // Decide the SessionManager + the prompt to use.
+  //   open  → resume that JSONL, re-inject its stored prompt.
+  //   new   → let pi create a fresh persisted session (omit sessionManager).
+  //   config change on a live chat → re-open the current JSONL to continue it.
+  let sessionManager: any;
+  let promptOverride: string;
+  if (req?.type === 'open') {
+    sessionManager = SessionManager.open(req.jsonlPath);
+    promptOverride = req.systemPrompt ?? await assembleSystemPrompt(workspacePath);
+  } else if (req?.type === 'new' || !state.jsonlPath) {
+    sessionManager = undefined; // pi creates a persisted session under agentDir
+    promptOverride = await assembleSystemPrompt(workspacePath);
+  } else {
+    // Config changed mid-chat: continue the same chat with the new config,
+    // re-using the chat's stored prompt so its context stays stable.
+    sessionManager = SessionManager.open(state.jsonlPath);
+    const row = getSession(state.sessionId);
+    promptOverride = row?.systemPrompt ?? await assembleSystemPrompt(workspacePath);
+  }
+  state.request = null;
+
+  // Recompute the effective skill list + materialize extensions before boot.
   await ensureDirs(userDataDir);
   const builtins = await listBuiltinSkills(builtinDir);
   const wsSkills = await listWorkspaceSkills(workspacePath);
   const effectivePaths = computeEffectivePaths(builtins, globalBuiltinSkills, wsBuiltinSkills, wsSkills);
-  // Materialize the agent-tokens extension every boot so it always reflects
-  // the current source. Pi reads `extensions: []` from <agentDir>/settings.json
-  // to discover it.
   const agentTokensPath = await ensureAgentTokensExtension(userDataDir);
   const openFilePath = await ensureOpenFileExtension(userDataDir);
-  await writePiSettings(userDataDir, {
-    skills: effectivePaths,
-    extensions: [agentTokensPath, openFilePath],
-  });
+  await writePiSettings(userDataDir, { skills: effectivePaths, extensions: [agentTokensPath, openFilePath] });
 
-  if (state.session && state.key === key) return state.session;
   await teardown();
 
   const authStorage = AuthStorage.inMemory();
@@ -96,22 +136,13 @@ async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, 
 
   let modelObj;
   if (provider === 'openai-compatible') {
-    // Register the endpoint as a custom provider (pi's documented path). NOTE:
-    // registerProvider's applyProviderConfig does RAW passthrough with NO field
-    // defaults — unlike the disk-load parseModels path. Every model field MUST be
-    // present or pi crashes at stream time (verified: a missing `input` makes
-    // `model.input.includes(...)` throw). Mirror pi docs/models.md exactly.
     modelRegistry.registerProvider('openai-compatible', {
       baseUrl,
-      apiKey: apiKey || 'local',          // registry requires non-empty; local servers ignore it
+      apiKey: apiKey || 'local',
       api: 'openai-completions',
       models: [{
         id: model,
         name: model,
-        // Enable reasoning on the custom model only when the user picked a level
-        // above 'off'. Local models that don't understand reasoning params stay
-        // untouched at the default 'off'. Pi sends reasoning_effort (its default
-        // thinkingFormat) once reasoning is true.
         reasoning: level !== 'off',
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -125,13 +156,12 @@ async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, 
     modelObj = getModel(provider, model);
   }
 
-  // Custom resource loader so we can override pi's default coding-agent system
-  // prompt with ours (see DEFAULT_AGENT_SYSTEM_PROMPT). Still uses the standard
-  // discovery for skills/extensions/prompts/themes under agentDir + cwd.
   const resourceLoader = new DefaultResourceLoader({
     cwd: workspacePath,
     agentDir: agentDirFor(userDataDir),
-    systemPromptOverride: () => effectiveSystemPrompt,
+    // Re-use the (possibly stored) assembled prompt verbatim. pi appends
+    // AGENTS.md + skills + date on top, as always.
+    systemPromptOverride: () => promptOverride,
   });
   await resourceLoader.reload();
 
@@ -139,21 +169,79 @@ async function ensureSession({ workspacePath, provider, model, apiKey, baseUrl, 
     cwd: workspacePath,
     agentDir: agentDirFor(userDataDir),
     model: modelObj,
-    // Pass the level explicitly (pi clamps it to the model's supported set at
-    // boot). 'off' is a valid runtime value even though the SDK's TS type omits
-    // it — clampThinkingLevel always includes 'off'. Without this, an omitted
-    // level silently defaults to 'medium' for reasoning-capable models.
     thinkingLevel: level as any,
     authStorage,
     modelRegistry,
-    sessionManager: SessionManager.inMemory(workspacePath),
+    // Omit sessionManager → pi creates a persisted session under agentDir.
+    ...(sessionManager ? { sessionManager } : {}),
     resourceLoader,
   });
 
   state.unsubscribe = session.subscribe(emitEvent);
   state.session = session;
   state.key = key;
+  state.workspacePath = workspacePath;
+  state.sessionId = session.sessionId;
+  state.jsonlPath = session.sessionFile;
+  state.modelObj = modelObj;
+  state.modelRegistry = modelRegistry;
+
+  // Record the chat in the DB. For a brand-new chat this stores the exact
+  // assembled prompt we just used (frozen); for a resume/continue the insert
+  // conflicts and only refreshes the path + recency, preserving the frozen
+  // prompt + title.
+  upsertSession({
+    sessionId: state.sessionId,
+    workspace: workspacePath,
+    jsonlPath: state.jsonlPath,
+    systemPrompt: promptOverride,
+    model: model ?? null,
+    now: Date.now(),
+  });
+
+  // Tell the renderer which chat is now active (title + star from the DB).
+  const row = getSession(state.sessionId);
+  emitEvent({ type: 'shockwave_session', sessionId: state.sessionId, title: row?.title ?? null, starred: !!row?.starred });
+
   return session;
+}
+
+// Fire-and-forget: after the first exchange, ask pi's own LLM for a short title.
+// A single completeSimple call — NOT the agent loop — so it never touches the
+// transcript or runs tools.
+function maybeGenerateTitle(sessionId: string, messages: any[], emitEvent) {
+  const row = getSession(sessionId);
+  if (!row || row.title) return;
+  const firstUser = messages.find((m) => m?.role === 'user');
+  const firstAsst = messages.find((m) => m?.role === 'assistant');
+  if (!firstUser) return;
+  const modelObj = state.modelObj;
+  const modelRegistry = state.modelRegistry;
+  if (!modelObj || !modelRegistry) return;
+
+  const exchange = `User: ${textOf(firstUser.content)}\n\nAssistant: ${textOf(firstAsst?.content)}`.slice(0, 2000);
+  (async () => {
+    try {
+      const auth = await modelRegistry.getApiKeyAndHeaders(modelObj);
+      if (!auth?.ok) return;
+      const res = await completeSimple(
+        modelObj,
+        { messages: [{ role: 'user', content: `${TITLE_PROMPT}\n\n${exchange}`, timestamp: Date.now() }] },
+        { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, maxTokens: 32 },
+      );
+      const title = (res?.content ?? [])
+        .filter((c) => c?.type === 'text')
+        .map((c) => c.text)
+        .join('')
+        .trim()
+        .replace(/^["']|["']$/g, '')
+        .slice(0, 100);
+      if (title) {
+        setSessionTitle(sessionId, title);
+        emitEvent({ type: 'shockwave_session_titled', sessionId, title });
+      }
+    } catch { /* title is best-effort */ }
+  })();
 }
 
 export async function agentSend(opts, emitEvent) {
@@ -161,16 +249,8 @@ export async function agentSend(opts, emitEvent) {
   if (!workspacePath) throw new Error('Open a workspace first.');
   if (!provider) throw new Error('Coding agent provider not configured.');
   if (!model) throw new Error('Coding agent model not configured.');
-  // openai-compatible endpoints (local servers) don't require a key.
   if (provider !== 'openai-compatible' && !apiKey) throw new Error('Coding agent API key not configured. Open Settings → LLM / Agent.');
 
-  // Wrap the renderer's event listener so we can intercept the failure
-  // assistant message that pi emits on any provider-side error (bad API key,
-  // image too large, rate limit, etc). Pi pushes the failed user msg into
-  // state.messages BEFORE the API call (see pi-agent-core/dist/agent-loop.js:42-52)
-  // and pushes the failure assistant after; both stay in context and re-poison
-  // every subsequent turn. session.prompt() resolves normally in this case —
-  // pi does not throw — so without this we'd never surface the error.
   let lastFailureError: any = null;
   const wrappedEmit = (event) => {
     if (event?.type === 'agent_end' && Array.isArray(event.messages)) {
@@ -187,32 +267,42 @@ export async function agentSend(opts, emitEvent) {
   await session.prompt(text, hasImages ? { images } : undefined);
 
   if (lastFailureError) {
-    // Drop the failure assistant + the user message we just sent so pi's
-    // context isn't poisoned for the next turn.
     const msgs = session.state?.messages;
     if (Array.isArray(msgs) && msgs.length >= 2) {
       const last = msgs[msgs.length - 1];
       const prev = msgs[msgs.length - 2];
-      if (
-        last?.role === 'assistant'
-        && last?.stopReason === 'error'
-        && prev?.role === 'user'
-      ) {
+      if (last?.role === 'assistant' && last?.stopReason === 'error' && prev?.role === 'user') {
         msgs.splice(msgs.length - 2, 2);
       }
     }
-    // Tell the renderer to drop the corresponding transcript entries and
-    // surface the provider error in the chat banner.
     emitEvent({ type: 'agent_send_failed', errorMessage: lastFailureError });
+    return;
+  }
+
+  // Turn succeeded: persist the new complete messages, then maybe title.
+  const msgs = session.state?.messages ?? [];
+  if (state.sessionId) {
+    try { persistMessages(state.sessionId, msgs, Date.now()); } catch { /* persistence is best-effort */ }
+    maybeGenerateTitle(state.sessionId, msgs, emitEvent);
   }
 }
 
 export async function agentAbort() {
   if (state.session) {
-    try { await state.session.abort(); } catch { /* best-effort; session may already be stopped */ }
+    try { await state.session.abort(); } catch { /* best-effort */ }
   }
 }
 
+// "New chat" — tear down the live session and mark the next send to create a
+// fresh persisted one.
 export async function agentReset() {
   await teardown();
+  state.request = { type: 'new' };
+}
+
+// Resume a saved chat: the next send re-opens its JSONL and re-injects the stored
+// prompt. UI hydration is separate (renderer reads the DB via chat:getMessages).
+export async function agentOpenSession({ jsonlPath, systemPrompt }) {
+  await teardown();
+  state.request = { type: 'open', jsonlPath, systemPrompt };
 }

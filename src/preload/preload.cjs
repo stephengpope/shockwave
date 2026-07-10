@@ -274,8 +274,6 @@ contextBridge.exposeInMainWorld('api', {
     abort: () => ipcRenderer.invoke('agent:abort'),
     /** Tear down the current session. Next send creates a fresh one. @returns {Promise<void>} */
     reset: () => ipcRenderer.invoke('agent:reset'),
-    /** @returns {Promise<string>} The DEFAULT_AGENT_SYSTEM_PROMPT constant, for the "Reset to default" UI. */
-    getDefaultSystemPrompt: () => ipcRenderer.invoke('agent:getDefaultSystemPrompt'),
     /** @returns {Promise<Array<{ slug: string, label: string }>>} Available LLM providers. */
     listProviders: () => ipcRenderer.invoke('agent:listProviders'),
     /** @param {string} provider @returns {Promise<Array<{ id: string, label: string }>>} Models for that provider. */
@@ -309,6 +307,37 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('agent:openFile', listener);
       return () => ipcRenderer.removeListener('agent:openFile', listener);
     },
+  },
+
+  // ---- Chat history (SQLite: saved chats — list/search/open/rename/delete) --
+  //
+  // Chats are persisted per workspace. The DB drives display + search; pi's
+  // JSONL drives continuation. Opening a chat hydrates the UI from `messages`
+  // and hands pi the session so the next send continues it.
+  chat: {
+    /** Recent chats for the active workspace. Keyset-paginate via `before`
+     *  (pass the last row's updatedAt). @param {{ limit?: number, before?: number }} [opts]
+     *  @returns {Promise<Array<any>>} */
+    listSessions: (opts) => ipcRenderer.invoke('chat:listSessions', opts),
+    /** Starred chats (pinned section at the top of the picker). @returns {Promise<Array<any>>} */
+    listStarred: () => ipcRenderer.invoke('chat:listStarred'),
+    /** Star/unstar a chat. @param {{ sessionId: string, starred: boolean }} opts @returns {Promise<void>} */
+    setStarred: (opts) => ipcRenderer.invoke('chat:setStarred', opts),
+    /** Full-text search across the workspace's chats.
+     *  @param {{ query: string, limit?: number }} opts @returns {Promise<Array<any>>} */
+    searchSessions: (opts) => ipcRenderer.invoke('chat:searchSessions', opts),
+    /** Messages for one chat, ordered — the renderer rebuilds the transcript.
+     *  @param {string} sessionId @returns {Promise<Array<any>>} */
+    getMessages: (sessionId) => ipcRenderer.invoke('chat:getMessages', sessionId),
+    /** Start a fresh chat (next send creates a new persisted session). @returns {Promise<void>} */
+    newSession: () => ipcRenderer.invoke('chat:newSession'),
+    /** Resume a saved chat. @param {string} sessionId
+     *  @returns {Promise<{ session?: any, messages: Array<any> }>} */
+    openSession: (sessionId) => ipcRenderer.invoke('chat:openSession', sessionId),
+    /** Delete a chat (cascades its messages). @param {string} sessionId @returns {Promise<void>} */
+    deleteSession: (sessionId) => ipcRenderer.invoke('chat:deleteSession', sessionId),
+    /** Rename a chat. @param {{ sessionId: string, title: string }} opts @returns {Promise<void>} */
+    renameSession: (opts) => ipcRenderer.invoke('chat:renameSession', opts),
   },
 
   // ---- Voice transcription (AssemblyAI streaming) ------------------------

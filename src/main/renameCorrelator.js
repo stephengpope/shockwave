@@ -1,6 +1,6 @@
 // Rename correlator.
 //
-// External-edit watcher (chokidar) sees a rename as two unrelated events:
+// The file watcher sees a rename as two unrelated events:
 //   unlink(oldPath) + add(newPath)
 // This module pairs them deterministically using inode (primary) and content
 // hash (fallback for filesystems where ino is unreliable, e.g. FAT/SMB).
@@ -73,6 +73,27 @@ export function createRenameCorrelator({ emit, graceMs = 800, now = Date.now }) 
         ino: ino != null ? String(ino) : null,
         hash: hash ?? null,
       });
+    },
+
+    // Whether we already hold an identity for this path. Used to tell a
+    // brand-new file from an overwrite: @parcel/watcher reports an atomic save
+    // (write-temp + rename-over-existing) as a `create` of the destination,
+    // which — for a path we already know — is a modification, not a new file.
+    isKnown(path) {
+      return identityByPath.has(path);
+    },
+
+    // Every known path beginning with `prefix`. Used to expand a directory
+    // delete into its nested files: @parcel/watcher reports a folder rename as
+    // a single delete(oldDir) + create(newDir), with no per-file events, so we
+    // synthesize the unlinks (which then pair by inode against the new dir's
+    // adds and surface as per-file renames).
+    knownUnder(prefix) {
+      const out = [];
+      for (const p of identityByPath.keys()) {
+        if (p.startsWith(prefix)) out.push(p);
+      }
+      return out;
     },
 
     onPathGone(path) {

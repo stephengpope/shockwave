@@ -1,13 +1,26 @@
-// ESM mirror of src/linkIndex.js's parser pieces.
-// Keep LINK_RE / normalizeTarget / parseLinks in sync if either file changes.
+// ESM mirror of src/renderer/linkIndex.js's parser pieces.
+// Keep LINK_RE / parseTarget / normalizeTarget / parseLinks in sync if either
+// file changes (tests/parserParity.test.js enforces byte-identical output).
 
 const LINK_RE = /\[\[([^\]\n]+?)\]\]/g;
 
-function normalizeTarget(raw) {
+// Parse a raw [[…]] body into path segments + basename. Drops a |alias and a
+// #heading, strips a trailing .md, lowercases. "folder/Foo" → {segments:
+// ['folder'], basename:'foo'}; "Foo" → {segments:[], basename:'foo'}.
+function parseTarget(raw) {
   const beforePipe = raw.split('|')[0];
   const beforeHash = beforePipe.split('#')[0];
-  const name = beforeHash.trim().replace(/\.md$/i, '');
-  return name.toLowerCase();
+  const cleaned = beforeHash.trim().replace(/\.md$/i, '');
+  const parts = cleaned.split('/').filter((s) => s.length > 0);
+  if (parts.length === 0) return { segments: [], basename: '' };
+  return {
+    segments: parts.slice(0, -1).map((s) => s.toLowerCase()),
+    basename: parts[parts.length - 1].toLowerCase(),
+  };
+}
+
+function normalizeTarget(raw) {
+  return parseTarget(raw).basename;
 }
 
 function leadingWidth(line) {
@@ -48,14 +61,15 @@ function parseLinks(content) {
     let foundOnThisLine = false;
     let contextForThisLine = null;
     while ((m = LINK_RE.exec(line)) !== null) {
-      const target = normalizeTarget(m[1]);
-      if (!target) continue;
+      const parsed = parseTarget(m[1]);
+      if (!parsed.basename) continue;
       if (!foundOnThisLine) {
         contextForThisLine = collectContext(lines, i);
         foundOnThisLine = true;
       }
       out.push({
-        target,
+        target: parsed.basename,
+        targetParsed: parsed,
         lineNumber: i + 1,
         lineText: line,
         contextLines: contextForThisLine,
@@ -65,4 +79,4 @@ function parseLinks(content) {
   return out;
 }
 
-export { parseLinks, normalizeTarget };
+export { parseLinks, parseTarget, normalizeTarget };

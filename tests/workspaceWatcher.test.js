@@ -1,39 +1,35 @@
 // Regression test for the per-workspace `.shockwave/workspace.json` watcher.
 //
-// Why this exists: the watcher originally watched the single file
-// `workspace.json`. In chokidar 5 a single-file watch unreliably drops the
-// change event — a `git merge` that updated the file fired NOTHING, so synced
-// daily-note / template / bookmark changes never reloaded in the renderer. The
-// fix watches the `.shockwave/` DIR (depth 0) and filters to `workspace.json`.
+// Why this exists: the watcher must reload when a `git merge` (what GitHub sync
+// runs) updates `workspace.json`, and must NOT churn on sibling changes
+// (bookmarks.json, skills/). main.ts subscribes a @parcel/watcher on the
+// `.shockwave/` dir and notifies once per batch that touches `workspace.json`.
+// parcel is always recursive (no `depth`), so the sibling filter is what keeps
+// skills/ churn from notifying.
 //
-// This test pins that behavior against a REAL git repo + REAL `git merge` (the
-// exact thing GitHub sync does) using the app's exact chokidar config. If a
-// future chokidar bump (or a revert to single-file watching) re-breaks it, this
-// fails instead of silently shipping. Run via `npm test`.
+// This test pins that behavior against a REAL git repo + REAL `git merge` using
+// the app's watcher config. Run via `npm test`.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import chokidar from 'chokidar';
+import watcher from '@parcel/watcher';
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-// Mirror of main.ts: watch the `.shockwave/` dir (depth 0), notify only for
-// workspace.json. Returns { count, close } where count is read after the wait.
-function watchShockwaveDir(shockwaveDir) {
+// Mirror of main.ts's bookmarks subscription: watch the `.shockwave/` dir,
+// notify once per batch that touches workspace.json.
+async function watchShockwaveDir(shockwaveDir) {
   let count = 0;
-  const w = chokidar.watch(shockwaveDir, {
-    ignoreInitial: true,
-    depth: 0,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    persistent: true,
+  const sub = await watcher.subscribe(shockwaveDir, (err, events) => {
+    if (err) return;
+    if (events.some((e) => path.basename(e.path) === 'workspace.json')) count++;
   });
-  const onEvt = (p) => {
-    if (typeof p === 'string' && path.basename(p) === 'workspace.json') count++;
-  };
-  w.on('add', onEvt).on('change', onEvt);
-  return { ready: new Promise((r) => w.on('ready', r)), get count() { return count; }, close: () => w.close() };
+  // Let the FSEvents stream warm up before the caller mutates files, otherwise
+  // the first change can land before the backend is delivering.
+  await wait(400);
+  return { get count() { return count; }, close: () => sub.unsubscribe() };
 }
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -70,17 +66,19 @@ test('dir watch fires exactly once when git merge updates workspace.json (even a
     fs.writeFileSync(path.join(dir, 'workspace.json'), wsJson('Templates/Daily Tasks.md'));
     fs.writeFileSync(path.join(dir, 'skills', 's.md'), 'changed'); // sibling churn in the same merge
   });
-  const watcher = watchShockwaveDir(repo.dir);
+  const w = await watchShockwaveDir(repo.dir);
   try {
-    await watcher.ready;
     repo.merge();
     // The on-disk file really changed (proves the merge applied).
     const disk = JSON.parse(fs.readFileSync(path.join(repo.dir, 'workspace.json'), 'utf8'));
     assert.equal(disk.dailyNote.templatePath, 'Templates/Daily Tasks.md');
-    await wait(700); // > stabilityThreshold
-    assert.equal(watcher.count, 1, 'workspace.json change should notify exactly once');
+    await wait(1600);
+    // At least once: parcel may split git-merge's touch of the file into
+    // create+update batches; over-notifying is a harmless idempotent re-read.
+    // The guard is against MISSING it (the chokidar single-file-watch bug).
+    assert.ok(w.count >= 1, `workspace.json change should notify (got ${w.count})`);
   } finally {
-    await watcher.close();
+    await w.close();
     repo.cleanup();
   }
 });
@@ -90,14 +88,13 @@ test('dir watch does NOT fire for sibling-only changes (bookmarks.json, skills/)
     fs.writeFileSync(path.join(dir, 'bookmarks.json'), '{"version":1,"names":["x"]}');
     fs.writeFileSync(path.join(dir, 'skills', 's.md'), 'changed');
   });
-  const watcher = watchShockwaveDir(repo.dir);
+  const w = await watchShockwaveDir(repo.dir);
   try {
-    await watcher.ready;
     repo.merge();
-    await wait(700);
-    assert.equal(watcher.count, 0, 'sibling-only changes must not notify');
+    await wait(1600);
+    assert.equal(w.count, 0, 'sibling-only changes must not notify');
   } finally {
-    await watcher.close();
+    await w.close();
     repo.cleanup();
   }
 });

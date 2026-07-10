@@ -1,10 +1,9 @@
 import { useCallback } from 'react';
 import { FILE_ACTIONS } from '../constants.js';
-import { renameWithReferences } from '../renameOps.js';
+import { parseTarget } from '../linkIndex.js';
 
 export function useFileOps({
   workspacePath,
-  pageIndex,
   linkIndex,        // from useLinkIndex
   writeNow,
   openInActiveTab,
@@ -18,40 +17,28 @@ export function useFileOps({
     linkIndex.bump();
   }, [refreshTree, linkIndex]);
 
-  // Returns the final path on success (so callers can re-key bookmarks etc.),
-  // or null on failure.
-  const performRename = useCallback(async (oldPath, newName) => {
-    try {
-      await writeNow();
-      const newPath = await renameWithReferences({
-        api: window.api,
-        linkIndex: linkIndex.linkIndexRef.current,
-        oldPath,
-        newName,
-      });
-      renameTabsPath(oldPath, newPath);
-      await treeAndIndexChanged();
-      return newPath;
-    } catch (err: any) {
-      showError(err.message ?? String(err));
-      return null;
-    }
-  }, [writeNow, linkIndex, renameTabsPath, treeAndIndexChanged, showError]);
-
-  const onLinkClick = useCallback(async (rawName) => {
+  const onLinkClick = useCallback(async (rawName, sourcePath) => {
     if (!workspacePath) return;
-    const name = rawName.replace(/\.md$/i, '');
-    const key = name.toLowerCase();
-    const existing = pageIndex.get(key);
+    const parsed = parseTarget(rawName);
+    if (!parsed.basename) return;
+    const existing = linkIndex.cache.getFirstLinkpathDest(parsed, sourcePath);
     if (existing) {
       await openInActiveTab(existing);
       return;
     }
-    const { path: newPath, mtime } = await window.api.createFile(workspacePath, `${name}.md`, '');
+    // Unresolved → create the target. Honor a path prefix (folder/Foo →
+    // folder/Foo.md) using the raw link's original case; a bare name lands in
+    // the workspace root.
+    const rawParts = rawName.replace(/\.md$/i, '').split('/').filter(Boolean);
+    const displayBase = rawParts[rawParts.length - 1];
+    const segs = rawParts.slice(0, -1);
+    const dir = segs.length ? `${workspacePath}/${segs.join('/')}` : workspacePath;
+    if (segs.length) await window.api.ensureDir(dir);
+    const { path: newPath, mtime } = await window.api.createFile(dir, `${displayBase}.md`, '');
     linkIndex.updateFile(newPath, '', mtime);
     await treeAndIndexChanged();
     await openInActiveTab(newPath);
-  }, [workspacePath, pageIndex, openInActiveTab, linkIndex, treeAndIndexChanged]);
+  }, [workspacePath, openInActiveTab, linkIndex, treeAndIndexChanged]);
 
   const onFileAction = useCallback(async (action, filePath) => {
     try {
@@ -72,7 +59,6 @@ export function useFileOps({
   }, [openInNewTab, linkIndex, treeAndIndexChanged, showError]);
 
   return {
-    performRename,
     onLinkClick,
     onFileAction,
     treeAndIndexChanged,

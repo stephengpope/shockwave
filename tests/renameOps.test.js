@@ -1,217 +1,114 @@
-// Tests for the in-app rename logic. Stubs `window.api` with an in-memory
-// filesystem so we can assert the exact read/write/rename sequence and the
-// resulting state of the link index.
-//
-// Covers the key correctness properties:
-//   - References in other files are rewritten via the index (no file scan)
-//   - Heading and alias suffixes are preserved
-//   - Case-insensitive link matching
-//   - SELF-references are rewritten (the previous code skipped them)
-//   - Auto-disambiguation: if api.renameFile returns a different name than
-//     requested, the references must use the FINAL name
+// Tests for the reference rewriters, driven the way App/watcher drive them:
+// capture the rewrite context, rewrite, then re-key the cache. Uses an in-memory
+// fs stub + a real metadataCache.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renameWithReferences, rewriteReferences } from '../src/renderer/renameOps.js';
-import { createLinkIndex } from '../src/renderer/linkIndex.js';
+import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from '../src/renderer/renameOps.js';
+import { createMetadataCache } from '../src/renderer/metadataCache.js';
 
-// Build a small in-memory workspace + index + api stub.
-function makeWorld(files /* { path: content } */, opts = {}) {
-  const fs = new Map(Object.entries(files));
-  const writes = [];
-  const linkIndex = createLinkIndex();
-  for (const [path, content] of fs) {
-    linkIndex.updateFile(path, content, 1);
+const WS = '/ws';
+
+function makeWorld(files) {
+  const fs = new Map();
+  const cache = createMetadataCache();
+  cache.setWorkspacePath(WS);
+  const seed = [];
+  for (const [rel, content] of Object.entries(files)) {
+    const path = `${WS}/${rel}`;
+    fs.set(path, content);
+    seed.push({ path, content, mtime: 1 });
   }
+  cache.rebuild(seed);
   const api = {
-    readFile: async (p) => {
-      if (!fs.has(p)) throw new Error(`ENOENT: ${p}`);
-      return fs.get(p);
-    },
-    writeFile: async (p, content) => {
-      fs.set(p, content);
-      writes.push({ path: p, content });
-    },
-    renameFile: async (fromPath, toName) => {
-      // Mimics electron/main.js: auto-disambiguate if a target with the same
-      // basename exists anywhere (case-insensitive). Pass `forceFinalPath` in
-      // opts to force a different final name for testing.
-      if (opts.forceFinalPath) {
-        const content = fs.get(fromPath);
-        fs.delete(fromPath);
-        fs.set(opts.forceFinalPath, content);
-        return opts.forceFinalPath;
-      }
-      const slash = fromPath.lastIndexOf('/');
-      const dir = slash >= 0 ? fromPath.slice(0, slash) : '';
-      const clean = toName.replace(/\.md$/i, '');
-      let candidate = `${dir}/${clean}.md`;
-      let i = 1;
-      const existing = new Set([...fs.keys()].filter((p) => p !== fromPath));
-      const taken = new Set([...existing].map((p) => p.split('/').pop().slice(0, -3).toLowerCase()));
-      while (true) {
-        const candName = i === 1 ? clean : `${clean} ${i - 1}`;
-        candidate = `${dir}/${candName}.md`;
-        if (!existing.has(candidate) && !taken.has(candName.toLowerCase())) break;
-        i++;
-      }
-      const content = fs.get(fromPath);
-      fs.delete(fromPath);
-      fs.set(candidate, content);
-      return candidate;
-    },
+    readFile: async (p) => { if (!fs.has(p)) throw new Error(`ENOENT ${p}`); return fs.get(p); },
+    writeFile: async (p, content) => { fs.set(p, content); return 2; },
   };
-  return { fs, api, linkIndex, writes };
+  return { fs, cache, api, read: (rel) => fs.get(`${WS}/${rel}`), p: (rel) => `${WS}/${rel}` };
 }
 
-test('rewriteReferences updates [[Old]] to [[New]] in all referencing files', async () => {
+// Rename helper mirroring App.renameFileWithTransitions' order.
+async function rename(w, oldRel, newRel) {
+  const oldPath = w.p(oldRel), finalPath = w.p(newRel);
+  const oldBaseName = oldRel.split('/').pop().replace(/\.md$/i, '');
+  const newBaseName = newRel.split('/').pop().replace(/\.md$/i, '');
+  w.fs.set(finalPath, w.fs.get(oldPath)); w.fs.delete(oldPath);
+  const ctx = captureRewriteContext(w.cache, oldPath);
+  await rewriteReferences({ api: w.api, cache: w.cache, sources: ctx.sources, candidatesFor: ctx.candidatesFor, workspacePath: WS, oldPath, finalPath, oldBaseName, newBaseName });
+  w.cache.renameFile(oldPath, finalPath);
+}
+
+test('rewrites references in other files', async () => {
+  const w = makeWorld({ 'A.md': '[[Target]] in A', 'B.md': 'B has [[Target]] too', 'Target.md': 'x' });
+  await rename(w, 'Target.md', 'Goal.md');
+  assert.equal(w.read('A.md'), '[[Goal]] in A');
+  assert.equal(w.read('B.md'), 'B has [[Goal]] too');
+});
+
+test('preserves #heading and |alias suffixes', async () => {
+  const w = makeWorld({ 'A.md': '[[Old#Section]] and [[Old|Display]] and [[Old#H|D]]', 'Old.md': 'x' });
+  await rename(w, 'Old.md', 'New.md');
+  assert.equal(w.read('A.md'), '[[New#Section]] and [[New|Display]] and [[New#H|D]]');
+});
+
+test('case-insensitive match', async () => {
+  const w = makeWorld({ 'A.md': 'link [[old]] here', 'Old.md': 'x' });
+  await rename(w, 'Old.md', 'New.md');
+  assert.equal(w.read('A.md'), 'link [[New]] here');
+});
+
+test('rewrites self-references in the renamed file', async () => {
+  const w = makeWorld({ 'Foo.md': 'I am [[Foo]] and [[Foo]] again', 'Other.md': 'ref [[Foo]]' });
+  await rename(w, 'Foo.md', 'Bar.md');
+  assert.equal(w.read('Bar.md'), 'I am [[Bar]] and [[Bar]] again');
+  assert.equal(w.read('Other.md'), 'ref [[Bar]]');
+});
+
+test('rename with no backlinks → no spurious writes', async () => {
+  const w = makeWorld({ 'A.md': 'no links', 'Orphan.md': 'nobody links me' });
+  await rename(w, 'Orphan.md', 'Lonely.md');
+  assert.equal(w.read('A.md'), 'no links');
+});
+
+test('resolution-filtered: only the link resolving to the renamed file is rewritten', async () => {
   const w = makeWorld({
-    '/A.md': '[[Target]] reference\n',
-    '/B.md': 'Some text [[Target]] more text\n',
-    '/Target.md': 'content with no link\n',
+    'acme/Meeting.md': '# acme', 'globex/Meeting.md': '# globex',
+    'acme/Notes.md': 'see [[Meeting]]', 'globex/Notes.md': 'see [[Meeting]]',
+    'Index.md': 'top [[acme/Meeting]]',
   });
-  const written = await rewriteReferences({
-    api: w.api,
-    linkIndex: w.linkIndex,
-    oldBaseName: 'Target',
-    newBaseName: 'Renamed',
-  });
-  assert.deepEqual(written.sort(), ['/A.md', '/B.md'].sort());
-  assert.equal(w.fs.get('/A.md'), '[[Renamed]] reference\n');
-  assert.equal(w.fs.get('/B.md'), 'Some text [[Renamed]] more text\n');
+  await rename(w, 'acme/Meeting.md', 'acme/Standup.md');
+  assert.equal(w.read('acme/Notes.md'), 'see [[Standup]]');    // same-folder → rewritten
+  assert.equal(w.read('globex/Notes.md'), 'see [[Meeting]]');  // other duplicate → untouched
+  assert.equal(w.read('Index.md'), 'top [[acme/Standup]]');    // path-qualified prefix preserved
 });
 
-test('rewriteReferences preserves #heading and |alias suffixes', async () => {
+// --- move re-qualification ---
+
+async function move(w, oldRel, newRel) {
+  const oldPath = w.p(oldRel), newPath = w.p(newRel);
+  const ctx = captureRewriteContext(w.cache, oldPath);
+  await rewriteReferencesForMove({ api: w.api, cache: w.cache, sources: ctx.sources, candidatesFor: ctx.candidatesFor, workspacePath: WS, oldPath, newPath });
+  w.fs.set(newPath, w.fs.get(oldPath)); w.fs.delete(oldPath);
+  w.cache.renameFile(oldPath, newPath);
+}
+
+test('move re-qualifies path-links when a duplicate moves', async () => {
   const w = makeWorld({
-    '/A.md': '[[Target#Section]] and [[Target|Alias]]\n[[Target#H|Both]]\n',
+    'acme/Meeting.md': '# a', 'globex/Meeting.md': '# g',
+    'acme/Notes.md': 'bare [[Meeting]]', 'Index.md': 'qualified [[acme/Meeting]]',
   });
-  await rewriteReferences({
-    api: w.api, linkIndex: w.linkIndex,
-    oldBaseName: 'Target', newBaseName: 'Renamed',
-  });
-  assert.equal(
-    w.fs.get('/A.md'),
-    '[[Renamed#Section]] and [[Renamed|Alias]]\n[[Renamed#H|Both]]\n'
-  );
+  await move(w, 'acme/Meeting.md', 'archive/Meeting.md');
+  assert.equal(w.read('acme/Notes.md'), 'bare [[archive/Meeting]]');
+  assert.equal(w.read('Index.md'), 'qualified [[archive/Meeting]]');
 });
 
-test('rewriteReferences is case-insensitive on match', async () => {
-  const w = makeWorld({
-    '/A.md': '[[target]]\n[[Target]]\n[[TARGET]]\n',
+test('move of a unique basename is a no-op (bare links self-heal)', async () => {
+  const w = makeWorld({ 'a/Solo.md': '# s', 'Ref.md': 'link [[Solo]]' });
+  const ctx = captureRewriteContext(w.cache, w.p('a/Solo.md'));
+  const rewritten = await rewriteReferencesForMove({
+    api: w.api, cache: w.cache, sources: ctx.sources, candidatesFor: ctx.candidatesFor,
+    workspacePath: WS, oldPath: w.p('a/Solo.md'), newPath: w.p('b/Solo.md'),
   });
-  await rewriteReferences({
-    api: w.api, linkIndex: w.linkIndex,
-    oldBaseName: 'Target', newBaseName: 'Renamed',
-  });
-  assert.equal(w.fs.get('/A.md'), '[[Renamed]]\n[[Renamed]]\n[[Renamed]]\n');
-});
-
-test('renameWithReferences renames file AND rewrites refs', async () => {
-  const w = makeWorld({
-    '/notes/A.md': '[[Source]] reference\n',
-    '/Source.md': 'just content\n',
-  });
-  const newPath = await renameWithReferences({
-    api: w.api, linkIndex: w.linkIndex,
-    oldPath: '/Source.md',
-    newName: 'Destination',
-  });
-  assert.equal(newPath, '/Destination.md');
-  assert(w.fs.has('/Destination.md'));
-  assert(!w.fs.has('/Source.md'));
-  assert.equal(w.fs.get('/notes/A.md'), '[[Destination]] reference\n');
-});
-
-test('renameWithReferences rewrites SELF-references too', async () => {
-  // The previous code skipped src === oldPath. Verify that self-refs are
-  // rewritten now.
-  const w = makeWorld({
-    '/Foo.md': 'I am [[Foo]] and I link to myself.\n',
-  });
-  const newPath = await renameWithReferences({
-    api: w.api, linkIndex: w.linkIndex,
-    oldPath: '/Foo.md',
-    newName: 'Bar',
-  });
-  assert.equal(newPath, '/Bar.md');
-  assert.equal(w.fs.get('/Bar.md'), 'I am [[Bar]] and I link to myself.\n');
-  // Index should reflect: outgoing on /Bar.md is now ["bar"], backlinks for "foo" is empty.
-  assert.deepEqual(w.linkIndex.getOutgoing('/Bar.md'), ['bar']);
-  assert.equal(w.linkIndex.getBacklinks('foo').length, 0);
-  assert.equal(w.linkIndex.getBacklinks('bar').length, 1);
-});
-
-test('renameWithReferences: refs use FINAL name when auto-disambiguated', async () => {
-  // Simulate the IPC handler bumping the requested name to a unique one.
-  const w = makeWorld(
-    {
-      '/Source.md': 'self [[Source]]\n',
-      '/A.md': '[[Source]]\n',
-      '/elsewhere/Destination.md': 'this exists already\n',
-    },
-    { forceFinalPath: '/Destination 1.md' }
-  );
-  const newPath = await renameWithReferences({
-    api: w.api, linkIndex: w.linkIndex,
-    oldPath: '/Source.md',
-    newName: 'Destination',
-  });
-  assert.equal(newPath, '/Destination 1.md');
-  assert.equal(w.fs.get('/A.md'), '[[Destination 1]]\n');
-  // Self-ref should also use the final name.
-  // (Note: forceFinalPath doesn't actually move the file, so we just check refs.)
-});
-
-test('renameWithReferences updates index keys (re-key path)', async () => {
-  const w = makeWorld({
-    '/A.md': '[[X]]\n',
-    '/X.md': 'content\n',
-  });
-  await renameWithReferences({
-    api: w.api, linkIndex: w.linkIndex,
-    oldPath: '/X.md',
-    newName: 'Y',
-  });
-  // Old path gone, new path present.
-  assert.deepEqual(w.linkIndex.getOutgoing('/X.md'), []);
-  // /A.md now references "y" not "x".
-  assert.deepEqual(w.linkIndex.getOutgoing('/A.md'), ['y']);
-  assert.equal(w.linkIndex.getBacklinks('y').length, 1);
-  assert.equal(w.linkIndex.getBacklinks('x').length, 0);
-});
-
-test('renameWithReferences with no backlinks: just renames the file', async () => {
-  const w = makeWorld({ '/Orphan.md': 'nobody links to me\n' });
-  const newPath = await renameWithReferences({
-    api: w.api, linkIndex: w.linkIndex,
-    oldPath: '/Orphan.md',
-    newName: 'Lonely',
-  });
-  assert.equal(newPath, '/Lonely.md');
-  assert(w.fs.has('/Lonely.md'));
-  assert.equal(w.writes.length, 0); // no source files rewritten
-});
-
-test('renameWithReferences: same-name rename is a no-op', async () => {
-  const w = makeWorld({ '/Foo.md': '[[Foo]]\n', '/A.md': '[[Foo]]\n' });
-  const newPath = await renameWithReferences({
-    api: w.api, linkIndex: w.linkIndex,
-    oldPath: '/Foo.md',
-    newName: 'Foo',
-  });
-  assert.equal(newPath, '/Foo.md');
-  assert.equal(w.writes.length, 0);
-  assert.equal(w.fs.get('/A.md'), '[[Foo]]\n');
-});
-
-test('renameWithReferences: empty name throws', async () => {
-  const w = makeWorld({ '/Foo.md': '' });
-  await assert.rejects(
-    () => renameWithReferences({
-      api: w.api, linkIndex: w.linkIndex,
-      oldPath: '/Foo.md',
-      newName: '   ',
-    }),
-    /empty/i
-  );
+  assert.deepEqual(rewritten, []);
+  assert.equal(w.read('Ref.md'), 'link [[Solo]]');
 });

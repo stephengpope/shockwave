@@ -245,7 +245,6 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caBaseUrl = codingAgent?.baseUrl ?? '';
   const caContextWindow = codingAgent?.contextWindow;
   const caThinkingLevel = codingAgent?.thinkingLevel ?? 'medium';
-  const caSystemPrompt = codingAgent?.systemPrompt ?? '';
   const updateCa = (patch) => onCodingAgentChange?.({
     provider: caProvider,
     model: caModel,
@@ -253,22 +252,8 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
     baseUrl: caBaseUrl,
     contextWindow: caContextWindow,
     thinkingLevel: caThinkingLevel,
-    systemPrompt: caSystemPrompt,
     ...patch,
   });
-
-  // The "Reset to default" button pulls the current default from main
-  // (electron/agentSystemPrompt.js) so the renderer doesn't keep its own copy.
-  const [defaultPrompt, setDefaultPrompt] = useState('');
-  useEffect(() => {
-    let active = true;
-    window.api.agent.getDefaultSystemPrompt().then((p) => {
-      if (active) setDefaultPrompt(p ?? '');
-    });
-    return () => { active = false; };
-  }, []);
-
-  const isDefault = caSystemPrompt === defaultPrompt && defaultPrompt !== '';
 
   return (
     <div className="settings-section">
@@ -290,34 +275,13 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
         onChange={updateCa}
       />
 
-      <h3 className="settings-subsection-title" style={{ marginTop: 24 }}>System Prompt</h3>
+      <h3 className="settings-subsection-title">System Prompt</h3>
       <p className="settings-tab-intro">
-        Pre-filled on install. Edit freely; takes effect on the next chat session (hit reset in the
-        sidebar to apply now).
+        The agent's instructions are assembled automatically from your workspace's{' '}
+        <code>SOUL.md</code> (its role and voice — edit it like any file, or leave it out for the
+        built-in default) plus Shockwave's internal helper. Per-project notes go in{' '}
+        <code>AGENTS.md</code> at your workspace root.
       </p>
-      <div className="settings-prompt-block">
-        <textarea
-          id="coding-agent-system-prompt"
-          className="settings-textarea"
-          value={caSystemPrompt}
-          onChange={(e) => updateCa({ systemPrompt: e.target.value })}
-          spellCheck={false}
-          rows={12}
-        />
-        <div className="settings-prompt-footer">
-          <span className="settings-prompt-state" data-state={isDefault ? 'default' : 'custom'}>
-            {isDefault ? 'Default' : 'Customized'}
-          </span>
-          <button
-            type="button"
-            className="settings-button"
-            onClick={() => updateCa({ systemPrompt: defaultPrompt })}
-            disabled={isDefault || !defaultPrompt}
-          >
-            Reset to default
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

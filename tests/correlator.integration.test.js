@@ -1,14 +1,40 @@
-// Integration test — correlator + real chokidar + real fs ops.
+// Integration test — correlator + real @parcel/watcher + real fs ops.
 // Run via `npm test`.
+//
+// The harness drives the SAME `createWatcherDispatch` mapping main.ts uses, so
+// this test verifies the real parcel→correlator behavior (deletes-before-creates
+// batch ordering, atomic-save-as-create-of-known-path, folder-rename via
+// directory expansion).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import chokidar from 'chokidar';
+import watcher from '@parcel/watcher';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { createRenameCorrelator } from '../src/main/renameCorrelator.js';
+import { createWatcherDispatch } from '../src/main/watcherDispatch.js';
+
+// Injected dispatch deps. main.ts supplies pathResolver.ts's versions; these are
+// equivalent (pathResolver is .ts and can't be imported under the node runner).
+const isMdFile = (p) => /\.md$/i.test(p);
+
+async function walkMarkdownPaths(dir) {
+  const out = [];
+  async function rec(d) {
+    let entries;
+    try { entries = await fs.readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      if (ent.name.startsWith('.')) continue;
+      const full = path.join(d, ent.name);
+      if (ent.isDirectory()) await rec(full);
+      else if (isMdFile(ent.name)) out.push(full);
+    }
+  }
+  await rec(dir);
+  return out;
+}
 
 // Hash helper used by both the seeder and the watcher path.
 async function hashFile(p) {
@@ -20,54 +46,43 @@ async function hashFile(p) {
   }
 }
 
-async function statIno(p) {
-  try {
-    const st = await fs.stat(p, { bigint: true });
-    return st.ino.toString();
-  } catch {
-    return null;
-  }
-}
-
-// Build a harness with a fresh tmp dir + chokidar + correlator.
-// Returns control handles for the test.
+// Build a harness with a fresh tmp dir + parcel watcher + correlator + the
+// shared dispatch. Returns control handles for the test.
 async function setupHarness() {
-  const ROOT = await fs.mkdtemp(path.join(os.tmpdir(), 'sw-int-'));
+  // realpath: on macOS os.tmpdir() is /var/... (a symlink to /private/var/...)
+  // and @parcel/watcher reports realpath-resolved paths, so resolve up front to
+  // keep the paths the test computes identical to the ones parcel emits.
+  const ROOT = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sw-int-')));
   const emitted = [];
   const corr = createRenameCorrelator({
     emit: (e) => emitted.push(e),
     graceMs: 400,
   });
 
-  // Wire chokidar -> correlator. Mirrors how main.js would wire it.
-  const watcher = chokidar.watch(ROOT, {
-    ignored: (p) => {
-      const rel = path.relative(ROOT, p);
-      if (!rel || rel.startsWith('..')) return false;
-      return rel.split(path.sep).some((seg) => seg.startsWith('.'));
-    },
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    persistent: true,
+  const isIgnored = (p) => {
+    const rel = path.relative(ROOT, p);
+    if (!rel || rel.startsWith('..')) return false;
+    return rel.split(path.sep).some((seg) => seg.startsWith('.'));
+  };
+
+  const dispatch = createWatcherDispatch({
+    correlator: corr,
+    isMdFile,
+    isDrawingFile: (p) => /\.excalidraw$/i.test(p),
+    statPath: (p) => fs.stat(p, { bigint: true }).catch(() => null),
+    hashFile,
+    walkMarkdown: walkMarkdownPaths,
+    isIgnored,
+    // pending/tree sinks aren't asserted here — the tests observe correlator emits.
+    getPending: () => undefined,
+    setPending: () => {},
+    markTreeOnly: () => {},
   });
 
-  watcher
-    .on('add', async (p) => {
-      // The real main.js would also re-parse links here. For correlation we
-      // only need ino + hash.
-      const [ino, hash] = await Promise.all([statIno(p), hashFile(p)]);
-      corr.onPathAppeared(p, ino, hash);
-    })
-    .on('change', async (p) => {
-      // Atomic saves arrive here; we update the identity but don't run correlator.
-      const [ino, hash] = await Promise.all([statIno(p), hashFile(p)]);
-      corr.onPathSeen(p, ino, hash);
-    })
-    .on('unlink', (p) => {
-      corr.onPathGone(p);
-    });
-
-  await new Promise((r) => watcher.on('ready', r));
+  const sub = await watcher.subscribe(ROOT, (err, events) => {
+    if (err) return;
+    dispatch.handleBatch(events);
+  }, { ignore: ['**/.*', '**/.*/**'] });
 
   async function settle(quiet = 700) {
     let last = -1;
@@ -83,7 +98,7 @@ async function setupHarness() {
   }
 
   async function teardown() {
-    await watcher.close();
+    await sub.unsubscribe();
     await fs.rm(ROOT, { recursive: true, force: true });
   }
 
@@ -201,9 +216,9 @@ test('integration: atomic save -> NOT classified as rename (no unlink/add seen)'
     await fs.writeFile(tmp, 'v2\n');
     await fs.rename(tmp, target);
     await h.settle();
-    // Atomic save shows up as 'change' in chokidar (per phase 2), which we route
-    // to onPathSeen — not through the correlator's emit path. So h.emitted should
-    // not contain anything.
+    // parcel reports an atomic save as create-of-the-existing-file (+ delete of
+    // the temp), which the dispatch routes to onPathSeen — not the correlator's
+    // emit path. So h.emitted should not contain anything.
     assert.deepEqual(h.emitted, []);
   } finally {
     await h.teardown();

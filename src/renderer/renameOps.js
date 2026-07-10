@@ -1,98 +1,101 @@
-import { normalizeTarget } from './linkIndex.js';
+import { LINK_RE, parseTarget } from './linkIndex.js';
+import { resolveLinkTarget, shortestUniqueLinkFor } from './linkResolver.js';
 
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function baseKeyOf(p) {
+  const name = p.slice(p.lastIndexOf('/') + 1);
+  return name.replace(/\.md$/i, '').toLowerCase();
 }
 
-// Rewrite every `[[oldName]]` (case-insensitive, with optional #heading or
-// |alias suffixes preserved) to `[[newName]]` across all files that reference
-// `oldName` according to the link index. Returns the list of files that were
-// actually changed so callers can decide what else to do (refresh tree, etc.).
-//
-// NOTE: this rewrites the target name only. If the file containing the link
-// has been moved, the link still resolves by basename in the page index.
-//
-// `selfPath` is the file that's about to be renamed. We rewrite its self-
-// references too — if Foo.md contains `[[Foo]]` and is being renamed to
-// Bar.md, we want the in-file link to become `[[Bar]]`. Pass it so we know
-// which path is the file being renamed (for index updates after writing).
-/**
- * @param {{ api: any, linkIndex: any, oldBaseName: string, newBaseName: string, selfPath?: string|null }} opts
- */
-export async function rewriteReferences({ api, linkIndex, oldBaseName, newBaseName, selfPath = null }) {
-  const targetKey = normalizeTarget(oldBaseName);
-  const backlinks = linkIndex.getBacklinks(targetKey);
-  const uniqueSources = new Set();
-  for (const e of backlinks) uniqueSources.add(e.fromPath);
+function splitInner(inner) {
+  const pipeAt = inner.indexOf('|');
+  const beforePipe = pipeAt >= 0 ? inner.slice(0, pipeAt) : inner;
+  const aliasTail = pipeAt >= 0 ? inner.slice(pipeAt) : '';
+  const hashAt = beforePipe.indexOf('#');
+  const pathPart = hashAt >= 0 ? beforePipe.slice(0, hashAt) : beforePipe;
+  const headingTail = hashAt >= 0 ? beforePipe.slice(hashAt) : '';
+  return { pathPart, suffix: headingTail + aliasTail };
+}
 
-  const targetEsc = escapeRegex(oldBaseName);
-  const linkPattern = new RegExp(
-    `\\[\\[(${targetEsc})((?:#[^\\]\\n|]*)?(?:\\|[^\\]\\n]*)?)\\]\\]`,
-    'gi'
-  );
+function swapBaseSegment(pathPart, newBaseName) {
+  const slash = pathPart.lastIndexOf('/');
+  return slash >= 0 ? pathPart.slice(0, slash + 1) + newBaseName : newBaseName;
+}
 
+// Both rewriters are order-independent w.r.t. the cache re-key: the caller passes
+// `sources` (files that linked to oldPath) and `candidatesFor` (a name→paths
+// snapshot in which oldPath is still present under its basename), both captured
+// BEFORE any cache mutation. Resolution runs against that snapshot, so it doesn't
+// matter whether cache.renameFile has already run. `cache` is used only to
+// re-index the source files whose content we rewrite.
+
+// RENAME (basename changes old→new). Rewrites links resolving to oldPath — the
+// basename segment swapped, folder prefix + #heading/|alias preserved. Only
+// links that actually resolve to oldPath are touched (a `[[Meeting]]` pointing
+// at a different duplicate is left alone). Self-refs in the renamed file (now at
+// finalPath) are handled via `resolveSrc`.
+export async function rewriteReferences({ api, cache, sources, candidatesFor, workspacePath, oldPath, finalPath, oldBaseName, newBaseName }) {
+  const oldBaseLower = oldBaseName.toLowerCase();
+  const srcSet = new Set(sources);
+  srcSet.add(finalPath);
   const rewritten = [];
-  for (const src of uniqueSources) {
-    const content = await api.readFile(src);
-    const next = content.replace(linkPattern, `[[${newBaseName}$2]]`);
+  for (const src of srcSet) {
+    let content;
+    try { content = await api.readFile(src); } catch { continue; }
+    const resolveSrc = src === finalPath ? oldPath : src;
+    const next = content.replace(LINK_RE, (whole, inner) => {
+      const parsed = parseTarget(inner);
+      if (parsed.basename !== oldBaseLower) return whole;
+      if (resolveLinkTarget(parsed, resolveSrc, candidatesFor, workspacePath) !== oldPath) return whole;
+      const { pathPart, suffix } = splitInner(inner);
+      return `[[${swapBaseSegment(pathPart, newBaseName)}${suffix}]]`;
+    });
     if (next !== content) {
       const mtime = await api.writeFile(src, next);
-      // For the file being renamed (selfPath), don't update the link index
-      // here — the caller will rename it, which will re-key everything.
-      // For other files, refresh their outgoing links now.
-      if (src !== selfPath) linkIndex.updateFile(src, next, mtime);
+      if (src !== finalPath) cache.updateFile(src, next, mtime); // renamed file re-indexed via cache.renameFile
       rewritten.push(src);
     }
   }
   return rewritten;
 }
 
-// In-app rename. Rewrites references first (so they point at the new name)
-// then renames the file on disk. The IPC handler auto-disambiguates the name
-// if it collides with another .md anywhere in the workspace, returning the
-// final path used. We rewrite references AGAIN under the final name in case
-// the user-typed name was disambiguated (otherwise refs would point to a
-// nonexistent name).
-export async function renameWithReferences({ api, linkIndex, oldPath, newName }) {
-  const slash = oldPath.lastIndexOf('/');
-  const dir = slash >= 0 ? oldPath.slice(0, slash) : '';
-  const userBaseName = newName.replace(/\.md$/i, '').trim();
-  if (!userBaseName) throw new Error('Name cannot be empty');
-  if (`${dir}/${userBaseName}.md` === oldPath) return oldPath;
+// MOVE (folder changes, basename same). Re-qualifies path-links so they point at
+// the new location. A no-op unless the basename is duplicated (bare links resolve
+// by name and self-heal). `candidatesFor` is the PRE-move snapshot; the new link
+// body is computed against the POST-move candidate set (oldPath swapped to newPath).
+export async function rewriteReferencesForMove({ api, cache, sources, candidatesFor, workspacePath, oldPath, newPath }) {
+  const base = baseKeyOf(oldPath);
+  const bucket = candidatesFor(base) || [];
+  if (bucket.length <= 1) return [];
+  const postCandidatesFor = (b) => (b === base ? bucket.map((p) => (p === oldPath ? newPath : p)) : candidatesFor(b));
 
-  const oldBaseName = (slash >= 0 ? oldPath.slice(slash + 1) : oldPath).replace(/\.md$/i, '');
-
-  // Rename on disk first so we know the actual final name (the IPC may have
-  // auto-disambiguated). Then rewrite references to match.
-  let finalNewPath;
-  try {
-    finalNewPath = await api.renameFile(oldPath, userBaseName);
-  } catch (err) {
-    throw new Error(`Rename failed: ${err.message ?? err}`);
+  const rewritten = [];
+  for (const src of new Set(sources)) {
+    if (src === oldPath || src === newPath) continue;
+    let content;
+    try { content = await api.readFile(src); } catch { continue; }
+    const next = content.replace(LINK_RE, (whole, inner) => {
+      const parsed = parseTarget(inner);
+      if (parsed.basename !== base) return whole;
+      if (resolveLinkTarget(parsed, src, candidatesFor, workspacePath) !== oldPath) return whole;
+      const { suffix } = splitInner(inner);
+      return `[[${shortestUniqueLinkFor(newPath, postCandidatesFor, workspacePath)}${suffix}]]`;
+    });
+    if (next !== content) {
+      const mtime = await api.writeFile(src, next);
+      cache.updateFile(src, next, mtime);
+      rewritten.push(src);
+    }
   }
+  return rewritten;
+}
 
-  const finalBaseName = finalNewPath.slice(finalNewPath.lastIndexOf('/') + 1).replace(/\.md$/i, '');
-
-  // Re-key the index BEFORE rewriting references. Otherwise rewriteReferences
-  // would call updateFile on the renamed file with its old path.
-  linkIndex.renameFile(oldPath, finalNewPath);
-
-  // Rewrite using the FINAL name (may differ from user input due to disambiguation).
-  await rewriteReferences({
-    api,
-    linkIndex,
-    oldBaseName,
-    newBaseName: finalBaseName,
-    selfPath: finalNewPath,
-  });
-
-  // Refresh the renamed file's own outgoing links (its self-references were rewritten).
-  try {
-    const updatedContent = await api.readFile(finalNewPath);
-    linkIndex.updateFile(finalNewPath, updatedContent);
-  } catch {
-    // File may have been moved/deleted by a concurrent op — index update is best-effort.
-  }
-
-  return finalNewPath;
+// Capture the (sources, candidatesFor snapshot) a rewriter needs, BEFORE any
+// cache mutation. The snapshot pins the current name→paths for `basename` (which
+// still includes the file being renamed/moved) so resolution stays correct even
+// after cache.renameFile runs.
+export function captureRewriteContext(cache, oldPath) {
+  const base = baseKeyOf(oldPath);
+  const snapshot = cache.candidatesFor(base).slice();
+  const candidatesFor = (b) => (b === base ? snapshot : cache.candidatesFor(b));
+  return { sources: cache.getBacklinkSources(oldPath), candidatesFor };
 }

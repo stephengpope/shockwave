@@ -11,7 +11,7 @@ Cross-cutting invariants (terminology, link-index rules, parser parity, save-bef
 `App.jsx` is the orchestrator. Three custom hooks in `hooks/` own the heavy state, plus a small helper:
 
 - `useTabs` — tabs, `activeTabId`, per-path view state, per-tab back/forward history. Tabs may be drafts (`isDraft: true, path: null`); `promoteTabPath(tabId, newPath)` flips a draft to a real file once the caller has created it on disk. The actual create-on-disk happens inside `writeNow` in `App.jsx` (see "Save lifecycle" below) — a draft has no file until its first save fires.
-- `useLinkIndex` — wraps `createLinkIndex()` (in `linkIndex.js`) behind a ref + a `version` counter. The counter is `bump()`ed after every mutation so consumers can re-render. `pageIndex` (basename → path, lowercase keys) is rebuilt from the tree via `useMemo`.
+- `useLinkIndex` — wraps `createMetadataCache()` (in `metadataCache.js`, modeled on and named after Obsidian's) behind a ref + a `version` counter, `bump()`ed after every mutation. The cache owns `resolvedLinks` (source→dest paths), `unresolvedLinks`, the reverse backlinks, and a PRIVATE basename→paths "phone book"; it resolves links itself via `getFirstLinkpathDest` (rules in the pure `linkResolver.js`). There is no public `pageIndex` — consumers call `cache.getFirstLinkpathDest` / `candidatesFor` / `getBacklinksForFile`. Rename/move reference rewrites (`renameOps.js`) capture a context snapshot (`captureRewriteContext`) before the cache re-keys so resolution stays correct regardless of order.
 - `useFileOps` — rename/duplicate/delete/link-click, and the `treeAndIndexChanged()` helper that re-reads the tree and bumps the link index after any structural change.
 - `useSyncRef` — keeps a ref in sync with a value/callback so a stable closure (e.g. `writeNow`) can read fresh state without being rebuilt.
 
@@ -167,7 +167,7 @@ Settings → Daily Notes lets the user choose a dayjs format string (`YYYY-MM-DD
 - `SyncSection.jsx` — global GitHub sync settings: PAT (encrypted at rest), tick interval, `sync:verifyPat` button, `sync:checkGit` presence check.
 - `WorkspaceSyncDialog.jsx` — per-workspace setup picker (three choice cards: clone into empty / init+create new / adopt existing). Launched from `WorkspacesSection.jsx`.
 - `TranscriptionSection.jsx` — AssemblyAI API key + "Test microphone" button (see Voice input above).
-- `AgentChatSection.jsx` — provider/model/API key + system prompt textarea with Reset to default. Provider + model lists are fetched live from main via `agent:listProviders` / `agent:listModels`.
+- `AgentChatSection.jsx` — provider/model/API key + reasoning level. The system prompt is no longer editable here — it's assembled from the workspace's `SOUL.md` + the internal helper (see `src/main/prompt/`); the section just points users at `SOUL.md` / `AGENTS.md`. Provider + model lists are fetched live from main via `agent:listProviders` / `agent:listModels`.
 - `AiSkillsTab.jsx` (Global Skills) — drop folder / pick folder to import a SKILL.md-bearing folder into the library; enable/disable each skill globally; remove.
 - `WorkspaceSkillsTab.jsx` (Workspace Skills) — per-workspace override: `inherit` / `enabled` / `disabled`. Workspace picker defaults to the active workspace.
 - `AgentSecretsSection.jsx` — add/edit/delete tokens with `{name, description, token}`; names are unique case-insensitive; tokens are encrypted at rest.

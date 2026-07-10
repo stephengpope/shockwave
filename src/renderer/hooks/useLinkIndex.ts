@@ -1,90 +1,39 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createLinkIndex, normalizeTarget } from '../linkIndex.js';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { createMetadataCache } from '../metadataCache.js';
 
-function flattenTree(nodes, out: any[] = []) {
-  for (const n of nodes) {
-    if (n.children) flattenTree(n.children, out);
-    else out.push(n);
-  }
-  return out;
-}
+// Thin React wrapper around the metadata cache (createMetadataCache). The cache
+// owns the link graph + the private name index and resolves links itself; this
+// hook just bumps a `version` after each mutation so the UI/graph re-render, and
+// keeps the cache's workspace path current.
+export function useLinkIndex(tree: any, workspacePath?: string | null): any {
+  const cacheRef = useRef<any>(null);
+  if (cacheRef.current === null) cacheRef.current = createMetadataCache();
+  // Resolution needs the workspace root (for path-qualified links). Setting a
+  // ref value in render is idempotent and runs before any event handler that
+  // would rebuild/resolve.
+  cacheRef.current.setWorkspacePath(workspacePath ?? null);
 
-function buildPageIndex(treeData) {
-  const map = new Map();
-  for (const file of flattenTree(treeData)) {
-    if (!file.name.toLowerCase().endsWith('.md')) continue;
-    const key = file.name.slice(0, -3).toLowerCase();
-    const existing = map.get(key);
-    if (!existing || file.id.length < existing.length) {
-      map.set(key, file.id);
-    }
-  }
-  return map;
-}
-
-export function useLinkIndex(tree: any): any {
-  const linkIndexRef = useRef<any>(null);
-  if (linkIndexRef.current === null) {
-    linkIndexRef.current = createLinkIndex();
-  }
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
 
-  const pageIndex = useMemo(() => buildPageIndex(tree), [tree]);
-  const pageIndexRef = useRef(pageIndex);
-  useEffect(() => { pageIndexRef.current = pageIndex; }, [pageIndex]);
+  const updateFile = useCallback((path, content, mtime) => { cacheRef.current.updateFile(path, content, mtime); bump(); }, [bump]);
+  const applyParsedLinks = useCallback((path, links, mtime) => { cacheRef.current.applyParsedLinks(path, links, mtime); bump(); }, [bump]);
+  const removeFile = useCallback((path) => { cacheRef.current.removeFile(path); bump(); }, [bump]);
+  const renameFile = useCallback((oldPath, newPath) => { cacheRef.current.renameFile(oldPath, newPath); bump(); }, [bump]);
+  const rebuild = useCallback((files) => { cacheRef.current.rebuild(files); bump(); }, [bump]);
 
-  const updateFile = useCallback((path, content, mtime) => {
-    linkIndexRef.current.updateFile(path, content, mtime);
-    bump();
-  }, [bump]);
+  // Batch several mutations then bump once (folder move/trash loops).
+  const mutate = useCallback((fn) => { fn(cacheRef.current); bump(); }, [bump]);
 
-  const applyParsedLinks = useCallback((path, outgoingLinks, mtime) => {
-    linkIndexRef.current.applyParsedLinks(path, outgoingLinks, mtime);
-    bump();
-  }, [bump]);
+  const getBacklinksForFile = useCallback((filePath) => (filePath ? cacheRef.current.getBacklinksForFile(filePath) : []), []);
+  const getMtime = useCallback((p) => cacheRef.current.getMtime(p), []);
 
-  const removeFile = useCallback((path) => {
-    linkIndexRef.current.removeFile(path);
-    bump();
-  }, [bump]);
-
-  const renameFile = useCallback((oldPath, newPath) => {
-    linkIndexRef.current.renameFile(oldPath, newPath);
-    bump();
-  }, [bump]);
-
-  const rebuild = useCallback((files) => {
-    linkIndexRef.current.rebuild(files);
-    bump();
-  }, [bump]);
-
-  const getBacklinksForFile = useCallback((filePath) => {
-    if (!filePath) return [];
-    const fileName = filePath.split('/').pop();
-    const key = normalizeTarget(fileName);
-    const resolved = pageIndex.get(key);
-    if (resolved !== filePath) return [];
-    const groups = linkIndexRef.current.getEntriesGroupedBySource(key);
-    return groups.filter((g) => g.fromPath !== filePath);
-  }, [pageIndex]);
-
-  // Read-only accessors — no bump needed.
-  const getOutgoingMap = useCallback(() => linkIndexRef.current.getOutgoingMap(), []);
-  const getMtime = useCallback((p) => linkIndexRef.current.getMtime(p), []);
-
-  // Batch-mutate the underlying index then bump ONCE. Use this for folder
-  // trash / move / rename loops where iterating with the per-call mutators
-  // (removeFile/renameFile) would trigger one re-render per item.
-  const mutate = useCallback((fn) => {
-    fn(linkIndexRef.current);
-    bump();
-  }, [bump]);
-
-  return {
-    linkIndexRef,
-    pageIndex,
-    pageIndexRef,
+  // Stable identity except when the cache version changes — so linkIndex-keyed
+  // memos (e.g. activeBacklinks) only recompute when the graph actually changed.
+  return useMemo(() => ({
+    cache: cacheRef.current,
+    cacheRef,
+    linkIndexRef: cacheRef,   // back-compat alias — callers read `.current` for the cache
     version,
     bump,
     updateFile,
@@ -92,9 +41,8 @@ export function useLinkIndex(tree: any): any {
     removeFile,
     renameFile,
     rebuild,
-    getBacklinksForFile,
-    getOutgoingMap,
-    getMtime,
     mutate,
-  };
+    getBacklinksForFile,
+    getMtime,
+  }), [version, bump, updateFile, applyParsedLinks, removeFile, renameFile, rebuild, mutate, getBacklinksForFile, getMtime]);
 }

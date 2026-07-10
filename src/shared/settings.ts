@@ -44,7 +44,6 @@ export interface CodingAgentSettings {
   // Note: an unset/omitted level makes pi fall back to 'medium' for reasoning-
   // capable models — this field makes the choice explicit and user-controllable.
   thinkingLevel: ThinkingLevel;
-  systemPrompt: string;
   // GLOBAL built-in skill on/off, per folderName. Absent ⇒ enabled (default-on).
   // A workspace can override this in its own `WorkspaceData.builtinSkills`.
   builtinSkills: Record<string, SkillState>;

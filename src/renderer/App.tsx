@@ -6,7 +6,7 @@ import GraphView from './GraphView.jsx';
 import MediaView, { mediaKind, isOpenable, isDrawing } from './MediaView';
 import DrawingView from './DrawingView';
 import type { DrawingViewHandle } from './DrawingView';
-import { rewriteReferences } from './renameOps.js';
+import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from './renameOps.js';
 import TabStrip from './TabStrip.jsx';
 import EditorTitle from './EditorTitle.jsx';
 import EditorNav from './EditorNav.jsx';
@@ -22,7 +22,6 @@ import ConfirmDialog from './ConfirmDialog.jsx';
 import JournalDatePicker from './JournalDatePicker.jsx';
 import QuickSearch from './QuickSearch.jsx';
 import { basenameOf, dirOf, toRelPath } from './pathUtils';
-import { prettyName } from './linkIndex.js';
 import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, VIEW_MODES, SAVE_STATES, TREE_SORT_ORDERS, FILE_ACTIONS } from './constants.js';
 import SortBar from './SortBar.jsx';
 import DailyNotesPanel from './DailyNotesPanel.jsx';
@@ -117,16 +116,17 @@ function buildConflictTree(absPaths: string[], workspacePath: string | null) {
   return root;
 }
 
-// Workspace-wide, case-insensitive .md basename collision check. The link
-// index is keyed by basename, so two files sharing a name (in any folder)
-// collapse into one and break references. This drives the live title-input
-// warning. The IPC handlers auto-disambiguate if the user submits anyway.
-function findNameConflict({ tree, currentPath, newName }) {
+// Same-folder, case-insensitive .md basename collision check for a NEW draft
+// being saved into `dir`. Duplicate basenames across folders are allowed now,
+// so this only warns when the name already exists in the same folder (where the
+// filesystem would force a " 1" suffix). Drives the live title-input warning.
+function findNameConflict({ tree, dir, newName }) {
   const clean = newName.replace(/\.md$/i, '').toLowerCase().trim();
   if (!clean) return null;
   for (const node of flattenAll(tree)) {
     if (node.children) continue;
-    if (node.id === currentPath) continue;
+    const nd = node.id.slice(0, node.id.lastIndexOf('/'));
+    if (nd !== dir) continue;
     if (!node.name.toLowerCase().endsWith('.md')) continue;
     if (node.name.slice(0, -3).toLowerCase() === clean) return node.id;
   }
@@ -135,24 +135,19 @@ function findNameConflict({ tree, currentPath, newName }) {
 
 const isMdName = (n: string) => /\.md$/i.test(n);
 
-// Live collision check for the file-browser rename (literal names). Returns
-// true if `newName` would collide and the rename must be blocked:
-//   - `.md` target → workspace-wide basename collision (link index is keyed by
-//     basename, so two `.md` sharing one break it).
-//   - other files → same-folder exact-name collision.
-// Empty names also count as "can't save". Folders aren't checked here (the
-// folder rename path keeps its own behavior).
+// Live collision check for a literal file rename (file browser + title bar).
+// Returns true if `newName` would collide and the rename must be blocked. Now
+// same-folder-only for every extension: duplicate basenames across different
+// folders are allowed (the resolver disambiguates by path); the filesystem
+// still forbids two identical names in one folder. Empty names count as
+// "can't save". Folders aren't checked here.
 function findTreeRenameConflict({ tree, currentPath, newName }: { tree: any[]; currentPath: string; newName: string }) {
   const name = (newName ?? '').trim();
   const oldName = currentPath.slice(currentPath.lastIndexOf('/') + 1);
   if (!name) return true;
   if (name === oldName) return false;
-  const files = flattenAll(tree).filter((n) => !n.children && n.id !== currentPath);
-  if (isMdName(name)) {
-    const base = name.slice(0, -3).toLowerCase();
-    return files.some((n) => isMdName(n.name) && n.name.slice(0, -3).toLowerCase() === base);
-  }
   const dir = currentPath.slice(0, currentPath.lastIndexOf('/'));
+  const files = flattenAll(tree).filter((n) => !n.children && n.id !== currentPath);
   return files.some((n) => {
     const nd = n.id.slice(0, n.id.lastIndexOf('/'));
     return nd === dir && n.name.toLowerCase() === name.toLowerCase();
@@ -389,21 +384,26 @@ export default function App() {
   const newFileDirRef = useRef(() => null);
   const promoteTabPathRef = useRef(() => {});
 
-  const linkIndex = useLinkIndex(tree);
+  const linkIndex = useLinkIndex(tree, workspacePath);
 
   // Bookmarks resolved to current locations for the picker: name → path via the
   // link index. Unresolved names (file gone) are hidden. Sorted by display name.
   const bookmarkItems = useMemo(() => {
     const items: Array<{ name: string; dir: string; path: string }> = [];
     for (const key of bookmarks) {
-      const path = linkIndex.pageIndex.get(key);
+      // Bookmarks are basename-keyed; if two files share the name, resolve to
+      // the shallowest as a stable pick (bookmarks predate path disambiguation).
+      const paths = linkIndex.cache.candidatesFor(key);
+      const path = paths && paths.length
+        ? paths.slice().sort((a, b) => a.split('/').length - b.split('/').length || a.length - b.length)[0]
+        : null;
       if (!path) continue;
       const rel = (workspacePath && path.startsWith(workspacePath + '/')) ? path.slice(workspacePath.length + 1) : path;
       const slash = rel.lastIndexOf('/');
       items.push({ name: slash >= 0 ? rel.slice(slash + 1) : rel, dir: slash >= 0 ? rel.slice(0, slash) : '', path });
     }
     return items.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-  }, [bookmarks, linkIndex.pageIndex, workspacePath]);
+  }, [bookmarks, linkIndex, workspacePath]);
 
   // Returns the absolute path that was saved (the new path for a draft, or the
   // existing path for a real file), or null if nothing was dirty / save failed.
@@ -431,10 +431,12 @@ export default function App() {
           // Only trust titleDraft when the dirty tab is also the active tab;
           // for any other tab (background flush during switch) fall back.
           const candidate = tabId === activeTabIdRef.current ? (titleDraftRef.current || '') : '';
-          const name = (candidate || 'Untitled').replace(/\.md$/i, '').trim() || 'Untitled';
+          // The title is the literal filename now: "Foo" → Foo.md (createFile
+          // defaults the extension), "Foo.txt" → Foo.txt. Don't strip/force .md.
+          const name = (candidate || 'Untitled').trim() || 'Untitled';
           const targetDir = newFileDirRef.current();
           if (!targetDir) throw new Error('No active workspace');
-          const res = await window.api.createFile(targetDir, `${name}.md`, text);
+          const res = await window.api.createFile(targetDir, name, text);
           path = res.path;
           mtime = res.mtime;
           (promoteTabPathRef.current as any)(tabId, path);
@@ -444,8 +446,9 @@ export default function App() {
         }
         // Pass the file's real mtime (returned by main) so the self-echo guard
         // can compare against the watcher's stat.mtimeMs without losing the
-        // fractional ms that Date.now() would drop.
-        linkIndex.updateFile(path, text, mtime);
+        // fractional ms that Date.now() would drop. Only .md files participate
+        // in the (basename-keyed) link index; other text files don't.
+        if (isMdName(path)) linkIndex.updateFile(path, text, mtime);
         if (dirtyTabIdRef.current === null) setSaveState(SAVE_STATES.SAVED);
         return path;
       } catch (err: any) {
@@ -554,7 +557,6 @@ export default function App() {
   // ---- file operations ----
   const fileOps = useFileOps({
     workspacePath,
-    pageIndex: linkIndex.pageIndex,
     linkIndex,
     tabs,
     writeNow,
@@ -808,6 +810,56 @@ export default function App() {
   const onUndo = useCallback(() => { editorRef.current?.undo(); }, []);
   const onRedo = useCallback(() => { editorRef.current?.redo(); }, []);
 
+  // Literal file rename (name verbatim, no `.md` forcing) with link-index +
+  // bookmark + tab bookkeeping. Shared by the file-tree rename and the title
+  // bar so both handle extension changes identically. Returns the final path.
+  // The index is updated per the extension transition: md→md re-keys + rewrites
+  // refs, md→non-md drops it (its backlinks dangle, by design), non-md→md adds.
+  const renameFileWithTransitions = useCallback(async (oldPath, rawName) => {
+    const literal = (rawName ?? '').trim();
+    const oldName = oldPath.slice(oldPath.lastIndexOf('/') + 1);
+    if (!literal || literal === oldName) return null;
+    if (findTreeRenameConflict({ tree, currentPath: oldPath, newName: literal })) {
+      showError(`"${literal}" already exists.`);
+      return null;
+    }
+    try {
+      await writeNow();
+      const oldIsMd = isMdName(oldName);
+      const newIsMd = isMdName(literal);
+      const finalPath = await window.api.renameFileLiteral(oldPath, literal);
+      const finalName = finalPath.slice(finalPath.lastIndexOf('/') + 1);
+      const cache = linkIndex.cacheRef.current;
+      if (oldIsMd && newIsMd) {
+        // Capture who links to oldPath (+ a name snapshot) BEFORE re-keying the
+        // cache, then rewrite references, then move the file in the cache.
+        const ctx = captureRewriteContext(cache, oldPath);
+        await rewriteReferences({
+          api: window.api, cache, sources: ctx.sources, candidatesFor: ctx.candidatesFor,
+          workspacePath, oldPath, finalPath,
+          oldBaseName: oldName.replace(/\.md$/i, ''),
+          newBaseName: finalName.replace(/\.md$/i, ''),
+        });
+        cache.renameFile(oldPath, finalPath);
+        try { const c = await window.api.readFile(finalPath); cache.updateFile(finalPath, c); } catch { /* best effort */ }
+      } else if (oldIsMd && !newIsMd) {
+        cache.removeFile(oldPath); // left markdown → drop from the index
+      } else if (!oldIsMd && newIsMd) {
+        try { const c = await window.api.readFile(finalPath); cache.updateFile(finalPath, c); } catch { /* best effort */ }
+      }
+      let bmChanged = false;
+      if (oldIsMd && newIsMd) bmChanged = renameBookmarkName(bookmarkKey(oldName), bookmarkKey(finalName));
+      else if (oldIsMd && !newIsMd) bmChanged = removeBookmarkName(bookmarkKey(oldName));
+      if (bmChanged) persistBookmarks();
+      renameTabsPath(oldPath, finalPath);
+      await fileOps.treeAndIndexChanged();
+      return finalPath;
+    } catch (err: any) {
+      showError(err.message ?? String(err));
+      return null;
+    }
+  }, [tree, linkIndex, renameTabsPath, showError, writeNow, renameBookmarkName, removeBookmarkName, persistBookmarks, fileOps]);
+
   // ---- title commit (rename existing or save draft with this name) ----
   const onTitleCommit = useCallback(async (newName) => {
     if (!activeTab) return;
@@ -825,11 +877,10 @@ export default function App() {
       return;
     }
     if (!activeFile) return;
-    const newPath = await fileOps.performRename(activeFile, newName);
-    // Rename changes the basename → re-key the bookmark (move keeps it, rename
-    // must follow). renameBookmarkName no-ops if it wasn't bookmarked.
-    if (newPath && renameBookmarkName(bookmarkKey(activeFile), bookmarkKey(newPath))) persistBookmarks();
-  }, [activeTab, activeFile, writeNow, fileOps, titleDraftRef, renameBookmarkName, persistBookmarks]);
+    // Literal rename (title is the full filename incl. extension). Bookmark
+    // re-keying happens inside the shared helper.
+    await renameFileWithTransitions(activeFile, newName);
+  }, [activeTab, activeFile, writeNow, titleDraftRef, renameFileWithTransitions, fileOps]);
 
   // ---- graph toggle ----
   const onToggleGraph = useCallback(async () => {
@@ -919,7 +970,7 @@ export default function App() {
       // backlinks/graph drop them immediately (don't wait for the watcher).
       const prefix = folderPath.endsWith('/') ? folderPath : folderPath + '/';
       const affected: any[] = [];
-      for (const p of linkIndex.getOutgoingMap().keys()) {
+      for (const p of linkIndex.cache.allPaths()) {
         if (p.startsWith(prefix)) affected.push(p);
       }
       linkIndex.mutate((idx) => {
@@ -976,10 +1027,11 @@ export default function App() {
         if (dirOf(src) === destDir) continue;
         // No-op: dropping a folder onto itself.
         if (src === destDir) continue;
-        // Capture every linkIndex entry currently under this src (files + folder contents).
+        // Capture every cached file currently under this src (files + folder contents).
         const srcAsDir = src.endsWith('/') ? src : src + '/';
+        const cache = linkIndex.cacheRef.current;
         const insideSrc: any[] = [];
-        for (const p of linkIndex.getOutgoingMap().keys()) {
+        for (const p of cache.allPaths()) {
           if (p === src || p.startsWith(srcAsDir)) insideSrc.push(p);
         }
 
@@ -993,6 +1045,16 @@ export default function App() {
           const newP = suffix ? (newAsDir + suffix) : newPath;
           return { oldP, newP };
         });
+        // Re-qualify path-links to each moved file BEFORE re-keying the cache
+        // (so resolution still points at the old paths), then re-key.
+        for (const { oldP, newP } of renames) {
+          if (!/\.md$/i.test(oldP)) continue;
+          const ctx = captureRewriteContext(cache, oldP);
+          await rewriteReferencesForMove({
+            api: window.api, cache, sources: ctx.sources, candidatesFor: ctx.candidatesFor,
+            workspacePath, oldPath: oldP, newPath: newP,
+          });
+        }
         linkIndex.mutate((idx) => {
           for (const { oldP, newP } of renames) idx.renameFile(oldP, newP);
         });
@@ -1040,7 +1102,7 @@ export default function App() {
         // Capture nested .md paths from the index BEFORE renaming.
         const srcAsDir = id.endsWith('/') ? id : id + '/';
         const insideSrc: any[] = [];
-        for (const p of linkIndex.getOutgoingMap().keys()) {
+        for (const p of linkIndex.cache.allPaths()) {
           if (p === id || p.startsWith(srcAsDir)) insideSrc.push(p);
         }
         // Flush any pending edits before the rename invalidates the path.
@@ -1066,50 +1128,10 @@ export default function App() {
       }
       return;
     }
-    // File: literal rename (name verbatim, no `.md` forcing). The link index
-    // is updated per the extension transition: md→md re-keys + rewrites refs,
-    // md→non-md drops it (its backlinks dangle, by design), non-md→md adds it.
-    const literal = (name ?? '').trim();
-    const oldName = id.slice(id.lastIndexOf('/') + 1);
-    if (!literal || literal === oldName) return;
-    if (findTreeRenameConflict({ tree, currentPath: id, newName: literal })) {
-      showError(`"${literal}" already exists.`);
-      return;
-    }
-    try {
-      await writeNow();
-      const oldIsMd = isMdName(oldName);
-      const newIsMd = isMdName(literal);
-      const finalPath = await window.api.renameFileLiteral(id, literal);
-      const finalName = finalPath.slice(finalPath.lastIndexOf('/') + 1);
-      const idx = linkIndex.linkIndexRef.current;
-      if (oldIsMd && newIsMd) {
-        idx.renameFile(id, finalPath);
-        await rewriteReferences({
-          api: window.api,
-          linkIndex: idx,
-          oldBaseName: oldName.replace(/\.md$/i, ''),
-          newBaseName: finalName.replace(/\.md$/i, ''),
-          selfPath: finalPath,
-        });
-        try { const c = await window.api.readFile(finalPath); idx.updateFile(finalPath, c); } catch { /* best effort */ }
-      } else if (oldIsMd && !newIsMd) {
-        idx.removeFile(id); // left markdown → drop from the index
-      } else if (!oldIsMd && newIsMd) {
-        try { const c = await window.api.readFile(finalPath); idx.updateFile(finalPath, c); } catch { /* best effort */ }
-      }
-      // Bookmarks are .md-keyed by basename: md→md re-keys the bookmark, md→non-md
-      // drops it (no longer bookmarkable). Moves never reach here.
-      let bmChanged = false;
-      if (oldIsMd && newIsMd) bmChanged = renameBookmarkName(bookmarkKey(oldName), bookmarkKey(finalName));
-      else if (oldIsMd && !newIsMd) bmChanged = removeBookmarkName(bookmarkKey(oldName));
-      if (bmChanged) persistBookmarks();
-      renameTabsPath(id, finalPath);
-      await fileOps.treeAndIndexChanged();
-    } catch (err: any) {
-      showError(err.message ?? String(err));
-    }
-  }, [tree, fileOps, linkIndex, renameTabsPath, selectedFolderPath, showError, writeNow, renameBookmarkName, removeBookmarkName, persistBookmarks]);
+    // File: literal rename with extension-transition handling — shared with the
+    // title-bar commit.
+    await renameFileWithTransitions(id, name);
+  }, [tree, fileOps, selectedFolderPath, writeNow, showError, renameFileWithTransitions, linkIndex, renameTabsPath]);
 
   // ---- URL prompt (used by editor "Add" / "Edit" external link) ----
   // Always resolves to { url, text } | null. `text` is undefined in Add mode.
@@ -1349,9 +1371,12 @@ export default function App() {
   );
 
   // ---- title sync with active file/tab ----
+  // Show the full filename incl. extension (Meeting.md, Notes.txt), matching the
+  // sidebar and tabs. The title input is a literal-filename editor (commit routes
+  // through renameFileLiteral), so the extension is editable here.
   const titleFromActive = activeIsDraft
     ? ''
-    : (activeFile ? prettyName(activeFile).split('/').pop() : '');
+    : (activeFile ? basenameOf(activeFile) : '');
   // Layout effect — runs synchronously before paint so the title input never
   // renders with a stale draft against a freshly-switched activeFile (which
   // would briefly trigger a false title-conflict popup).
@@ -1365,11 +1390,14 @@ export default function App() {
     const draft = (titleDraft || '').trim();
     if (!draft) return null;
     if (!activeIsDraft && draft === titleFromActive) return null;
-    return findNameConflict({
-      tree,
-      currentPath: activeFile,
-      newName: draft,
-    });
+    // Existing file: the title is a literal filename, so use the same collision
+    // rule as the file-tree rename (workspace-wide for .md, same-folder else).
+    if (!activeIsDraft && activeFile) {
+      return findTreeRenameConflict({ tree, currentPath: activeFile, newName: draft }) ? activeFile : null;
+    }
+    // Draft: it will be saved into newFileDir; warn only on a same-folder .md
+    // collision (the filesystem would force a " 1" suffix there).
+    return findNameConflict({ tree, dir: newFileDirRef.current(), newName: draft });
   }, [titleDraft, tree, workspacePath, activeFile, activeIsDraft, titleFromActive]);
 
   const onSidebarResizeStart = useCallback((e) => {
@@ -1601,8 +1629,7 @@ export default function App() {
         {graphMode ? (
           <GraphView
             tree={tree}
-            pageIndex={linkIndex.pageIndex}
-            outgoingByFile={linkIndex.getOutgoingMap()}
+            resolvedLinks={linkIndex.cache.resolvedLinks}
             linkIndexVersion={linkIndex.version}
             dark={isDark}
             onOpenFile={async (id) => {
@@ -1640,7 +1667,7 @@ export default function App() {
                   ref={editorRef}
                   onLinkClick={fileOps.onLinkClick}
                   onChange={onEditorChange}
-                  getPageIndexRef={linkIndex.pageIndexRef}
+                  getCacheRef={linkIndex.cacheRef}
                   getVaultPathRef={workspacePathRef}
                   getActiveFilePathRef={activeFilePathRef}
                   onImageError={showError}

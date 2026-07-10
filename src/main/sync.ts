@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import { app } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { scaffoldNewProject } from './prompt/index.js';
 
 const GITHUB_API = 'https://api.github.com';
 const API_HEADERS = (pat) => ({
@@ -405,6 +406,11 @@ export async function setupInitAndCreate({ workspacePath, repoName, pat, private
   if (!init.ok) {
     return { ok: false, error: init.stderr.trim() || 'git init failed' };
   }
+
+  // Seed a new project with SOUL.md (agent identity) + an empty AGENTS.md
+  // (per-project instructions). Only writes files that don't already exist; the
+  // first sync tick commits + pushes them. Best-effort.
+  await scaffoldNewProject(workspacePath);
 
   // Set origin. `remote add` fails if origin exists; use `set-url` to be
   // idempotent against partial setups.

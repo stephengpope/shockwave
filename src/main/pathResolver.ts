@@ -15,6 +15,18 @@ export function isMdFile(name) {
   return typeof name === 'string' && name.toLowerCase().endsWith('.md');
 }
 
+// Directory names we never descend into, display, or watch — the heavy
+// non-dotfile dirs. Dotfiles (.git/.obsidian/.shockwave/…) are skipped
+// separately by the leading-dot rule; these are the extras.
+export const IGNORED_DIR_NAMES = new Set(['node_modules']);
+
+// True for any path segment the tree builder and watcher skip: a dotfile
+// segment, or a name in IGNORED_DIR_NAMES. Single source of truth so buildTree,
+// the walks below, and isIgnoredWatchPath stay consistent.
+export function isIgnoredSegment(name) {
+  return typeof name === 'string' && (name.startsWith('.') || IGNORED_DIR_NAMES.has(name));
+}
+
 // Same-directory uniqueness: returns a path that doesn't exist on disk.
 // Appends " 1", " 2", ... until it finds an open slot. Doesn't check anything
 // beyond the destination directory — use uniqueInWorkspace for workspace-wide
@@ -47,7 +59,7 @@ export async function collectMarkdownBasenamesLower(root, excludePaths = new Set
       return;
     }
     for (const e of entries) {
-      if (e.name.startsWith('.')) continue;
+      if (isIgnoredSegment(e.name)) continue;
       if (e.isSymbolicLink()) continue;
       const full = path.join(dir, e.name);
       if (excludePaths.has(full)) continue;
@@ -107,7 +119,7 @@ export async function walkMarkdownPaths(root, { skipSymlinks = true } = {}) {
     let entries;
     try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (e.name.startsWith('.')) continue;
+      if (isIgnoredSegment(e.name)) continue;
       if (skipSymlinks && e.isSymbolicLink()) continue;
       const full = path.join(dir, e.name);
       if (e.isDirectory()) await walk(full);

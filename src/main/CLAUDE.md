@@ -8,8 +8,9 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 - `pathResolver.ts` — `isMdFile`, `uniquePath` (same-dir uniqueness), `uniqueInWorkspace` (workspace-wide basename uniqueness for `.md` files), `walkMarkdownPaths`, `collectMarkdownBasenamesLower`. The link index is keyed by basename, so two `.md` files sharing one breaks it; `uniqueInWorkspace` is what `fs:renameFile`, `fs:moveItem`, and `fs:createFile` call to auto-disambiguate. Folder renames stay same-folder-unique because folders aren't part of the link index.
 - `linkParser.js` — ESM mirror of the wiki-link parser in `src/renderer/linkIndex.js` (intentionally kept as `.js` so both processes load the exact same module bytes — see parser-parity rule in root).
 - `renameCorrelator.js` — pairs unlink+add events into rename events. See below.
+- `watcherDispatch.js` — maps a `@parcel/watcher` event batch to correlator/pending-state calls. Imported by BOTH `main.ts` (real sinks) and the correlator/e2e tests (tmp-dir sinks), so main and the tests exercise identical watcher logic — same parity discipline as `linkParser.js`. Handles the parcel-specific shapes: atomic-save-as-`create`-of-known-path, folder-rename via directory expansion, deletes-before-creates batch ordering.
 - `codingAgent.ts` — pi `AgentSession` lifecycle, system-prompt override, emit-callback wrapping for the failed-image splice.
-- `agentSystemPrompt.ts` — exports `DEFAULT_AGENT_SYSTEM_PROMPT`.
+- `prompt/` — coding-agent system-prompt assembly. `tools.ts` (the tool catalog rendered into the prompt), `helper.ts` (`buildShockwaveHelper` — the app mechanics, sections as named consts), `soul.ts` (`DEFAULT_SOUL` + `AGENTS_STUB` + `readSoul`/`scaffoldNewProject`), `index.ts` (`assembleSystemPrompt`). See "System prompt" below.
 - `agentTokensExtension.ts` — pi extension exposing `list_agent_secrets` + `get_agent_secret`; installed via `installAgentTokensBridge` at startup.
 - `skillLibrary.ts` — on-disk skill library under `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` and the workspace-override resolution.
 - `sync.ts` — GitHub sync support: REST helpers (`verifyPat`, `probeWrite`, `createRepo`), URL parsing, the `gitSpawn` wrapper that injects a PAT via `GIT_ASKPASS`, git-presence check, per-workspace status, and the four setup flows (clone / init+create / adopt-existing / teardown).
@@ -17,7 +18,9 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 
 ## File watcher
 
-`chokidar` v4. One watcher per active workspace (lifecycle: started in `loadWorkspace`, stopped in `loadWorkspace`/`removeWorkspace`/`before-quit`). Per-path events are coalesced within a 150ms window; `.md` adds/changes are read + parsed in main (reusing `linkParser.js`).
+`@parcel/watcher` (native, N-API — ABI-stable across Electron bumps). One `subscribe()` per active workspace (lifecycle: started in `loadWorkspace`, stopped in `loadWorkspace`/`removeWorkspace`/`before-quit`), plus a second `subscribe()` on `.shockwave/` for `workspace.json`. parcel is always recursive and reports only changes after subscribe (no initial scan) — seeding is our only startup enumeration. Per-path events are coalesced within a 150ms window; `.md` adds/changes are read + parsed in main (reusing `linkParser.js`).
+
+parcel-specific handling (all in `watcherDispatch.js`): events are `{type: 'create'|'update'|'delete', path}` with **no mtime and no file/dir discriminator**, so the dispatch stats each path (for the inode + to reject directories); a `create` of an already-known path is an atomic save (temp-write + rename-over) and is treated as a modification; a folder rename arrives as delete(oldDir)+create(newDir) and is expanded into per-file events (paired by inode → per-file renames); deletes in a batch are dispatched before creates so rename pairing always has the unlink buffered first. The `ignore` globs are a perf hint; the authoritative dotfile filter is `isIgnoredWatchPath` in the callback.
 
 Events shipped to the renderer (via `fs:changed`):
 
@@ -26,24 +29,25 @@ Events shipped to the renderer (via `fs:changed`):
 - `{type:'rename', oldPath, newPath, mtime, outgoingLinks}` — paired by the correlator (inode primary, hash fallback)
 - `{type:'tree'}` — folder change or non-`.md` change (tree refresh only)
 
-The watcher only sees inside the active workspace, and the `ignored` predicate skips any path with a dotfile segment (`.git`, `.obsidian`, `.shockwave`, etc.) — mirrors `buildTree`. The `.shockwave/` segment is how we store our own per-workspace data (bookmarks) without echoing back through the watcher.
+The watcher only sees inside the active workspace, and `isIgnoredWatchPath` skips any path with a dotfile segment (`.git`, `.obsidian`, `.shockwave`, etc.) — mirrors `buildTree`. The `.shockwave/` segment is how we store our own per-workspace data (bookmarks) without echoing back through the main watcher (a separate subscription watches it for `workspace.json`).
 
 ### End-to-end pipeline
 
-The watcher is a state machine spread across `main.js` (the orchestration) and `renameCorrelator.js` (the rename pairing). The flow from chokidar event to renderer:
+The watcher is a state machine spread across `main.ts` (orchestration), `watcherDispatch.js` (event mapping), and `renameCorrelator.js` (rename pairing). The flow from a parcel event batch to the renderer:
 
 ```
-chokidar (fsevents on macOS)
+@parcel/watcher subscribe(root) (fsevents on macOS)
    │
-   ├── add/change/unlink/addDir/unlinkDir per path
+   ├── batch of {type: create|update|delete, path}
    ▼
-on{Chokidar}{Add,Change,Unlink}(p)
+onParcelEvents → watchDispatch.handleBatch(events)   (deletes first, then creates/updates)
    │
-   ├─ non-.md path? → set pendingTreeOnly = true; scheduleFlush() (150ms debounce)
-   └─ .md path? → stat ino + hash file, hand to correlator:
-                    add → correlator.onPathAppeared(p, ino, hash)
-                    change → correlator.onPathSeen(p, ino, hash); pendingByPath.set(p, 'change')
-                    unlink → correlator.onPathGone(p)  (buffered for 800ms grace)
+   ├─ non-.md path? → markTreeOnly() → pendingTreeOnly = true; scheduleFlush() (150ms debounce)
+   ├─ directory? → create: walk .md inside and upsert each; delete: unlink every known .md under it
+   └─ .md file? → stat ino + hash file, hand to correlator:
+                    create (unknown path) → correlator.onPathAppeared(p, ino, hash)
+                    create (known path) / update → onPathSeen(p, ino, hash); pendingByPath.set(p, 'change')
+                    delete → correlator.onPathGone(p)  (buffered for 800ms grace)
    ▼
 createRenameCorrelator
    │
@@ -71,7 +75,7 @@ Pipeline invariants:
 3. **The rename correlator buffers unlinks for `RENAME_GRACE_MS` (800ms).** If a paired add arrives in that window with matching inode or content hash, it's emitted as `rename` instead of separate unlink+add. After the grace period, buffered unlinks become real unlinks.
 4. **Renames go through `renameQueue`, not `pendingByPath`.** They're already paired events and shouldn't be merged with per-path bursts.
 5. **Self-echo guard is mtime-based.** `fs:writeFile` and `fs:createFile` return the file's `stat.mtimeMs` (sub-ms float) post-write. The renderer stores that exact value via `linkIndex.updateFile(path, text, mtime)`. The watcher's later flush re-stats and ships the same `stat.mtimeMs`. `evt.mtime > stored` is false → skip. Never substitute `Date.now()` for the renderer-side mtime — integer ms compared to a sub-ms float makes every save look fresh and the editor reloads mid-typing. See "Real mtimes everywhere" in the root invariants.
-6. **Seeding runs synchronously on `watchStart`.** Every `.md` under the root is stat'd + sha1'd before chokidar starts firing events. Without this, an unlink fired immediately after startup couldn't be correlated (we'd have no prior identity to match against).
+6. **Seeding runs synchronously on `watchStart`.** Every `.md` under the root is stat'd + sha1'd before `subscribe()` is awaited. Without this, an unlink fired immediately after startup couldn't be correlated (we'd have no prior identity to match against). It also feeds `correlator.isKnown` / `knownUnder`, which the dispatch relies on to classify atomic saves and expand folder deletes.
 
 ### Rename correlator (`renameCorrelator.js`)
 
@@ -82,11 +86,11 @@ The correlator buffers unlinks and pairs them with subsequent adds:
 - **Primary key: inode.** `fs.stat(p, { bigint: true }).ino` is stable across `fs.rename` on every realistic filesystem (NTFS, APFS, ext4, btrfs, xfs). The correlator stores `{path → {ino, hash}}` for every known file; on `unlink`, it buffers the identity; on `add`, it stats the new file's ino and matches against buffered unlinks.
 - **Fallback: content hash.** For filesystems where ino is unreliable (FAT, exFAT, some SMB shares), the correlator falls back to matching the SHA-1 of the file contents (computed eagerly on `onPathSeen` because the file is gone by the time `unlink` fires).
 - **Grace window.** `RENAME_GRACE_MS = 800` in `main.js`. Buffered unlinks that aren't claimed within that window are emitted as real `unlink` events.
-- **Atomic saves** (vim/VS Code write-temp-then-rename-over-existing) come through chokidar as `change` (not unlink+add), so they don't trip the correlator — see `tests/correlator.integration.test.js`.
+- **Atomic saves** (vim/VS Code write-temp-then-rename-over-existing) come through parcel as `create` of the existing destination (+ a delete of the temp). The dispatch sees the destination is already known (`correlator.isKnown`) and treats it as a modification, not a rename — see `tests/correlator.integration.test.js`.
 
 ## Settings persistence + secrets encryption
 
-`settings.json` lives at `app.getPath('userData')/settings.json`. `DEFAULT_SETTINGS` + the `Settings` type live in `src/shared/settings.ts` (single source of truth). Top-level keys: `workspaces`, `activeWorkspaceId`, `appearance` (`themeMode`, `hideLineNumbers`), `dailyNote` (`format`, `folder`), `codingAgent` (`provider`, `model`, `apiKey`, `systemPrompt`, `skills.{global,workspaces}`), `agentSecrets[]`, `transcription` (`provider`, `apiKey`), `sync` (`pat`, `pullIntervalSeconds`), `chatSidebarOpen`, `chatSidebarWidth`, `treeSortOrder`, `windowBounds`.
+`settings.json` lives at `app.getPath('userData')/settings.json`. `DEFAULT_SETTINGS` + the `Settings` type live in `src/shared/settings.ts` (single source of truth). Top-level keys: `workspaces`, `activeWorkspaceId`, `appearance` (`themeMode`, `hideLineNumbers`), `dailyNote` (`format`, `folder`), `codingAgent` (`provider`, `model`, `apiKey`, `thinkingLevel`, `builtinSkills`), `agentSecrets[]`, `transcription` (`provider`, `apiKey`), `sync` (`pat`, `pullIntervalSeconds`), `chatSidebarOpen`, `chatSidebarWidth`, `treeSortOrder`, `windowBounds`.
 
 Adding a persisted field means: extend the `Settings` type + `DEFAULT_SETTINGS` in `src/shared/settings.ts`, extend `readSettings`'s deep merge in `main.ts`, and add a slice + setter in the renderer's `useSettings` hook (which owns the canonical in-memory copy and is the only `persistSettings` caller).
 
@@ -110,7 +114,14 @@ The agent runs with the **active workspace as `cwd`**, and uses an in-memory `Au
 
 ### System prompt
 
-`agentSystemPrompt.js` exports `DEFAULT_AGENT_SYSTEM_PROMPT`, pre-filled into `codingAgent.systemPrompt` on first install and writable from Settings → Agent Chat. An empty/whitespace value falls back to the default at session boot. Pi's default coding-agent prompt is overridden via a custom `DefaultResourceLoader` with `systemPromptOverride`. The renderer fetches the current default via `agent:getDefaultSystemPrompt` for the "Reset to default" button.
+The system prompt is **assembled**, not a setting. `assembleSystemPrompt(workspacePath)` (`prompt/index.ts`) joins two parts:
+
+    <SOUL>            ← the workspace's SOUL.md (root of cwd), or DEFAULT_SOUL if absent
+    <SHOCKWAVE_HELPER> ← buildShockwaveHelper({tools}) — app mechanics + the tool list from tools.ts
+
+That combined string is passed to pi via `DefaultResourceLoader`'s `systemPromptOverride`, replacing pi's built-in coding-agent prompt. pi then appends, on its own, at session boot: discovered context files (**AGENTS.md** / **CLAUDE.md**, walked cwd→root — standard pi discovery, unfiltered), the enabled skills list, and `Current date: YYYY-MM-DD` (date only). So the final order is SOUL → helper → context files → skills → date.
+
+The assembled string is part of the session key (`makeKey`), so it's baked once per conversation and only reboots when SOUL/workspace/model changes. **SOUL.md is a normal file** the user edits in-app; there is no settings UI for it. New repos created via the sync "create new repo" flow (`sync.ts` → `scaffoldNewProject`) get a physical `SOUL.md` (from `DEFAULT_SOUL`) + an empty `AGENTS.md`; other workspaces fall back to `DEFAULT_SOUL` in-memory. The old `codingAgent.systemPrompt` setting and the `agent:getDefaultSystemPrompt` IPC were removed.
 
 ### Skills (`skillLibrary.ts`)
 
@@ -202,7 +213,7 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 | Bookmarks | `bookmarks:read`, `bookmarks:write` |
 | Theme | `theme:getInitial`; plus `theme:systemChanged` push event |
 | Voice | `voice:getToken` |
-| Agent | `agent:send`, `agent:abort`, `agent:reset`, `agent:getDefaultSystemPrompt`, `agent:listProviders`, `agent:listModels`; plus push events: `agent:event` (per pi event), `agent:error` |
+| Agent | `agent:send`, `agent:abort`, `agent:reset`, `agent:listProviders`, `agent:listModels`; plus push events: `agent:event` (per pi event), `agent:error` |
 | Skills | `skills:list`, `skills:libraryDir`, `skills:importPicker`, `skills:importFromPath`, `skills:remove` |
 | Sync | `sync:verifyPat`, `sync:checkGit`, `sync:workspaceStatus`, `sync:setupClone`, `sync:setupInitAndCreate`, `sync:setupExistingLocal`, `sync:teardown`, `sync:setWorkspaceDisabled`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`, `sync:listConflicts`, `sync:resolveConflict`, `sync:keepConflict`, `sync:resetConflict`, `sync:keepAll`, `sync:resetToRemote`; plus push events `sync:status` (carries `conflicts[]` when paused), `sync:flushRequest` |
 

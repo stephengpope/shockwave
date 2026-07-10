@@ -3,7 +3,7 @@ import type { MutableRefObject } from 'react';
 import { diffWordsWithSpace } from 'diff';
 import { useSyncRef } from './useSyncRef';
 import { rangesAddedFromDiff } from '../diffFlash.js';
-import { rewriteReferences } from '../renameOps.js';
+import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from '../renameOps.js';
 import { bookmarkKey } from './useBookmarks';
 import { isDrawing } from '../MediaView';
 import type { DrawingViewHandle } from '../DrawingView';
@@ -16,7 +16,7 @@ interface LinkIndexApi {
   getMtime: (path: string) => number | null;
   applyParsedLinks: (path: string, links: unknown, mtime: number) => void;
   updateFile: (path: string, content: string) => void;
-  linkIndexRef: { current: unknown };
+  cacheRef: { current: any };
 }
 interface EditorHandle {
   getText: () => string;
@@ -102,43 +102,43 @@ export function useFsWatcher({
         return;
       }
       if (evt.type === 'rename') {
-        // 1) Re-key the index so subsequent events for newPath are coherent.
+        const cache = li.cacheRef.current;
+        const oldBaseName = evt.oldPath.split('/').pop()!.replace(/\.md$/i, '');
+        const newBaseName = evt.newPath.split('/').pop()!.replace(/\.md$/i, '');
+        // Capture the rewrite context (sources + a name snapshot that still holds
+        // oldPath) BEFORE re-keying the cache — the rewriters resolve against the
+        // snapshot, so the order of the async rewrite vs the cache re-key is safe.
+        const ctx = captureRewriteContext(cache, evt.oldPath);
+        // 1) Re-key the cache so subsequent events for newPath are coherent.
         li.renameFile(evt.oldPath, evt.newPath);
         // 2) Refresh outgoing links if content changed during the move (rare).
         const stored = li.getMtime(evt.newPath);
         if (stored == null || evt.mtime > stored) {
           li.applyParsedLinks(evt.newPath, evt.outgoingLinks, evt.mtime);
         }
-        // 3) Update any open tabs pointing at the old path.
+        // 3) Update open tabs + the bookmark (a pure move keeps the basename).
         renameTabsPathRef.current(evt.oldPath, evt.newPath);
-        // 3b) Re-key the bookmark by basename. A pure move keeps the basename →
-        //     renameBookmarkName no-ops; only a true rename changes it.
         if (renameBookmarkNameRef.current(bookmarkKey(evt.oldPath), bookmarkKey(evt.newPath))) persistBookmarksRef.current();
-        // 4) Rewrite `[[OldName]]` references in other files. Idempotent — if
-        //    the rename was in-app, these were already rewritten and the regex
-        //    matches nothing on the watcher echo.
-        const oldBaseName = evt.oldPath.split('/').pop()!.replace(/\.md$/i, '');
-        const newBaseName = evt.newPath.split('/').pop()!.replace(/\.md$/i, '');
-        if (oldBaseName !== newBaseName) {
-          (async () => {
-            try {
-              await rewriteReferences({
-                api: window.api,
-                linkIndex: li.linkIndexRef.current,
-                oldBaseName,
-                newBaseName,
-                selfPath: evt.newPath,
+        // 4) Rewrite references. Idempotent — an in-app rename already rewrote
+        //    them, so the re-scan finds nothing resolving to oldPath on the echo.
+        (async () => {
+          try {
+            if (oldBaseName === newBaseName) {
+              await rewriteReferencesForMove({
+                api: window.api, cache, sources: ctx.sources, candidatesFor: ctx.candidatesFor,
+                workspacePath, oldPath: evt.oldPath, newPath: evt.newPath,
               });
-              // Re-read self in case self-refs were rewritten on disk.
-              try {
-                const content = await window.api.readFile(evt.newPath);
-                li.updateFile(evt.newPath, content);
-              } catch { /* file may have moved again */ }
-            } catch (err: any) {
-              showErrorRef.current(err.message ?? String(err));
+            } else {
+              await rewriteReferences({
+                api: window.api, cache, sources: ctx.sources, candidatesFor: ctx.candidatesFor,
+                workspacePath, oldPath: evt.oldPath, finalPath: evt.newPath, oldBaseName, newBaseName,
+              });
+              try { const content = await window.api.readFile(evt.newPath); li.updateFile(evt.newPath, content); } catch { /* moved again */ }
             }
-          })();
-        }
+          } catch (err: any) {
+            showErrorRef.current(err.message ?? String(err));
+          }
+        })();
         scheduleRefresh();
         return;
       }
