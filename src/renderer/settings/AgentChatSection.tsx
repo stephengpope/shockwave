@@ -15,7 +15,7 @@ const THINKING_LABELS: Record<string, string> = {
   xhigh: 'Extra high',
 };
 
-function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, onChange }) {
+function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, onChange, onKeyChange }) {
   const [showKey, setShowKey] = useState(false);
   const [providers, setProviders] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
@@ -197,7 +197,7 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
             className="settings-input"
             type={showKey ? 'text' : 'password'}
             value={apiKey}
-            onChange={(e) => onChange({ apiKey: e.target.value })}
+            onChange={(e) => onKeyChange(e.target.value)}
             spellCheck={false}
             autoComplete="off"
             autoCorrect="off"
@@ -241,19 +241,23 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
 export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const caProvider = codingAgent?.provider ?? DEFAULT_PROVIDER_SLUG;
   const caModel = codingAgent?.model ?? '';
-  const caApiKey = codingAgent?.apiKey ?? '';
+  const caProviderKeys = codingAgent?.providerKeys ?? {};
+  // The active provider's key (each provider keeps its own — switching doesn't lose it).
+  const caApiKey = caProviderKeys[caProvider] ?? '';
   const caBaseUrl = codingAgent?.baseUrl ?? '';
   const caContextWindow = codingAgent?.contextWindow;
   const caThinkingLevel = codingAgent?.thinkingLevel ?? 'medium';
   const updateCa = (patch) => onCodingAgentChange?.({
     provider: caProvider,
     model: caModel,
-    apiKey: caApiKey,
+    providerKeys: caProviderKeys,
     baseUrl: caBaseUrl,
     contextWindow: caContextWindow,
     thinkingLevel: caThinkingLevel,
     ...patch,
   });
+  // Key edits write into the active provider's slot, leaving other providers' keys intact.
+  const updateKey = (value) => updateCa({ providerKeys: { ...caProviderKeys, [caProvider]: value } });
 
   return (
     <div className="settings-section">
@@ -273,6 +277,7 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
         contextWindow={caContextWindow}
         thinkingLevel={caThinkingLevel}
         onChange={updateCa}
+        onKeyChange={updateKey}
       />
 
       <h3 className="settings-subsection-title">System Prompt</h3>

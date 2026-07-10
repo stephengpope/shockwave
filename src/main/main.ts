@@ -10,6 +10,7 @@ import { createWatcherDispatch } from './watcherDispatch.js';
 import { agentSend, agentAbort, agentReset, agentOpenSession, listThinkingLevels } from './codingAgent.js';
 import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred } from './db/index.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
+import { scaffoldNewProject } from './prompt/index.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
 import { getProviders, getModels } from '@earendil-works/pi-ai/compat';
 import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from './skillLibrary.js';
@@ -90,7 +91,7 @@ const DEFAULT_SETTINGS = {
   codingAgent: {
     provider: 'anthropic',
     model: 'claude-sonnet-4-5',
-    apiKey: '',
+    providerKeys: {},
     // OpenAI-compatible endpoint URL; only set when provider is 'openai-compatible'.
     baseUrl: '',
     // Extended-thinking level. 'medium' preserves pi's implicit default for
@@ -238,6 +239,7 @@ async function readSettings() {
       codingAgent: {
         ...DEFAULT_SETTINGS.codingAgent,
         ...(parsed.codingAgent ?? {}),
+        providerKeys: { ...(parsed.codingAgent?.providerKeys ?? {}) },
         builtinSkills: { ...(parsed.codingAgent?.builtinSkills ?? {}) },
       },
       agentSecrets: Array.isArray(parsed.agentSecrets) ? parsed.agentSecrets : [],
@@ -256,7 +258,16 @@ async function readSettings() {
     // Decrypt secret-bearing fields. Legacy plaintext values pass through
     // unchanged via decryptSecret's no-prefix branch and get re-encrypted on
     // the next write.
-    merged.codingAgent.apiKey = decryptSecret(merged.codingAgent.apiKey);
+    // Migrate the legacy single apiKey → providerKeys[provider] (one-time). The
+    // on-disk value is still enc:v1-wrapped; move as-is, then decrypt below.
+    const ca = merged.codingAgent as any;
+    if (parsed.codingAgent?.apiKey && ca.providerKeys[ca.provider] == null) {
+      ca.providerKeys[ca.provider] = parsed.codingAgent.apiKey;
+    }
+    delete ca.apiKey;
+    for (const slug of Object.keys(ca.providerKeys)) {
+      ca.providerKeys[slug] = decryptSecret(ca.providerKeys[slug]);
+    }
     merged.agentSecrets = merged.agentSecrets.map((s) => ({
       ...s,
       token: decryptSecret(s.token ?? ''),
@@ -302,7 +313,8 @@ async function doWriteSettings(patch) {
   }
   // Encrypt secret-bearing fields. encryptSecret is idempotent so values that
   // came from the on-disk file (already encrypted) pass through unchanged.
-  if ((out as any).codingAgent) (out as any).codingAgent.apiKey = encryptSecret((out as any).codingAgent.apiKey ?? '');
+  const pk = (out as any).codingAgent?.providerKeys;
+  if (pk) for (const slug of Object.keys(pk)) pk[slug] = encryptSecret(pk[slug] ?? '');
   if (Array.isArray(out.agentSecrets)) {
     out.agentSecrets = out.agentSecrets.map((s) => ({
       ...s,
@@ -452,6 +464,15 @@ ipcMain.handle('dialog:openFolder', async () => {
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
+});
+
+// Seed SOUL.md (agent identity) + an empty AGENTS.md into a workspace on
+// creation, so a new workspace has them from the start — not only when a repo
+// is created via GitHub sync. Idempotent: writes only files that don't exist,
+// best-effort (never throws).
+ipcMain.handle('workspace:scaffold', async (_evt, workspacePath) => {
+  if (typeof workspacePath !== 'string' || !workspacePath) return;
+  await scaffoldNewProject(workspacePath);
 });
 
 async function buildTree(dirPath) {
@@ -1320,7 +1341,8 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
     const settings = await readSettings();
     const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
     const workspacePath = ws?.path ?? null;
-    const { provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, builtinSkills } = settings.codingAgent ?? {};
+    const { provider, model, baseUrl, contextWindow, thinkingLevel, builtinSkills, providerKeys } = settings.codingAgent ?? {};
+    const apiKey = providerKeys?.[provider] ?? '';
     // Per-workspace built-in override lives in the workspace file; it wins over
     // the global default above.
     const wsData = workspacePath ? await readWorkspaceFileRaw(workspacePath) : null;

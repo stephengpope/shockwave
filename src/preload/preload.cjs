@@ -89,6 +89,10 @@ contextBridge.exposeInMainWorld('api', {
   /** Open a folder picker. @returns {Promise<string|null>} chosen absolute path, or null if cancelled. */
   openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
 
+  /** Seed SOUL.md + empty AGENTS.md into a new workspace (idempotent, best-effort).
+   *  @param {string} workspacePath @returns {Promise<void>} */
+  scaffoldWorkspace: (workspacePath) => ipcRenderer.invoke('workspace:scaffold', workspacePath),
+
   // ---- Filesystem reads ---------------------------------------------------
 
   /** @param {string} dirPath @returns {Promise<TreeNode[]>} Top-level tree under dirPath (folders A→Z then files). */

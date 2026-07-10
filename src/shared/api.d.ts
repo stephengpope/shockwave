@@ -141,6 +141,7 @@ export interface ChatSearchHit {
 export interface ShockwaveApi {
   // Dialogs
   openFolder(): Promise<string | null>;
+  scaffoldWorkspace(workspacePath: string): Promise<void>;
 
   // Filesystem reads
   readTree(dirPath: string): Promise<TreeNode[]>;

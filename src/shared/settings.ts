@@ -32,7 +32,11 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
 export interface CodingAgentSettings {
   provider: string;
   model: string;
-  apiKey: string;
+  // Per-provider API keys, keyed by provider slug, each encrypted at rest
+  // (enc:v1). Replaces the former single `apiKey` so switching providers keeps
+  // each key. openai-compatible's key lives here too (under 'openai-compatible');
+  // its baseUrl/contextWindow stay in the active fields below.
+  providerKeys: Record<string, string>;
   // OpenAI-compatible endpoint URL (Ollama, LM Studio, vLLM, remote gateways).
   // Empty for built-in providers; set only when provider === 'openai-compatible'.
   baseUrl: string;

@@ -662,6 +662,11 @@ export default function App() {
       return;
     }
     const ws = { id: genWorkspaceId(), name: basenameOf(folder), path: folder };
+    // Seed SOUL.md + empty AGENTS.md so a brand-new workspace has them from the
+    // start (not only when a repo is created via GitHub sync). Idempotent — an
+    // existing folder's files are preserved. Before loadWorkspace so the tree +
+    // watcher pick them up on first render.
+    await window.api.scaffoldWorkspace(folder);
     const next = [...workspaces, ws];
     setWorkspaces(next);
     setActiveWorkspaceId(ws.id);
