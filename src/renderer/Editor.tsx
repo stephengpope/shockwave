@@ -64,7 +64,7 @@ function computeStats(state) {
  *   clear()                        — empties the doc, resets cursor
  */
 const Editor = forwardRef<any, any>(function Editor(
-  { onLinkClick, onChange, getCacheRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, dark, viewMode, hideLineNumbers },
+  { onLinkClick, onChange, getCacheRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, dark, viewMode, isMarkdown, hideLineNumbers },
   ref,
 ) {
   const hostRef = useRef<any>(null);
@@ -72,6 +72,8 @@ const Editor = forwardRef<any, any>(function Editor(
   const readOnlyCompartmentRef = useRef<any>(null);
   const livePreviewCompartmentRef = useRef<any>(null);
   const livePreviewExtensionsRef = useRef<any>(null);
+  const languageCompartmentRef = useRef<any>(null);
+  const markdownExtensionRef = useRef<any>(null);
   const linkClickRef = useRef(onLinkClick);
   const changeRef = useRef(onChange);
   const requestUrlRef = useRef(onRequestUrl);
@@ -90,16 +92,23 @@ const Editor = forwardRef<any, any>(function Editor(
   useEffect(() => { statsRef.current = onStats; }, [onStats]);
   useEffect(() => { historyRef.current = onHistory; }, [onHistory]);
 
-  // Toggle the live-preview decoration bundle without rebuilding the editor.
-  // Cursor, history, scroll all survive a reconfigure.
+  // Toggle the live-preview decoration bundle and the markdown grammar without
+  // rebuilding the editor. Cursor, history, scroll all survive a reconfigure.
+  // Non-markdown files get no grammar (plain text) and never show live preview.
   useEffect(() => {
     const view = viewRef.current;
     const cmp = livePreviewCompartmentRef.current;
     const live = livePreviewExtensionsRef.current;
-    if (!view || !cmp || !live) return;
-    const next = viewMode === VIEW_MODES.RAW ? [] : live;
-    view.dispatch({ effects: cmp.reconfigure(next) });
-  }, [viewMode]);
+    const langCmp = languageCompartmentRef.current;
+    if (!view || !cmp || !live || !langCmp) return;
+    const nextLive = (viewMode === VIEW_MODES.RAW || !isMarkdown) ? [] : live;
+    view.dispatch({
+      effects: [
+        cmp.reconfigure(nextLive),
+        langCmp.reconfigure(isMarkdown ? markdownExtensionRef.current : []),
+      ],
+    });
+  }, [viewMode, isMarkdown]);
 
   // "Hide line numbers" doesn't actually remove the gutter — we keep its
   // reserved width so the text column doesn't shift left. The class on the
@@ -323,6 +332,13 @@ const Editor = forwardRef<any, any>(function Editor(
     const livePreviewCompartment = new Compartment();
     livePreviewCompartmentRef.current = livePreviewCompartment;
 
+    // Markdown grammar lives in its own compartment so non-markdown files can
+    // drop it entirely (plain text — no markdown-flavored coloring of code).
+    const languageCompartment = new Compartment();
+    languageCompartmentRef.current = languageCompartment;
+    const markdownExtension = markdown({ addKeymap: false, extensions: [{ remove: ['SetextHeading'] }] });
+    markdownExtensionRef.current = markdownExtension;
+
     // Decorations that turn the editor into a live preview. Toggling them off
     // (raw mode) shows the underlying markdown syntax. `markdown()` syntax
     // highlighting stays on either way so headings/code keep their colors.
@@ -347,7 +363,7 @@ const Editor = forwardRef<any, any>(function Editor(
     ];
     livePreviewExtensionsRef.current = livePreviewExtensions;
 
-    const initialLive = viewMode === VIEW_MODES.RAW ? [] : livePreviewExtensions;
+    const initialLive = (viewMode === VIEW_MODES.RAW || !isMarkdown) ? [] : livePreviewExtensions;
 
     const extensions = [
       readOnlyCompartment.of(EditorState.readOnly.of(false)),
@@ -357,7 +373,7 @@ const Editor = forwardRef<any, any>(function Editor(
       history(),
       indentOnInput(),
       indentGuides,
-      markdown({ addKeymap: false, extensions: [{ remove: ['SetextHeading'] }] }),
+      languageCompartment.of(isMarkdown ? markdownExtension : []),
       syntaxHighlighting(defaultHighlightStyle),
       livePreviewCompartment.of(initialLive),
       imagePaste({
@@ -443,6 +459,8 @@ const Editor = forwardRef<any, any>(function Editor(
       readOnlyCompartmentRef.current = null;
       livePreviewCompartmentRef.current = null;
       livePreviewExtensionsRef.current = null;
+      languageCompartmentRef.current = null;
+      markdownExtensionRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dark]);

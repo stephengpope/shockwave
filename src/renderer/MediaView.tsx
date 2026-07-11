@@ -39,6 +39,16 @@ export function isTextFile(path: string | null): boolean {
   return !!path && TEXT_RE.test(path) && mediaKind(path) === null && !isDrawing(path);
 }
 
+// The markdown family. Live-preview decorations (heading styles, hidden syntax
+// markers, wiki-links, task checkboxes, image widgets…) are markdown-specific,
+// so they only apply to these; other text/code files always show raw source.
+const MARKDOWN_RE = /\.(md|markdown|mdx)$/i;
+
+/** True for `.md`/`.markdown`/`.mdx` — the only files that get live preview. */
+export function isMarkdown(path: string | null): boolean {
+  return !!path && MARKDOWN_RE.test(path);
+}
+
 // View-only preview for image/video files. Resolves the workspace-relative
 // path through the existing `app://media/<rel>` protocol (served by main from
 // the workspace root), so no new plumbing — the same channel image embeds use.

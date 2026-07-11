@@ -107,19 +107,23 @@ function SyncStatusIcon({ syncStatus, onOpenConflicts, onEnableSync }) {
  *
  * Props:
  *   backlinkCount   number
+ *   showBacklinks   boolean — false for non-markdown files (can't have backlinks)
  *   words           number
  *   chars           number
  *   viewMode        'live' | 'raw'
  *   onToggleViewMode()
+ *   showViewToggle  boolean — false for non-markdown files (always raw)
  *   saveState       'saved' | 'unsaved'
  *   canUndo / canRedo / onUndo / onRedo  — edit-history controls
  */
 export default function EditorStatusBar({
   backlinkCount,
+  showBacklinks,
   words,
   chars,
   viewMode,
   onToggleViewMode,
+  showViewToggle,
   saveState,
   canUndo,
   canRedo,
@@ -158,20 +162,24 @@ export default function EditorStatusBar({
         <RotateCwIcon size={12} />
       </button>
 
-      <button
-        type="button"
-        className="status-toggle"
-        onClick={onToggleViewMode}
-        title={toggleTitle}
-        aria-label={toggleLabel}
-        aria-pressed={isLive}
-      >
-        {isLive ? <PencilIcon size={12} /> : <CodeIcon size={12} />}
-      </button>
+      {showViewToggle && (
+        <button
+          type="button"
+          className="status-toggle"
+          onClick={onToggleViewMode}
+          title={toggleTitle}
+          aria-label={toggleLabel}
+          aria-pressed={isLive}
+        >
+          {isLive ? <PencilIcon size={12} /> : <CodeIcon size={12} />}
+        </button>
+      )}
 
-      <span className="status-item status-backlinks">
-        {formatNum(backlinkCount)} {backlinkCount === 1 ? 'backlink' : 'backlinks'}
-      </span>
+      {showBacklinks && (
+        <span className="status-item status-backlinks">
+          {formatNum(backlinkCount)} {backlinkCount === 1 ? 'backlink' : 'backlinks'}
+        </span>
+      )}
 
       <span className="status-item">{formatNum(words)} words</span>
       <span className="status-item">{formatNum(chars)} characters</span>

@@ -3,7 +3,7 @@ import FileTree from './FileTree.jsx';
 import Editor from './Editor.jsx';
 import BacklinksPanel from './BacklinksPanel.jsx';
 import GraphView from './GraphView.jsx';
-import MediaView, { mediaKind, isOpenable, isDrawing } from './MediaView';
+import MediaView, { mediaKind, isOpenable, isDrawing, isMarkdown } from './MediaView';
 import DrawingView from './DrawingView';
 import type { DrawingViewHandle } from './DrawingView';
 import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from './renameOps.js';
@@ -496,6 +496,9 @@ export default function App() {
   const activeMediaKind = activeIsDraft ? null : mediaKind(activeFile);
   // `.excalidraw` active file → render the editable DrawingView instead.
   const activeDrawing = !activeIsDraft && isDrawing(activeFile);
+  // Markdown (or a draft — drafts save as .md) → markdown grammar + live
+  // preview. Any other text/code file gets no grammar and always shows raw.
+  const activeIsMarkdown = activeIsDraft || isMarkdown(activeFile);
   // Live drawing canvas (for watcher reload) + per-path mtime store guarding
   // the drawing self-echo (drawings aren't in the link index — see useFsWatcher).
   const drawingViewRef = useRef<DrawingViewHandle | null>(null);
@@ -1683,6 +1686,7 @@ export default function App() {
                   onHistory={setEditorHistory}
                   dark={isDark}
                   viewMode={viewMode}
+                  isMarkdown={activeIsMarkdown}
                   hideLineNumbers={hideLineNumbers}
                 />
               </div>
@@ -1700,7 +1704,7 @@ export default function App() {
                   onSendToAgent={onSendDrawingToAgent}
                 />
               )}
-              {activeTab && activeDrawing ? null : activeTab ? (
+              {activeTab && (activeDrawing || !activeIsMarkdown) ? null : activeTab ? (
                 <BacklinksPanel
                   groups={activeBacklinks}
                   vaultPath={workspacePath}
@@ -1718,10 +1722,12 @@ export default function App() {
             {activeTab && (
               <EditorStatusBar
                 backlinkCount={activeBacklinks.length}
+                showBacklinks={activeIsMarkdown}
                 words={(activeMediaKind || activeDrawing) ? 0 : editorStats.words}
                 chars={(activeMediaKind || activeDrawing) ? 0 : editorStats.chars}
                 viewMode={viewMode}
                 onToggleViewMode={onToggleViewMode}
+                showViewToggle={activeIsMarkdown}
                 saveState={saveState}
                 canUndo={editorHistory.canUndo}
                 canRedo={editorHistory.canRedo}
