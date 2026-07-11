@@ -358,7 +358,7 @@ html, body, #root {
   display: inline-block;
   width: 1ch;
   /* Wider bullet→text gap (polish spec §5) — deliberate breathing room. */
-  margin-right: 4px;
+  margin-right: 8px;
   text-align: center;
   color: var(--bullet);
   font-weight: bold;
