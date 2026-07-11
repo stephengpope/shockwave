@@ -29,6 +29,9 @@ interface UseFsWatcherOpts {
   workspacePath: string | null;
   linkIndex: LinkIndexApi;
   refreshTree: () => unknown;
+  // Patch a single tree node's mtime in place on a content change, so mtime-
+  // based sort re-orders without a full tree re-stat.
+  patchNodeMtime: (path: string, mtime: number) => void;
   renameTabsPath: (oldPath: string, newPath: string) => void;
   showError: (msg: string) => void;
   activeFile: string | null;
@@ -54,6 +57,7 @@ export function useFsWatcher({
   workspacePath,
   linkIndex,
   refreshTree,
+  patchNodeMtime,
   renameTabsPath,
   showError,
   activeFile,
@@ -67,6 +71,7 @@ export function useFsWatcher({
 }: UseFsWatcherOpts) {
   const linkIndexRefForWatcher = useSyncRef(linkIndex);
   const refreshTreeRef = useSyncRef(refreshTree);
+  const patchNodeMtimeRef = useSyncRef(patchNodeMtime);
   const renameTabsPathRef = useSyncRef(renameTabsPath);
   const showErrorRef = useSyncRef(showError);
   // Read activeFile via ref so the subscription doesn't re-tear on tab switch.
@@ -163,6 +168,11 @@ export function useFsWatcher({
             } catch { /* file may have been deleted or moved */ }
           })();
         }
+        // A content change doesn't alter tree structure, but it does change the
+        // file's mtime — patch the node in place so mtime-based sort (and the
+        // daily-notes panel) re-order without a full re-stat. In-app saves
+        // self-echo here with the new mtime.
+        if (evt.type === 'change') patchNodeMtimeRef.current(evt.path, evt.mtime);
         if (evt.type === 'add') scheduleRefresh();
         return;
       }
@@ -198,6 +208,10 @@ export function useFsWatcher({
           }
         })();
       }
+      // Content change → patch the node's mtime in place (no full re-stat) so
+      // mtime-based sort and the daily-notes panel re-order. In-app saves
+      // self-echo here with the new mtime.
+      if (evt.type === 'change') patchNodeMtimeRef.current(evt.path, evt.mtime);
       if (evt.type === 'add') scheduleRefresh();
     });
     return () => {

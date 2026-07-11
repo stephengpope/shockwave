@@ -16,6 +16,7 @@ export const SETTINGS_SECTIONS = Object.freeze({
   SYNC: 'sync',
   TRANSCRIPTION: 'transcription',
   UPDATES: 'updates',
+  ADVANCED: 'advanced',
   // Workspace group — Workspaces list + per-(active-)workspace config.
   WORKSPACES: 'workspaces',
   DAILY_NOTE: 'daily-note',

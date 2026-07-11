@@ -99,6 +99,9 @@ contextBridge.exposeInMainWorld('api', {
   readTree: (dirPath) => ipcRenderer.invoke('fs:readTree', dirPath),
   /** @param {string} dirPath @returns {Promise<ParsedFile[]>} Every .md under dirPath with parsed links + mtime. */
   readAllMarkdown: (dirPath) => ipcRenderer.invoke('fs:readAllMarkdown', dirPath),
+  /** Discard the persisted parse cache so the next readAllMarkdown re-parses every file from scratch.
+   * @param {string} dirPath @returns {Promise<{ ok: boolean }>} */
+  rebuildLinkCache: (dirPath) => ipcRenderer.invoke('fs:rebuildLinkCache', dirPath),
   /** @param {string} filePath @returns {Promise<string>} UTF-8 contents. Throws on missing/EACCES. */
   readFile: (filePath) => ipcRenderer.invoke('fs:readFile', filePath),
   /** @param {string} p @returns {Promise<boolean>} True if the path exists. */

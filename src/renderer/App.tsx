@@ -77,6 +77,28 @@ function flattenAll(nodes, out: any[] = []) {
   return out;
 }
 
+// Return a new tree with the mtime of the node at `path` replaced. Structure-
+// preserving: only the nodes on the path from root to the target are cloned, so
+// React re-renders the sorted lists that read mtime without a full rebuild.
+// Returns the original array unchanged if the path isn't found (no re-render).
+function patchTreeMtime(nodes: any[], path: string, mtime: number): any[] {
+  let hit = false;
+  const walk = (list: any[]): any[] => {
+    let dirty = false;
+    const next = list.map((n) => {
+      if (n.id === path) { hit = true; dirty = true; return { ...n, mtime }; }
+      if (n.children) {
+        const kids = walk(n.children);
+        if (kids !== n.children) { dirty = true; return { ...n, children: kids }; }
+      }
+      return n;
+    });
+    return dirty ? next : list;
+  };
+  const out = walk(nodes);
+  return hit ? out : nodes;
+}
+
 // Build a nested folder/file tree for the conflict view straight from the git
 // conflict list (workspace-absolute paths) — NOT from the file tree, which
 // excludes hidden files. So conflicts in `.obsidian/…` etc. still show up.
@@ -336,7 +358,10 @@ export default function App() {
   // the panel is actually shown (bookmark mode + Appearance toggle on). Matches
   // every `.md` under the configured daily-note folder whose path (relative to
   // that folder, minus `.md`) strict-parses against the daily-note format.
-  // Sorted by the active tree sort order, same as the bookmarks list above it.
+  // Sorted by the active tree sort order, same as the bookmarks list above it,
+  // then capped to the 10 most recent so the panel stays a short quick-access
+  // list rather than a full journal dump.
+  const DAILY_NOTES_LIMIT = 10;
   const dailyNoteFiles = useMemo(() => {
     if (!bookmarkFilterActive || !dailyNotesInBookmarks || !workspacePath) return [];
     const cleanFolder = (dailyNote.folder ?? '').replace(/^\/+|\/+$/g, '');
@@ -347,7 +372,7 @@ export default function App() {
       const relNoExt = n.id.slice(prefix.length).replace(/\.md$/i, '');
       if (parseDailyNoteDate(relNoExt, dailyNote.format)) out.push(n);
     }
-    return sortTreeNodes(out, treeSortOrder);
+    return sortTreeNodes(out, treeSortOrder).slice(0, DAILY_NOTES_LIMIT);
   }, [bookmarkFilterActive, dailyNotesInBookmarks, workspacePath, tree, dailyNote.format, dailyNote.folder, treeSortOrder]);
 
   // Template files (direct `.md` children of the configured templates folder),
@@ -408,6 +433,12 @@ export default function App() {
   // Returns the absolute path that was saved (the new path for a draft, or the
   // existing path for a real file), or null if nothing was dirty / save failed.
   // (writeNowRef declared after the useCallback below.)
+  // Patch one node's mtime in place (content edit → no structural change, so no
+  // full re-stat). Keeps mtime-based sort and the daily-notes panel live.
+  // Called from the fs watcher on `change` events (in-app saves self-echo there).
+  const patchNodeMtime = useCallback((path: string, mtime: number) => {
+    setTree((prev) => patchTreeMtime(prev, path, mtime));
+  }, []);
   const writeNow = useCallback(async () => {
     const tabId = dirtyTabIdRef.current;
     if (!tabId) return null;
@@ -638,6 +669,19 @@ export default function App() {
       intervalSeconds: syncRef.current?.pullIntervalSeconds,
     }).catch(() => {});
   }, [writeNow, resetTabs, linkIndex, loadWorkspaceData]);
+
+  // Settings → Advanced → "Rebuild link cache". Discards the persisted parse
+  // cache for the active workspace and re-parses every .md from scratch, then
+  // rebuilds the in-memory link index. Recovery path for a drifted index.
+  const rebuildLinkCache = useCallback(async () => {
+    const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+    if (!ws) return { ok: false };
+    await writeNow();
+    await window.api.rebuildLinkCache(ws.path);
+    const files = await window.api.readAllMarkdown(ws.path);
+    linkIndex.rebuild(files);
+    return { ok: true, count: files.length };
+  }, [workspaces, activeWorkspaceId, writeNow, linkIndex]);
 
   const switchWorkspace = useCallback(async (id) => {
     const ws = workspaces.find((w) => w.id === id);
@@ -1203,6 +1247,7 @@ export default function App() {
     workspacePath,
     linkIndex,
     refreshTree,
+    patchNodeMtime,
     renameTabsPath,
     showError,
     activeFile,
@@ -1919,6 +1964,7 @@ export default function App() {
           sync={sync}
           onSyncChange={onSyncChange}
           onSyncDisabledChange={onSyncDisabledChange}
+          onRebuildCache={rebuildLinkCache}
           appUpdate={appUpdate}
           saveStatus={saveStatus}
         />

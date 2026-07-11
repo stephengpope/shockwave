@@ -12,6 +12,7 @@ import TemplatesSection from './settings/TemplatesSection.jsx';
 import TranscriptionSection from './settings/TranscriptionSection.jsx';
 import SyncSection from './settings/SyncSection.jsx';
 import UpdatesSection from './settings/UpdatesSection.jsx';
+import AdvancedSection from './settings/AdvancedSection.jsx';
 
 // Sidebar layout: section headers group related items. Header rows are
 // non-interactive labels; item rows are the actual nav buttons. To add a new
@@ -29,6 +30,7 @@ function buildNav(workspaceLabel) {
     { kind: 'item', id: SETTINGS_SECTIONS.SYNC, label: 'GitHub Sync' },
     { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
     { kind: 'item', id: SETTINGS_SECTIONS.UPDATES, label: 'Updates' },
+    { kind: 'item', id: SETTINGS_SECTIONS.ADVANCED, label: 'Advanced' },
     { kind: 'header', label: workspaceLabel },
     { kind: 'item', id: SETTINGS_SECTIONS.DAILY_NOTE, label: 'Daily Notes' },
     { kind: 'item', id: SETTINGS_SECTIONS.TEMPLATES, label: 'Templates' },
@@ -85,6 +87,7 @@ export default function SettingsModal({
   sync,
   onSyncChange,
   onSyncDisabledChange,
+  onRebuildCache,
   appUpdate,
   saveStatus,
 }) {
@@ -213,6 +216,12 @@ export default function SettingsModal({
           )}
           {active === SETTINGS_SECTIONS.UPDATES && (
             <UpdatesSection appUpdate={appUpdate} />
+          )}
+          {active === SETTINGS_SECTIONS.ADVANCED && (
+            <AdvancedSection
+              hasWorkspace={!!workspacePath}
+              onRebuildCache={onRebuildCache}
+            />
           )}
           {active === SETTINGS_SECTIONS.AGENT_LLM && (
             <AgentChatSection

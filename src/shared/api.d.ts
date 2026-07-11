@@ -146,6 +146,8 @@ export interface ShockwaveApi {
   // Filesystem reads
   readTree(dirPath: string): Promise<TreeNode[]>;
   readAllMarkdown(dirPath: string): Promise<ParsedFile[]>;
+  /** Discard the persisted parse cache; the next readAllMarkdown re-parses every file. */
+  rebuildLinkCache(dirPath: string): Promise<{ ok: boolean }>;
   readFile(filePath: string): Promise<string>;
   pathExists(p: string): Promise<boolean>;
 
