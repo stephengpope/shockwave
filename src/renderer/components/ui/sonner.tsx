@@ -24,12 +24,33 @@ const Toaster = ({ ...props }: ToasterProps) => {
       }}
       style={
         {
+          // One popup language: popover surface + hairline border for every
+          // toast; only the icon carries the severity color (app tokens).
           "--normal-bg": "var(--popover)",
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
+          "--success-bg": "var(--popover)",
+          "--success-text": "var(--popover-foreground)",
+          "--success-border": "var(--border)",
+          "--error-bg": "var(--popover)",
+          "--error-text": "var(--popover-foreground)",
+          "--error-border": "var(--border)",
+          "--warning-bg": "var(--popover)",
+          "--warning-text": "var(--popover-foreground)",
+          "--warning-border": "var(--border)",
           "--border-radius": "var(--radius)",
         } as React.CSSProperties
       }
+      toastOptions={{
+        style: { fontSize: "13px", fontFamily: "Inter, sans-serif" },
+        classNames: {
+          // Severity lives in the icon color only ([data-type] sits on the
+          // toast <li>, the icon div is a descendant).
+          icon: "[[data-type=success]_&]:text-success [[data-type=error]_&]:text-destructive [[data-type=warning]_&]:text-amber-500",
+          description: "!text-muted-foreground",
+          actionButton: "!bg-primary !text-primary-foreground",
+        },
+      }}
       {...props}
     />
   )

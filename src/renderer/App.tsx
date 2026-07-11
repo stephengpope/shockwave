@@ -37,6 +37,7 @@ import { useSendToAgent } from './hooks/useSendToAgent';
 import { useFsWatcher } from './hooks/useFsWatcher';
 import { useSettings } from './hooks/useSettings';
 import { useAppUpdate } from './hooks/useAppUpdate';
+import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { Button } from '@/components/ui/button';
 
@@ -314,6 +315,37 @@ export default function App() {
       window.api.sync.engineStop().catch(() => {});
     };
   }, []);
+
+  // Toasts for background sync transitions — the status-bar icon is easy to
+  // miss when you're writing. Only TRANSITIONS toast (never the initial
+  // status), and user-initiated states (unconfigured, manual "Sync is turned
+  // off") stay silent. Inline surfaces (conflict view, status popover) remain
+  // the detailed UI; these are just the tap on the shoulder.
+  const prevSyncStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevSyncStatusRef.current;
+    const cur = syncStatus?.status;
+    prevSyncStatusRef.current = cur;
+    if (!prev || prev === cur) return;
+    if (cur === 'offline') {
+      toast.warning("Sync can't reach GitHub", { description: 'Retrying in the background.', id: 'sync-offline' });
+    } else if (prev === 'offline' && (cur === 'idle' || cur === 'syncing')) {
+      toast.success('Back online', { description: 'Workspace synced.', id: 'sync-offline' });
+    } else if (cur === 'paused' && (syncStatus?.conflicts?.length ?? 0) > 0) {
+      const n = syncStatus.conflicts.length;
+      toast.warning(`${n} sync conflict${n === 1 ? '' : 's'}`, {
+        id: 'sync-conflicts',
+        description: 'Local and GitHub versions differ.',
+        action: {
+          label: 'Review',
+          onClick: () => { onBookmarkFilterActiveChange(false); setConflictFilterActive(true); },
+        },
+      });
+    } else if (cur === 'disabled' && syncStatus?.detail && syncStatus.detail !== 'Sync is turned off') {
+      toast.error('Sync stopped', { description: syncStatus.detail, id: 'sync-disabled' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncStatus]);
 
   // ---- effective theme ----
   const effectiveTheme = useMemo(() => {
@@ -1489,6 +1521,27 @@ export default function App() {
       return next;
     });
   }, [persistChatSidebar]);
+  const toggleChatSidebarRef = useSyncRef(toggleChatSidebar);
+
+  // Agent finished (or failed) while the chat sidebar is collapsed → the user
+  // has zero signal otherwise (collapsing unmounts ChatSidebar and its
+  // listeners; the pi session keeps running in main). Mount-once listener,
+  // refs only — same discipline as the fs:changed subscription.
+  useEffect(() => {
+    const offEvent = window.api.agent.onEvent((evt: any) => {
+      if (evt?.type !== 'agent_end' || chatSidebarOpenRef.current) return;
+      toast.success('Agent finished', {
+        description: 'The chat has the full reply.',
+        action: { label: 'Open chat', onClick: () => { if (!chatSidebarOpenRef.current) toggleChatSidebarRef.current(); } },
+      });
+    });
+    const offError = window.api.agent.onError(({ message }: any) => {
+      if (chatSidebarOpenRef.current) return; // sidebar shows its own inline banner
+      toast.error('Agent error', { description: message });
+    });
+    return () => { offEvent?.(); offError?.(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Build the framing snippet that gets dropped into the chat composer when
   // the user picks "Send to Agent" from the editor context menu. Path is

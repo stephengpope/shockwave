@@ -14,7 +14,16 @@ export function useAppUpdate() {
   useEffect(() => {
     let alive = true;
     window.api.app.getUpdateStatus().then((s) => { if (alive && s) setStatus(s); }).catch(() => {});
-    const off = window.api.app.onUpdateStatus((s) => setStatus(s));
+    const off = window.api.app.onUpdateStatus((s) => {
+      setStatus(s);
+      // PLACEHOLDER — when auto-download ships (electron-updater), toast here
+      // on the downloaded event:
+      //   toast.success('Update downloaded', {
+      //     description: `v${s.latest} installs on restart.`,
+      //     action: { label: 'Restart now', onClick: () => window.api.app.restartToUpdate() },
+      //   });
+      // Today updates are notify-only (the pill opens the release page).
+    });
     return () => { alive = false; off(); };
   }, []);
 
