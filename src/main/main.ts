@@ -305,11 +305,16 @@ async function doWriteSettings(patch) {
     // No file yet — first write creates it.
   }
   const out = { ...existing, ...patch };
-  // Defensive deep-merge for codingAgent: a renderer caller that builds a
-  // partial sub-object (e.g. forgetting apiKey) would otherwise wipe sibling
-  // fields on disk via the shallow spread above.
-  if (patch.codingAgent && (existing as any).codingAgent) {
-    (out as any).codingAgent = { ...(existing as any).codingAgent, ...patch.codingAgent };
+  // Defensive one-level deep-merge for every nested-object setting: a caller
+  // that builds a partial sub-object (e.g. { sync: { pat } }) would otherwise
+  // wipe sibling fields on disk via the shallow spread above. The renderer
+  // currently always sends whole sub-objects, but this removes that as a
+  // load-bearing convention. Scalars/arrays (workspaces, windowBounds, etc.)
+  // stay shallow — a partial array patch is meaningless.
+  for (const key of ['appearance', 'codingAgent', 'transcription', 'sync'] as const) {
+    if ((patch as any)[key] && (existing as any)[key]) {
+      (out as any)[key] = { ...(existing as any)[key], ...(patch as any)[key] };
+    }
   }
   // Encrypt secret-bearing fields. encryptSecret is idempotent so values that
   // came from the on-disk file (already encrypted) pass through unchanged.
@@ -411,6 +416,11 @@ async function createWindow() {
     ...DEFAULT_WINDOW_SIZE,
     title: APP_NAME,
     icon: ICON_PATH,
+    // macOS: deliver the click that reactivates a background window straight to
+    // the web content, so clicking a file in the sidebar when the app isn't
+    // frontmost opens it in one click instead of two (first to activate, second
+    // to act). No-op on Windows/Linux.
+    acceptsFirstMouse: true,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'index.cjs'),
       contextIsolation: true,
