@@ -22,37 +22,39 @@
      the gutter's right edge (66); text starts 6px later, at 72. */
   --text-col-left: 72px;
 
+  /* Polish-spec palette (docs/: Shockwave Polish change notes §9).
+     Legacy token names kept while components migrate to app.css/Tailwind. */
   --bg-app: #ffffff;
-  --bg-sidebar: #f5f5f7;
-  --bg-thin: #ebebef;
-  --bg-code: #f1f1f4;
+  --bg-sidebar: #f5f4f1;
+  --bg-thin: #eeede9;
+  --bg-code: #f1f0ec;
   --bg-tab-active: #ffffff;
   --bg-tab-hover: rgba(0, 0, 0, 0.03);
-  --bg-hover: rgba(0, 0, 0, 0.04);
-  --bg-active-line: rgba(0, 0, 0, 0.02);
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-active-line: #fafaf7;
   --bg-popover: #ffffff;
   --bg-input: #ffffff;
   --bg-error: #ffe1e1;
   --bg-backlinks: transparent;
-  --bg-row-selected: #d8d8df;
+  --bg-row-selected: rgba(0, 0, 0, 0.055);
 
-  --fg-primary: #1d1d1f;
-  --fg-secondary: #6e6e73;
-  --fg-muted: #8e8e93;
+  --fg-primary: #1b1b19;
+  --fg-secondary: #6e6e68;
+  --fg-muted: #9a9a93;
   --fg-error: #8a1a1a;
-  --fg-accent: #5e5ce6;
-  --fg-on-active-row: #1d1d1f;
+  --fg-accent: #5b57d8;
+  --fg-on-active-row: #2c2a5a;
 
-  --border: #d2d2d7;
-  --border-strong: #c7c7cc;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
   --border-error: #f5c2c2;
 
-  --accent: #5e5ce6;
-  --accent-soft: rgba(94, 92, 230, 0.1);
-  --accent-bg-soft: rgba(94, 92, 230, 0.04);
+  --accent: #5b57d8;
+  --accent-soft: #ecebfb;
+  --accent-bg-soft: rgba(91, 87, 216, 0.05);
 
-  --indent-line: #e0e0e0;
-  --indent-line-active: #c0c0c0;
+  --indent-line: #e4e3df;
+  --indent-line-active: #c6c5c0;
 
   --shadow-popover: 0 4px 16px rgba(0, 0, 0, 0.12);
 
@@ -63,42 +65,42 @@
   --ai-done-bg-end: rgba(198, 235, 209, 0);
 
   /* Graph view colors. */
-  --graph-node: #5e5ce6;
+  --graph-node: #5b57d8;
   --graph-link: rgba(0, 0, 0, 0.2);
 }
 
 [data-theme="dark"] {
-  --bg-app: #1e1e1e;
-  --bg-sidebar: #262626;
-  --bg-thin: #1c1c1c;
-  --bg-code: #2a2a2a;
-  --bg-tab-active: #1e1e1e;
+  --bg-app: #1a1a1c;
+  --bg-sidebar: #1e1e20;
+  --bg-thin: #202022;
+  --bg-code: rgba(255, 255, 255, 0.08);
+  --bg-tab-active: #1a1a1c;
   --bg-tab-hover: rgba(255, 255, 255, 0.04);
-  --bg-hover: rgba(255, 255, 255, 0.05);
-  --bg-active-line: rgba(255, 255, 255, 0.025);
-  --bg-popover: #2a2a2a;
-  --bg-input: #2a2a2a;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active-line: rgba(255, 255, 255, 0.03);
+  --bg-popover: #242427;
+  --bg-input: #242427;
   --bg-error: #4a1f1f;
   --bg-backlinks: transparent;
-  --bg-row-selected: #3a3a40;
+  --bg-row-selected: rgba(255, 255, 255, 0.07);
 
-  --fg-primary: #e8e8ea;
-  --fg-secondary: #a0a0a5;
-  --fg-muted: #6e6e73;
+  --fg-primary: #ecebe7;
+  --fg-secondary: #a2a29b;
+  --fg-muted: #6c6c66;
   --fg-error: #ff9a9a;
-  --fg-accent: #9d9bf0;
-  --fg-on-active-row: #e8e8ea;
+  --fg-accent: #7d79e8;
+  --fg-on-active-row: #ecebe7;
 
-  --border: #3a3a3a;
-  --border-strong: #4a4a4a;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.14);
   --border-error: #6a3030;
 
-  --accent: #9d9bf0;
-  --accent-soft: rgba(157, 155, 240, 0.18);
-  --accent-bg-soft: rgba(157, 155, 240, 0.08);
+  --accent: #7d79e8;
+  --accent-soft: rgba(125, 121, 232, 0.16);
+  --accent-bg-soft: rgba(125, 121, 232, 0.08);
 
-  --indent-line: #3a3a3a;
-  --indent-line-active: #5a5a5a;
+  --indent-line: #333336;
+  --indent-line-active: #4c4c50;
 
   /* Muted amber + green so the streaming highlight sits comfortably on dark bg. */
   --ai-stream-bg: #4a4015;
@@ -106,7 +108,7 @@
   --ai-done-bg-peak: #2f5a3f;
   --ai-done-bg-end: rgba(47, 90, 63, 0);
 
-  --graph-node: #9d9bf0;
+  --graph-node: #7d79e8;
   --graph-link: rgba(255, 255, 255, 0.25);
 }
 

@@ -1,5 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'node:path';
 import fs from 'node:fs';
 
@@ -51,6 +52,9 @@ export default defineConfig({
     // blanks the renderer while the build stays green. With it, conversions need
     // no importer changes and can't break dev.
     resolve: {
+      alias: {
+        '@': resolve(root, 'src/renderer'),
+      },
       extensionAlias: {
         '.js': ['.ts', '.tsx', '.js', '.jsx'],
         '.jsx': ['.tsx', '.jsx'],

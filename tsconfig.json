@@ -23,7 +23,9 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
-    "verbatimModuleSyntax": false
+    "verbatimModuleSyntax": false,
+    // "@/..." resolves inside the renderer only — used by shadcn/ui components.
+    "paths": { "@/*": ["./src/renderer/*"] }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.d.ts"],
   "exclude": ["node_modules", "out", "dist"]

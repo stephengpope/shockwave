@@ -1,0 +1,177 @@
+/* Tailwind v4 + design-token foundation (polish spec §9).
+   Processed by @tailwindcss/vite via the import in main.tsx.
+   styles.css (legacy, linked from index.html) is unlayered so it wins over
+   Tailwind's layers wherever both target the same element — migrated
+   components drop their styles.css classes as they convert. */
+
+@import 'tailwindcss';
+
+/* Dark mode follows the app's existing <html data-theme="dark"> toggle. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/jetbrains-mono-v24-latin-regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./assets/fonts/jetbrains-mono-v24-latin-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/instrument-sans-v4-latin-regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./assets/fonts/instrument-sans-v4-latin-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./assets/fonts/instrument-sans-v4-latin-600.woff2') format('woff2');
+}
+
+:root {
+  /* shadcn semantic tokens ← polish spec light column */
+  --background: #ffffff;
+  --foreground: #1b1b19;
+  --card: #ffffff;
+  --card-foreground: #1b1b19;
+  --popover: #ffffff;
+  --popover-foreground: #1b1b19;
+  --primary: #5b57d8;
+  --primary-foreground: #ffffff;
+  --primary-hover: #4a46c4;
+  --secondary: #f7f7f4;
+  --secondary-foreground: #1b1b19;
+  --muted: #f7f7f4;
+  --muted-foreground: #6e6e68;
+  /* NOTE: named --hover (not --accent) to avoid clobbering styles.css's legacy
+     --accent (indigo) during migration; Tailwind still exposes it as bg-accent
+     via the @theme mapping below. */
+  --hover: rgba(0, 0, 0, 0.05); /* hover/focus fill for rows & menu items */
+  --hover-foreground: #1b1b19;
+  --destructive: #b3352c;
+  --destructive-foreground: #ffffff;
+  --border: rgba(0, 0, 0, 0.08);
+  --input: rgba(0, 0, 0, 0.14);
+  --ring: rgba(224, 150, 54, 0.9); /* keyboard-focus amber, per spec */
+  --radius: 0.5rem;
+
+  /* App-specific tokens (no shadcn analog) */
+  --selected: #ecebfb; /* accent-soft: selected/active row fill */
+  --selected-foreground: #2c2a5a;
+  --sidebar: #f5f4f1;
+  --chrome: #eeede9;
+  --chat: #fbfbf9;
+  --raise: #f7f7f4;
+  --text-muted-2: #9a9a93; /* section headers, line numbers, timestamps */
+  --success: #2e7d46;
+  --success-soft: #eaf6ee;
+  --bullet: #8b88e0;
+  --folder: #b4bdd0;
+  --code-chip: #f1f0ec;
+  --active-line: #fafaf7;
+  --shadow-raise: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+[data-theme='dark'] {
+  --background: #1a1a1c;
+  --foreground: #ecebe7;
+  --card: #1a1a1c;
+  --card-foreground: #ecebe7;
+  --popover: #242427;
+  --popover-foreground: #ecebe7;
+  --primary: #7d79e8;
+  --primary-foreground: #ffffff;
+  --primary-hover: #6f6bdf;
+  --secondary: #242427;
+  --secondary-foreground: #ecebe7;
+  --muted: #242427;
+  --muted-foreground: #a2a29b;
+  --hover: rgba(255, 255, 255, 0.055);
+  --hover-foreground: #ecebe7;
+  --destructive: #e5645a;
+  --destructive-foreground: #ffffff;
+  --border: rgba(255, 255, 255, 0.09);
+  --input: rgba(255, 255, 255, 0.14);
+  --ring: rgba(240, 182, 92, 0.95);
+
+  --selected: rgba(125, 121, 232, 0.16);
+  --selected-foreground: #ecebe7;
+  --sidebar: #1e1e20;
+  --chrome: #202022;
+  --chat: #1c1c1e;
+  --raise: #242427;
+  --text-muted-2: #6c6c66;
+  --success: #5fd08a;
+  --success-soft: rgba(95, 208, 138, 0.14);
+  --bullet: #9e9bec;
+  --folder: #7f88a3;
+  --code-chip: rgba(255, 255, 255, 0.08);
+  /* Dark swaps the drop-shadow lift for a hairline border (spec §9). */
+  --shadow-raise: 0 0 0 1px rgba(255, 255, 255, 0.09);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--hover);
+  --color-accent-foreground: var(--hover-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-selected: var(--selected);
+  --color-selected-foreground: var(--selected-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chrome: var(--chrome);
+  --color-chat: var(--chat);
+  --color-raise: var(--raise);
+  --color-muted-2: var(--text-muted-2);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-bullet: var(--bullet);
+  --color-folder: var(--folder);
+  --color-code-chip: var(--code-chip);
+  --color-active-line: var(--active-line);
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-chat: 'Instrument Sans', 'Inter', sans-serif;
+
+  --radius-sm: calc(var(--radius) - 2px); /* 6px — rows/chips */
+  --radius-md: var(--radius); /* 8px — buttons */
+  --radius-lg: calc(var(--radius) + 1px); /* 9px — inputs/send */
+  --radius-xl: calc(var(--radius) + 6px); /* 14px — composer */
+  --radius-2xl: calc(var(--radius) + 8px); /* 16px — bubbles */
+
+  --shadow-raise: var(--shadow-raise);
+}

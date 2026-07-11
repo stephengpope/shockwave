@@ -1,5 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import './app.css';
 import App from './App.jsx';
 
 // NOTE: window.EXCALIDRAW_ASSET_PATH is set by an inline <script> in index.html,
