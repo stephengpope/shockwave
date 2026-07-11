@@ -27,7 +27,7 @@ export default function DailyNoteSection({
   onDailyNoteChange,
   tree,
   workspacePath,
-  templateOptions = [],
+  templateOptions = [] as Array<{ name: string; value: string }>,
 }) {
   const format = dailyNote?.format || DEFAULT_DAILY_NOTE_FORMAT;
   const folder = dailyNote?.folder ?? '';

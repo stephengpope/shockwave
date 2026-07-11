@@ -43,8 +43,8 @@ const ChatWorkspaceContext = createContext<string | null>(null);
 //
 // Exported as a module-level constant so the prop reference is stable and
 // MessageRow's memo isn't invalidated.
-const MARKDOWN_COMPONENTS = {
-  a: ({ href, children, ...rest }) => (
+function MarkdownLink({ href, children, ...rest }: any) {
+  return (
     <a
       {...rest}
       href={href}
@@ -57,13 +57,21 @@ const MARKDOWN_COMPONENTS = {
     >
       {children}
     </a>
-  ),
-  img: ({ src, alt, ...rest }) => {
-    const ws = useContext(ChatWorkspaceContext);
-    const resolved = typeof src === 'string' ? resolveImageUrl(src, ws, ws) : null;
-    if (!resolved) return <>{alt || ''}</>;
-    return <img {...rest} src={resolved} alt={alt || ''} loading="lazy" />;
-  },
+  );
+}
+
+// Proper component (not an inline arrow in the map) so the useContext call
+// satisfies the rules-of-hooks.
+function MarkdownImg({ src, alt, ...rest }: any) {
+  const ws = useContext(ChatWorkspaceContext);
+  const resolved = typeof src === 'string' ? resolveImageUrl(src, ws, ws) : null;
+  if (!resolved) return <>{alt || ''}</>;
+  return <img {...rest} src={resolved} alt={alt || ''} loading="lazy" />;
+}
+
+const MARKDOWN_COMPONENTS = {
+  a: MarkdownLink,
+  img: MarkdownImg,
 };
 
 // Build a short, human-readable summary line for a tool call.

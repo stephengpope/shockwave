@@ -23,7 +23,7 @@ export default function ThinSidebar({
   onJournalContextMenu,
   onToggleGraph,
   graphMode,
-  templates = [],
+  templates = [] as Array<{ name: string; path: string }>,
   onPickTemplate,
   disabled,
 }) {

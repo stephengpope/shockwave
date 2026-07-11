@@ -853,7 +853,7 @@ function legacyBookmarksPath(workspacePath) {
 function workspaceDefaults() {
   return {
     schemaVersion: 1,
-    bookmarks: [],
+    bookmarks: [] as string[],
     dailyNote: { format: 'YYYY-MM-DD', folder: '', templatePath: '' },
     templates: { folder: '' },
     // Built-in skill folderName → 'enabled' | 'disabled'. Absent ⇒ enabled.
