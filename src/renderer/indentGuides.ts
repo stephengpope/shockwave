@@ -49,22 +49,30 @@ function tabStopPx(view: EditorView, sp: number) {
   return ts.includes('px') ? n : n * sp; // unitless = number of space-widths
 }
 
+// Extra advance per indent character on LIST lines — bulletPoints.ts marks
+// their leading whitespace with .cm-list-indent, whose letter-spacing widens
+// each space. Same source of truth: the --list-indent-extra var in app.css.
+function listIndentExtra(view: EditorView) {
+  const v = parseFloat(getComputedStyle(view.contentDOM).getPropertyValue('--list-indent-extra'));
+  return Number.isFinite(v) ? v : 0;
+}
+
 // Pixel x (from content start) of each indent-unit boundary in a line's leading
 // whitespace, including column 0. A guide for a level is drawn at the LEFT edge
 // of that level's unit (the boundary one step shallower than the content), so it
 // sits a full indent-step left of the text rather than hugging it. Returns
 // [{ col, px }] starting at { 0, 0 }. A tab snaps px to the next tab stop.
-function guideBoundaries(ws: string, sp: number, tabPx: number) {
+function guideBoundaries(ws: string, sp: number, tabPx: number, extra = 0) {
   const out: { col: number; px: number }[] = [{ col: 0, px: 0 }];
   let col = 0;
   let px = 0;
   for (const ch of ws) {
     if (ch === '\t') {
       col += 4 - (col % 4);
-      px = (Math.floor(px / tabPx) + 1) * tabPx;
+      px = (Math.floor(px / tabPx) + 1) * tabPx + extra;
     } else {
       col += 1;
-      px += sp;
+      px += sp + extra;
     }
     if (col % INDENT_UNIT === 0) out.push({ col, px });
   }
@@ -107,6 +115,7 @@ function buildDecorations(view: EditorView) {
   const sp = spaceWidth(view);
   if (!sp) return builder.finish();
   const tabPx = tabStopPx(view, sp);
+  const listExtra = listIndentExtra(view);
   const inView = (from: number) => ranges.some((r) => from >= r.from && from <= r.to);
 
   const firstVisible = doc.lineAt(ranges[0].from).number;
@@ -141,7 +150,8 @@ function buildDecorations(view: EditorView) {
       // A guide sits at the left edge of each level's unit — keep boundaries
       // strictly shallower than the content/cap so the deepest guide is one
       // step left of the text.
-      const positions = guideBoundaries(ws, sp, tabPx)
+      // List lines carry the .cm-list-indent widening; plain indented text doesn't.
+      const positions = guideBoundaries(ws, sp, tabPx, m ? listExtra : 0)
         .filter((b) => b.col < cap)
         .map((b) => b.px);
       if (positions.length) builder.add(line.from, line.from, guideDeco(positions));

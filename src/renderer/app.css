@@ -364,6 +364,15 @@ html, body, #root {
   font-weight: bold;
 }
 
+/* List-indent widening (polish spec §5: ~20px step per nesting level).
+   bulletPoints.ts marks each list line's leading whitespace with this class;
+   letter-spacing widens each indent space (≈4.4px at 16px Inter) to ≈10px, so
+   a 2-space nesting level renders ≈20px. Files keep standard 2-space nesting.
+   indentGuides.ts reads the SAME variable to keep the guide lines aligned —
+   change the value only here. */
+.cm-content { --list-indent-extra: 5.6px; }
+.cm-list-indent { letter-spacing: var(--list-indent-extra); }
+
 /* Indent guides (indentGuides.ts). The guide lines themselves are stacked 1px
    background gradients set as an inline style on each `.cm-iguide` line, placed
    at measured pixel offsets. Here we only darken them on the active line to

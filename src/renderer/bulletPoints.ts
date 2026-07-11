@@ -12,6 +12,13 @@ import { RangeSetBuilder } from '@codemirror/state';
 // — otherwise the same blank bullet flips between `•` and a raw `-`.
 const LIST_RE = /^(\s*)([-*+])(\s+|$)(?!\[[ xX]\])/;
 
+// Any indented list line (bullets, tasks, numbered). Its leading whitespace is
+// wrapped in a `.cm-list-indent` mark so CSS letter-spacing can widen each
+// indent space to a ~20px step per 2-space nesting level (polish spec §5) —
+// the FILE keeps standard 2-space nesting; only the rendering widens. A mark
+// (not a replace) keeps cursor movement and editing over the spaces natural.
+const INDENTED_LIST_RE = /^(\s+)(?:[-*+]|\d{1,9}[.)])(\s+|$)/;
+
 class BulletWidget extends WidgetType {
   eq() { return true; }
 
@@ -31,6 +38,16 @@ function buildDecorations(view) {
     let pos = from;
     while (pos <= to) {
       const line = view.state.doc.lineAt(pos);
+      // Indent widening applies to every indented list line — including task
+      // items, so `- [ ]` rows line up with regular bullets at the same depth.
+      const indent = line.text.match(INDENTED_LIST_RE);
+      if (indent) {
+        builder.add(
+          line.from,
+          line.from + indent[1].length,
+          Decoration.mark({ class: 'cm-list-indent' }),
+        );
+      }
       const match = line.text.match(LIST_RE);
       if (match) {
         const markerStart = line.from + match[1].length;
