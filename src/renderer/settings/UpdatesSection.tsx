@@ -22,6 +22,8 @@ export default function UpdatesSection({ appUpdate }) {
   let result: string | null = null;
   if (checking) {
     result = 'Checking…';
+  } else if (status?.downloaded) {
+    result = `Version ${status.latest} is downloaded and installs on restart.`;
   } else if (status?.updateAvailable) {
     result = `Version ${status.latest} is available.`;
   } else if (checkedOnce && status?.error) {
@@ -39,14 +41,20 @@ export default function UpdatesSection({ appUpdate }) {
         Current version: {current ? `v${current}` : '—'}
       </div>
 
-      <Button size="sm" className="w-fit" onClick={onCheck} disabled={checking}>
-        Check for updates
-      </Button>
+      {status?.downloaded ? (
+        <Button size="sm" className="w-fit" onClick={() => window.api.app.restartToUpdate()}>
+          Restart to update
+        </Button>
+      ) : (
+        <Button size="sm" className="w-fit" onClick={onCheck} disabled={checking}>
+          Check for updates
+        </Button>
+      )}
 
       {result && (
         <p className={cn('text-xs', status?.updateAvailable ? 'text-primary' : 'text-muted-foreground')}>
           {result}{' '}
-          {status?.updateAvailable && status.url && (
+          {status?.updateAvailable && !status?.downloaded && status.url && (
             <a
               href="#"
               className="underline underline-offset-4"

@@ -355,13 +355,16 @@ contextBridge.exposeInMainWorld('api', {
 
   // ---- App / updates ------------------------------------------------------
   //
-  // v1 update check is notify-only: main polls GitHub releases and pushes an
-  // `app:updateStatus`; the renderer surfaces a pill that links to the release.
+  // Packaged builds auto-download via electron-updater (status pushes carry
+  // `downloaded: true` once ready; restartToUpdate installs + relaunches).
+  // Dev builds fall back to the notify-only GitHub poll.
 
   app: {
     /** Force an update check now (Settings → Updates). Resolves with the freshest status.
-     *  @returns {Promise<{ updateAvailable: boolean, latest: string|null, current: string, url: string|null, error: string|null }>} */
+     *  @returns {Promise<{ updateAvailable: boolean, latest: string|null, current: string, url: string|null, error: string|null, downloaded: boolean }>} */
     checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates'),
+    /** Install the downloaded update and relaunch (no-op unless a download finished). */
+    restartToUpdate: () => ipcRenderer.invoke('app:restartToUpdate'),
     /** Last computed update status, or null until the first check completes. */
     getUpdateStatus: () => ipcRenderer.invoke('app:getUpdateStatus'),
     /** Subscribe to background update-status pushes (launch check + daily poll).

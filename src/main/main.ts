@@ -1,4 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, protocol, net, safeStorage, screen } from 'electron';
+// CJS package with lazy getter exports — named ESM imports fail at runtime
+// (cjs-module-lexer can't see them); destructure off the default instead.
+import electronUpdater from 'electron-updater';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import fs from 'node:fs/promises';
@@ -1073,12 +1076,17 @@ ipcMain.handle('voice:getToken', async () => {
 
 // ---- App update check ------------------------------------------------------
 //
-// v1: poll GitHub's "latest release" and compare its tag against the running
-// app.getVersion(). Notify-only — we surface an "Update available" pill that
-// links to the release page; there is no auto-download/install. The repo
-// coordinates mirror package.json's `build.publish` block. Unauthenticated
-// GitHub API allows ~60 req/hr — a daily poll plus the odd manual check is
-// nowhere near that.
+// Packaged builds use electron-updater (feed baked in from package.json's
+// `build.publish` GitHub block): check → auto-download → push status with
+// `downloaded: true`; install happens via app:restartToUpdate (quitAndInstall)
+// or on normal quit (autoInstallOnAppQuit). macOS requires the signed +
+// notarized build — electron-updater refuses unsigned apps there.
+//
+// Dev (unpackaged) has no app-update.yml, so we keep the old notify-only
+// GitHub API poll: same UpdateStatus shape, `downloaded` just never flips
+// true. Unauthenticated GitHub API allows ~60 req/hr — a daily poll plus the
+// odd manual check is nowhere near that.
+const { autoUpdater } = electronUpdater;
 const UPDATE_REPO = { owner: 'stephengpope', repo: 'shockwave' };
 const UPDATE_POLL_MS = 24 * 60 * 60 * 1000; // daily auto-check
 
@@ -1103,8 +1111,51 @@ function compareVersions(a: string, b: string): number {
 // check already ran (so the pill hydrates without waiting for the next poll).
 let lastUpdateResult: any = null;
 
+function pushUpdateStatus(status: any) {
+  lastUpdateResult = status;
+  for (const w of BrowserWindow.getAllWindows()) {
+    w.webContents.send('app:updateStatus', lastUpdateResult);
+  }
+}
+
+function releasePageUrl(version: string | null) {
+  const tail = version ? `tag/v${version}` : 'latest';
+  return `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/${tail}`;
+}
+
+if (app.isPackaged) {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  const current = app.getVersion();
+  autoUpdater.on('update-available', (info) => pushUpdateStatus({
+    updateAvailable: true, latest: info.version, current,
+    url: releasePageUrl(info.version), error: null, downloaded: false,
+  }));
+  autoUpdater.on('update-not-available', (info) => pushUpdateStatus({
+    updateAvailable: false, latest: info?.version ?? null, current,
+    url: releasePageUrl(info?.version ?? null), error: null, downloaded: false,
+  }));
+  autoUpdater.on('update-downloaded', (info) => pushUpdateStatus({
+    updateAvailable: true, latest: info.version, current,
+    url: releasePageUrl(info.version), error: null, downloaded: true,
+  }));
+  autoUpdater.on('error', (err) => {
+    console.warn('[update] electron-updater error:', err.message);
+    pushUpdateStatus({
+      updateAvailable: false, latest: null, current,
+      url: null, error: err.message || 'update failed', downloaded: false,
+    });
+  });
+}
+
 async function runUpdateCheck() {
   const current = app.getVersion();
+  if (app.isPackaged) {
+    // Events above push status as the check/download progresses; the resolved
+    // value is just the freshest snapshot for the invoking caller.
+    try { await autoUpdater.checkForUpdates(); } catch { /* 'error' event already pushed */ }
+    return lastUpdateResult;
+  }
   try {
     const res = await fetch(
       `https://api.github.com/repos/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest`,
@@ -1115,16 +1166,13 @@ async function runUpdateCheck() {
     const latest = String(data.tag_name || '').replace(/^v/i, '');
     const url = data.html_url
       || `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest`;
-    lastUpdateResult = {
+    pushUpdateStatus({
       updateAvailable: latest ? compareVersions(latest, current) > 0 : false,
-      latest, current, url, error: null,
-    };
+      latest, current, url, error: null, downloaded: false,
+    });
   } catch (err: any) {
     console.warn('[update] check failed:', err.message);
-    lastUpdateResult = { updateAvailable: false, latest: null, current, url: null, error: err.message || 'check failed' };
-  }
-  for (const w of BrowserWindow.getAllWindows()) {
-    w.webContents.send('app:updateStatus', lastUpdateResult);
+    pushUpdateStatus({ updateAvailable: false, latest: null, current, url: null, error: err.message || 'check failed', downloaded: false });
   }
   return lastUpdateResult;
 }
@@ -1133,6 +1181,11 @@ async function runUpdateCheck() {
 ipcMain.handle('app:checkForUpdates', async () => runUpdateCheck());
 // Cached status for a freshly-mounted renderer (null until the first check).
 ipcMain.handle('app:getUpdateStatus', async () => lastUpdateResult);
+// Install the downloaded update and relaunch. Goes through app.quit(), so the
+// before-quit/will-quit drains (agent, sync, settings queue) still run.
+ipcMain.handle('app:restartToUpdate', () => {
+  if (app.isPackaged && lastUpdateResult?.downloaded) autoUpdater.quitAndInstall();
+});
 
 // ---- GitHub sync ----
 //

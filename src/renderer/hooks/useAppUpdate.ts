@@ -1,28 +1,34 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { toast } from 'sonner';
 import type { UpdateStatus } from '../../shared/api';
 
 // Holds the app-update status used by the always-visible "Update available" pill
 // (editor pane, top-right) and the Settings → Updates manual-check button.
 //
 // Seeded from main's cached result on mount, refreshed by the background push
-// (launch check + daily poll), and re-checkable on demand. Notify-only — the
-// only action is opening the release page (window.api.openExternal).
+// (launch check + daily poll), and re-checkable on demand. Packaged builds
+// auto-download via electron-updater — once a status arrives with
+// `downloaded: true` we toast a "Restart now" action; dev builds are
+// notify-only (the pill opens the release page).
 export function useAppUpdate() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [checking, setChecking] = useState(false);
+  const toastedVersionRef = useRef<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     window.api.app.getUpdateStatus().then((s) => { if (alive && s) setStatus(s); }).catch(() => {});
     const off = window.api.app.onUpdateStatus((s) => {
       setStatus(s);
-      // PLACEHOLDER — when auto-download ships (electron-updater), toast here
-      // on the downloaded event:
-      //   toast.success('Update downloaded', {
-      //     description: `v${s.latest} installs on restart.`,
-      //     action: { label: 'Restart now', onClick: () => window.api.app.restartToUpdate() },
-      //   });
-      // Today updates are notify-only (the pill opens the release page).
+      // Repeated pushes for the same downloaded version (daily re-poll,
+      // manual checks) must not stack toasts.
+      if (s.downloaded && s.latest && toastedVersionRef.current !== s.latest) {
+        toastedVersionRef.current = s.latest;
+        toast.success('Update downloaded', {
+          description: `v${s.latest} installs on restart.`,
+          action: { label: 'Restart now', onClick: () => window.api.app.restartToUpdate() },
+        });
+      }
     });
     return () => { alive = false; off(); };
   }, []);

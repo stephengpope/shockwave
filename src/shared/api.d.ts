@@ -89,6 +89,9 @@ export interface UpdateStatus {
   url: string | null;
   /** Error message when the check failed (offline, rate-limited, …), else null. */
   error: string | null;
+  /** True once electron-updater has the update downloaded and ready to install
+   *  on restart. Always false in dev (notify-only fallback). */
+  downloaded: boolean;
 }
 
 export interface SyncStatus {
@@ -248,6 +251,7 @@ export interface ShockwaveApi {
     checkForUpdates(): Promise<UpdateStatus>;
     getUpdateStatus(): Promise<UpdateStatus | null>;
     onUpdateStatus(cb: (status: UpdateStatus) => void): Unsubscribe;
+    restartToUpdate(): Promise<void>;
   };
 
   sync: {
