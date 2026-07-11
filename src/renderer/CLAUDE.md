@@ -182,7 +182,7 @@ Three modes (`light` / `dark` / `system`) stored in settings; system mode listen
 
 The palette is the "polish spec": warm neutrals, one indigo accent (#5B57D8 light / #7D79E8 dark) used only for active/primary, amber keyboard-focus ring, JetBrains Mono for code/paths/line numbers, Instrument Sans (`font-chat`) for chat-panel message text only. All three fonts are self-hosted in `assets/fonts/` — never load fonts from the network.
 
-`styles.css` (loaded via `index.html`, unlayered so it wins over Tailwind's layers) is the LEGACY stylesheet — what remains is app-shell layout (`.app` grid, sidebar/resize handles, chat strip), CodeMirror widget styling (`.cm-*`), `.chat-markdown` typography, graph, and day-picker overrides. Don't add new component classes there; write Tailwind classes in the component instead.
+`app.css` is the app's ONLY stylesheet (`styles.css` is gone). Its bottom section is a clearly-banner-marked **unlayered legacy block** — CodeMirror widget styling (`.cm-*`), `.chat-markdown` typography, the Excalidraw sizing rule, `.image-drag-ghost`, the legacy `--bg-*`/`--fg-*` tokens those rules use — kept unlayered because CodeMirror injects its own runtime styles and ours must keep beating Tailwind's layers. Never add component classes there; style components with Tailwind utilities inline. Also beware: react-arborist rows receive an inline `paddingLeft` (the nesting indent) that beats any class padding — see FileTree's Node.
 
 ## Reusable UI primitives
 

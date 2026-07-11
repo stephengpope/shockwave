@@ -102,5 +102,5 @@ export default function GraphView({ tree, resolvedLinks, linkIndexVersion, onOpe
     }
   }, [dark]);
 
-  return <div ref={hostRef} className="graph-host" />;
+  return <div ref={hostRef} className="min-h-0 flex-1 bg-background" />;
 }

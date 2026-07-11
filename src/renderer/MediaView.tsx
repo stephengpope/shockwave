@@ -59,15 +59,18 @@ export default function MediaView({ path, workspacePath, kind }: {
 }) {
   const rel = toRelPath(path, workspacePath);
   if (!rel) {
-    return <div className="media-view media-view-empty">Can't preview this file — it's outside the workspace.</div>;
+    return <div className="p-6 text-[13px] text-muted-2">Can't preview this file — it's outside the workspace.</div>;
   }
   // Encode each segment so spaces / unicode survive the URL round-trip.
   const src = 'app://media/' + rel.split('/').map(encodeURIComponent).join('/');
+  // Media aligns to the same left edge (--text-col-left) as the markdown title
+  // + text column, mirrored on the right, so it sits where an .md file would.
+  const mediaEl = 'max-h-[80vh] max-w-full rounded-md bg-accent object-contain';
   return (
-    <div className="media-view">
+    <div className="flex items-start justify-start px-(--text-col-left) pb-6 pt-4">
       {kind === 'video'
-        ? <video className="media-view-el" src={src} controls />
-        : <img className="media-view-el" src={src} alt={rel} />}
+        ? <video className={mediaEl} src={src} controls />
+        : <img className={mediaEl} src={src} alt={rel} />}
     </div>
   );
 }

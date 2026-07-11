@@ -142,10 +142,12 @@ const DrawingView = forwardRef<DrawingViewHandle, {
     onSendToAgent(selected);
   }, [onSendToAgent]);
 
-  if (!initialData) return <div className="media-view media-view-empty">Loading drawing…</div>;
+  if (!initialData) return <div className="p-6 text-[13px] text-muted-2">Loading drawing…</div>;
 
   return (
-    <div className="drawing-view" onPointerDownCapture={markInteracted} onKeyDownCapture={markInteracted}>
+    // drawing-view-host: the `.excalidraw` descendant sizing rule lives in
+    // app.css (Excalidraw needs a definitely-sized parent or it collapses).
+    <div className="drawing-view-host relative flex min-h-0 flex-1" onPointerDownCapture={markInteracted} onKeyDownCapture={markInteracted}>
       <Excalidraw
         excalidrawAPI={(api) => { apiRef.current = api; }}
         initialData={initialData}
@@ -154,7 +156,10 @@ const DrawingView = forwardRef<DrawingViewHandle, {
       />
       {onSendToAgent && (
         <button
-          className="drawing-agent-btn"
+          // Overlays the canvas bottom-right, just left of Excalidraw's 36px
+          // help "?" button (no slot exposed there): bottom 18px centers our
+          // 32px button on its center; right 62px clears its ~52px footprint.
+          className="absolute bottom-[18px] right-[62px] z-[5] inline-flex h-8 items-center rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground shadow-md hover:bg-primary-hover"
           onClick={sendToAgent}
           title="Message the agent about this drawing (includes the file and any selected elements)"
         >

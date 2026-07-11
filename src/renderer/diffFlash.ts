@@ -17,7 +17,7 @@ interface FlashRange { from: number; to: number; }
 const setRanges = StateEffect.define<FlashRange[]>();
 const clearRanges = StateEffect.define<null>();
 
-// Must match the .cm-ai-stream-done animation duration in styles.css.
+// Must match the .cm-ai-stream-done animation duration in app.css.
 const DONE_ANIM_MS = 1000;
 
 const flashField = StateField.define<FlashRange[]>({

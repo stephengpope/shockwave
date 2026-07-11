@@ -18,7 +18,7 @@ export default function DailyNotesPanel({ items, activePath, onOpen }: DailyNote
   if (items.length === 0) return null;
   return (
     <div>
-      <div className="sidebar-list-header">Daily Notes</div>
+      <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Daily Notes</div>
       {items.map((it) => (
         <div
           key={it.id}

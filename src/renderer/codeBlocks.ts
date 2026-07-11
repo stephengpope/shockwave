@@ -11,7 +11,7 @@
 // Two separate plugins so their RangeSetBuilders never mix decoration kinds:
 //   - codeMarks: inline mark + cursor-aware marker hiding (all inline ranges)
 //   - codeBlockLines: full-width line backgrounds (line decorations only)
-// Styling lives in styles.css (.cm-inline-code / .cm-code-block*) so dark mode
+// Styling lives in app.css (.cm-inline-code / .cm-code-block*) so dark mode
 // rides the existing --bg-code theme token — no per-theme HighlightStyle.
 
 import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';

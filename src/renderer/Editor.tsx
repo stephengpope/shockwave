@@ -137,7 +137,7 @@ const Editor = forwardRef<any, any>(function Editor(
   // "Hide line numbers" doesn't actually remove the gutter — we keep its
   // reserved width so the text column doesn't shift left. The class on the
   // host element drives CSS that makes the digits + active-line highlight
-  // invisible. See styles.css `.editor-host-no-line-numbers`.
+  // invisible. See app.css `.editor-host-no-line-numbers`.
 
   const handleContextMenu = async (e) => {
     e.preventDefault();
@@ -502,7 +502,7 @@ const Editor = forwardRef<any, any>(function Editor(
   return (
     <div
       ref={hostRef}
-      className={`editor-host ${hideLineNumbers ? 'editor-host-no-line-numbers' : ''}`}
+      className={`shrink-0 ${hideLineNumbers ? 'editor-host-no-line-numbers' : ''}`}
       onContextMenu={handleContextMenu}
     />
   );

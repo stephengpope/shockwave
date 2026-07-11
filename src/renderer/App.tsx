@@ -1530,7 +1530,7 @@ export default function App() {
   return (
     <>
     <div
-      className="app"
+      className="app grid h-screen grid-cols-[48px_var(--sidebar-width,260px)_minmax(0,1fr)_var(--chat-col-width,28px)]"
       style={{
         '--sidebar-width': `${sidebarWidth}px`,
         '--chat-col-width': chatSidebarOpen ? `${chatSidebarWidth}px` : '28px',
@@ -1569,7 +1569,7 @@ export default function App() {
         }}
       />
 
-      <aside className="sidebar">
+      <aside className="relative flex min-h-0 flex-col border-r border-border bg-sidebar">
         <SortBar
           value={treeSortOrder}
           onChange={onTreeSortOrderChange}
@@ -1589,9 +1589,10 @@ export default function App() {
           onConflictCloudMenu={onConflictCloudMenu}
           disabled={!workspacePath}
         />
-        <div className="tree-wrap">
+        {/* Horizontal inset so row fills don't touch the sidebar edges (spec §4). */}
+        <div className="tree-wrap min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1">
           {bookmarkFilterActive && sortedTree.length > 0 && (
-            <div className="sidebar-list-header">Bookmarks</div>
+            <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Bookmarks</div>
           )}
           {sortedTree.length > 0 ? (
             <FileTree
@@ -1614,7 +1615,7 @@ export default function App() {
             />
           ) : (
             <div
-              className="empty"
+              className="py-1.5 pl-10 pr-3 text-[13px] text-muted-2"
               onContextMenu={(e) => {
                 if (!workspacePath || conflictFilterActive) return;
                 e.preventDefault();
@@ -1649,12 +1650,12 @@ export default function App() {
           onOpenSettings={() => openSettings()}
         />
         <div
-          className="sidebar-resize-handle"
+          className="absolute inset-y-0 -right-[3px] z-10 w-1.5 cursor-col-resize"
           onMouseDown={onSidebarResizeStart}
         />
       </aside>
 
-      <main className="editor-pane">
+      <main className="editor-pane relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background">
         {(() => {
           const u = appUpdate.status;
           if (!u?.updateAvailable || !u.url) return null;
@@ -1683,7 +1684,9 @@ export default function App() {
             onAdd={addDraftTab}
           />
         )}
-        {errorMessage && <div className="app-error">{errorMessage}</div>}
+        {errorMessage && (
+          <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-3.5 py-1.5 text-xs text-destructive">{errorMessage}</div>
+        )}
 
         {graphMode ? (
           <GraphView
@@ -1698,11 +1701,11 @@ export default function App() {
           />
         ) : workspacePath ? (
           <>
-            <div className={activeDrawing ? 'editor-scroll editor-scroll-fill' : 'editor-scroll'}>
+            <div className={`flex min-h-0 flex-1 flex-col ${activeDrawing ? 'overflow-hidden' : 'overflow-y-auto'}`}>
               {/* Drawings render full-bleed: no title bar or backlinks (the
                   link index is .md-only). The Editor stays mounted but hidden so
                   switching back to a text tab doesn't rebuild it. */}
-              <div className={(activeTab && !activeDrawing) ? '' : 'editor-zone-hidden'}>
+              <div className={(activeTab && !activeDrawing) ? '' : 'hidden'}>
                 <EditorNav
                   onBack={onBack}
                   onForward={onForward}
@@ -1716,12 +1719,12 @@ export default function App() {
                   conflict={!!titleConflict}
                 />
                 {titleConflict && (
-                  <ErrorMessage className="error-message-title">
+                  <ErrorMessage className="-mt-1.5 mb-4 ml-(--text-col-left) max-w-md">
                     There's already a file with the same name
                   </ErrorMessage>
                 )}
               </div>
-              <div className={activeTab ? '' : 'editor-zone-hidden'} style={(activeMediaKind || activeDrawing) ? { display: 'none' } : undefined}>
+              <div className={activeTab ? '' : 'hidden'} style={(activeMediaKind || activeDrawing) ? { display: 'none' } : undefined}>
                 <Editor
                   ref={editorRef}
                   onLinkClick={fileOps.onLinkClick}
@@ -1763,11 +1766,11 @@ export default function App() {
                   onOpen={openInActiveTab}
                 />
               ) : (
-                <div className="no-tab-cta">
-                  <button className="create-file-btn" onClick={onNewFile}>
+                <div className="flex flex-1 flex-col items-center justify-center gap-3 px-3.5 py-12 text-muted-foreground">
+                  <Button size="lg" onClick={onNewFile}>
                     + Create new file
-                  </button>
-                  <div className="no-tab-hint">or pick a file from the sidebar</div>
+                  </Button>
+                  <div className="text-xs text-muted-2">or pick a file from the sidebar</div>
                 </div>
               )}
             </div>
@@ -1796,16 +1799,16 @@ export default function App() {
             )}
           </>
         ) : (
-          <div className="empty centered">
+          <div className="flex flex-1 items-center justify-center text-[13px] text-muted-2">
             {bootDone ? `Welcome to ${APP_NAME}. Add a workspace from the gear icon to get started.` : ''}
           </div>
         )}
       </main>
 
       {chatSidebarOpen ? (
-        <aside className="chat-sidebar-wrap" key={workspacePath ?? 'no-workspace'}>
+        <aside className="relative flex min-h-0 min-w-0 flex-col" key={workspacePath ?? 'no-workspace'}>
           <div
-            className="chat-sidebar-resize-handle"
+            className="absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize"
             onMouseDown={onChatSidebarResizeStart}
           />
           <ChatSidebar ref={setChatSidebarRef} onClose={toggleChatSidebar} workspacePath={workspacePath} />
@@ -1813,13 +1816,13 @@ export default function App() {
       ) : (
         <button
           type="button"
-          className="chat-sidebar-strip"
+          className="group flex cursor-pointer flex-col items-center justify-center gap-2 border-l border-border bg-chrome py-2.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           onClick={toggleChatSidebar}
           title="Open coding agent"
           aria-label="Open coding agent"
         >
           <svg
-            className="chat-sidebar-strip-icon"
+            className="shrink-0 select-none opacity-70 group-hover:opacity-100"
             xmlns="http://www.w3.org/2000/svg"
             viewBox="0 0 24 24"
             width={16}
@@ -1838,7 +1841,7 @@ export default function App() {
             <path d="M15 13v2" />
             <path d="M9 13v2" />
           </svg>
-          <span className="chat-sidebar-strip-label">Agent Chat</span>
+          <span className="rotate-180 select-none text-[11px] font-medium tracking-[0.08em] opacity-70 [text-orientation:mixed] [writing-mode:vertical-rl] group-hover:opacity-100">Agent Chat</span>
         </button>
       )}
 

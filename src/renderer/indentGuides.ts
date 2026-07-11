@@ -22,7 +22,7 @@ import { RangeSetBuilder } from '@codemirror/state';
 //   • Blank and non-indented lines — nothing.
 //
 // The plugin sets each line's guides as stacked 1px background gradients via an
-// inline style; styles.css only handles the active-line color swap.
+// inline style; app.css only handles the active-line color swap.
 const LIST_RE = /^(\s*)([-*+]|\d+[.)])(\s|$)/;
 const INDENT_UNIT = 2; // columns between guides
 

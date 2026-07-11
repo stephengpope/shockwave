@@ -34,9 +34,10 @@ export function VoiceBars({ volumeRef, isRecording }) {
   if (!isRecording) return null;
 
   return (
-    <div ref={barsRef} className="chat-voice-bars" aria-hidden="true">
+    <div ref={barsRef} className="inline-flex size-4 items-center justify-center gap-0.5" aria-hidden="true">
       {Array.from({ length: BAR_COUNT }, (_, i) => (
-        <span key={i} className="chat-voice-bar" />
+        // Heights are driven imperatively (style.height) from the RMS loop.
+        <span key={i} className="block h-[3px] w-0.5 rounded-[1px] bg-current transition-[height] duration-75 ease-out" />
       ))}
     </div>
   );

@@ -1,8 +1,8 @@
-/* Tailwind v4 + design-token foundation (polish spec §9).
+/* The app's single stylesheet: Tailwind v4 + design tokens (polish spec §9).
    Processed by @tailwindcss/vite via the import in main.tsx.
-   styles.css (legacy, linked from index.html) is unlayered so it wins over
-   Tailwind's layers wherever both target the same element — migrated
-   components drop their styles.css classes as they convert. */
+   Structure: fonts → tokens (:root/[data-theme=dark]) → @theme mapping →
+   the unlayered legacy/irreducible block at the bottom (CodeMirror widgets,
+   chat markdown typography — see the banner comment there). */
 
 @import 'tailwindcss';
 
@@ -178,4 +178,442 @@
   --radius-2xl: calc(var(--radius) + 8px); /* 16px — bubbles */
 
   --shadow-raise: var(--shadow-raise);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   LEGACY / IRREDUCIBLE CSS (moved from styles.css when it was retired).
+   Deliberately UNLAYERED: CodeMirror injects its own runtime styles and
+   these must keep beating Tailwind's layers exactly like before.
+   Everything here targets DOM we don't render directly (CodeMirror
+   widgets, react-markdown output, Excalidraw) or JS-created elements.
+   Do NOT add new component classes — use Tailwind in the component.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Legacy tokens — still referenced by the blocks below and a few components.
+   The shadcn semantic tokens above are the canonical set for new code. */
+:root {
+  /* Shared left edge for the title, editor text, and backlinks panel.
+     = editor gutter width (66, hardcoded in Editor.jsx) + CodeMirror's built-in
+     `.cm-line` paddingLeft (6) = 72. The grey active-line highlight starts at
+     the gutter's right edge (66); text starts 6px later, at 72. */
+  --text-col-left: 72px;
+
+  /* Polish-spec palette (docs/: Shockwave Polish change notes §9).
+     Legacy token names kept while components migrate to app.css/Tailwind. */
+  --bg-app: #ffffff;
+  --bg-sidebar: #f5f4f1;
+  --bg-thin: #eeede9;
+  --bg-code: #f1f0ec;
+  --bg-tab-active: #ffffff;
+  --bg-tab-hover: rgba(0, 0, 0, 0.03);
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-active-line: #fafaf7;
+  --bg-popover: #ffffff;
+  --bg-input: #ffffff;
+  --bg-error: #ffe1e1;
+  --bg-backlinks: transparent;
+  --bg-row-selected: rgba(0, 0, 0, 0.055);
+
+  --fg-primary: #1b1b19;
+  --fg-secondary: #6e6e68;
+  --fg-muted: #9a9a93;
+  --fg-error: #8a1a1a;
+  --fg-accent: #5b57d8;
+  --fg-on-active-row: #2c2a5a;
+
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --border-error: #f5c2c2;
+
+  --accent: #5b57d8;
+  --accent-soft: #ecebfb;
+  --accent-bg-soft: rgba(91, 87, 216, 0.05);
+
+  --indent-line: #e4e3df;
+  --indent-line-active: #c6c5c0;
+
+  --shadow-popover: 0 4px 16px rgba(0, 0, 0, 0.12);
+
+  /* AI streaming highlight (yellow while writing, green pulse on done). */
+  --ai-stream-bg: #fdf6d8;
+  --ai-done-bg-start: #e8f6ec;
+  --ai-done-bg-peak: #c6ebd1;
+  --ai-done-bg-end: rgba(198, 235, 209, 0);
+
+  /* Graph view colors. */
+  --graph-node: #5b57d8;
+  --graph-link: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] {
+  --bg-app: #1a1a1c;
+  --bg-sidebar: #1e1e20;
+  --bg-thin: #202022;
+  --bg-code: rgba(255, 255, 255, 0.08);
+  --bg-tab-active: #1a1a1c;
+  --bg-tab-hover: rgba(255, 255, 255, 0.04);
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active-line: rgba(255, 255, 255, 0.03);
+  --bg-popover: #242427;
+  --bg-input: #242427;
+  --bg-error: #4a1f1f;
+  --bg-backlinks: transparent;
+  --bg-row-selected: rgba(255, 255, 255, 0.07);
+
+  --fg-primary: #ecebe7;
+  --fg-secondary: #a2a29b;
+  --fg-muted: #6c6c66;
+  --fg-error: #ff9a9a;
+  --fg-accent: #7d79e8;
+  --fg-on-active-row: #ecebe7;
+
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-error: #6a3030;
+
+  --accent: #7d79e8;
+  --accent-soft: rgba(125, 121, 232, 0.16);
+  --accent-bg-soft: rgba(125, 121, 232, 0.08);
+
+  --indent-line: #333336;
+  --indent-line-active: #4c4c50;
+
+  /* Muted amber + green so the streaming highlight sits comfortably on dark bg. */
+  --ai-stream-bg: #4a4015;
+  --ai-done-bg-start: #1f3a2a;
+  --ai-done-bg-peak: #2f5a3f;
+  --ai-done-bg-end: rgba(47, 90, 63, 0);
+
+  --graph-node: #7d79e8;
+  --graph-link: rgba(255, 255, 255, 0.25);
+}
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  font-family: Inter, sans-serif;
+  color: var(--fg-primary);
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./assets/fonts/InterVariable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./assets/fonts/InterVariable-Italic.woff2') format('woff2');
+}
+
+/* Excalidraw must fill its sized parent or it collapses to 0. */
+.drawing-view-host .excalidraw { flex: 1 1 auto; height: 100%; width: 100%; }
+
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Horizontal inset so row fills / the selected-folder ring don't touch the
+   sidebar edges (polish spec §4: tree container padding 2px 8px). */
+.tree-wrap { flex: 1; min-height: 0; padding: 4px 8px 8px; overflow-y: auto; }
+.tree-fill { width: 100%; height: 100%; }
+
+/* ---------- Editor pane ---------- */
+
+.editor-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+
+/* "Hide line numbers" keeps the gutter and its reserved width so the text
+   column doesn't shift left — digits + active-line highlight just go clear. */
+.editor-host-no-line-numbers .cm-lineNumbers .cm-gutterElement { color: transparent; }
+.editor-host-no-line-numbers .cm-activeLineGutter { background: transparent; }
+
+/* ---------- CodeMirror in-page widgets ---------- */
+
+.cm-content,
+.cm-line {
+  /* Editor body rhythm (polish spec §5). */
+  line-height: 27px;
+}
+
+.cm-task-checkbox {
+  vertical-align: -2px;
+  margin: 0 4px 0 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.cm-bullet {
+  display: inline-block;
+  width: 1ch;
+  /* Wider bullet→text gap (polish spec §5) — deliberate breathing room. */
+  margin-right: 4px;
+  text-align: center;
+  color: var(--bullet);
+  font-weight: bold;
+}
+
+/* Indent guides (indentGuides.ts). The guide lines themselves are stacked 1px
+   background gradients set as an inline style on each `.cm-iguide` line, placed
+   at measured pixel offsets. Here we only darken them on the active line to
+   match the editor's active indent color. */
+.cm-activeLine.cm-iguide {
+  --indent-line: var(--indent-line-active);
+}
+
+/* Inline `code` — monospace pill (codeBlocks.ts). Horizontal padding only so
+   line-height doesn't jump. */
+.cm-inline-code {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8em;
+  background: var(--bg-code);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+}
+
+/* Fenced ``` block — full-width background box (line decorations, codeBlocks.ts).
+   The emptied fence lines read as the box's top/bottom padding. */
+.cm-code-block {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--bg-code);
+}
+.cm-code-block-first {
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  position: relative;
+}
+
+/* Copy icon button, top-right of a fenced block (codeBlocks.ts). */
+.cm-code-copy {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-app);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.1s ease, color 0.1s ease;
+}
+.cm-code-copy:hover {
+  opacity: 1;
+  color: var(--fg-primary);
+}
+.cm-code-copy.is-copied {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.cm-code-copy.is-failed {
+  opacity: 1;
+  color: var(--fg-error);
+  border-color: var(--border-error);
+}
+.cm-code-block-last {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+.cm-wiki-link {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.cm-wiki-link:hover {
+  text-decoration: none;
+  background: var(--accent-soft);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.cm-wiki-link-unresolved {
+  opacity: 0.5;
+  text-decoration-style: dashed;
+}
+
+/* The [[ ]] autocomplete dropdown — match QuickSearch's surface (CM's default
+   tooltip / oneDark theme is far darker than the app background). */
+.cm-tooltip.cm-tooltip-autocomplete {
+  background: var(--bg-app);
+  color: var(--fg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-popover);
+}
+.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--accent-soft);
+  color: var(--fg-primary);
+}
+
+/* Matched chars in the [[ ]] autocomplete dropdown — match QuickSearch's
+   highlight (accent color + bold + underline). Scoped under the tooltip
+   container so the two-class selector outweighs CM's single-class base rule
+   (injected into <head> after this sheet, so a same-specificity rule loses). */
+.cm-tooltip-autocomplete .cm-completionMatchedText {
+  font-weight: 700;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+
+/* ---------- Autolinks ---------- */
+
+.cm-autolink {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cm-autolink:hover { filter: brightness(0.9); }
+
+.cm-md-link {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cm-md-link:hover { filter: brightness(0.9); }
+
+/* ---------- Image embed (atomic widget replacing ![](url) syntax) ---------- */
+
+.cm-image-embed {
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+.cm-image-embed img {
+  max-width: 100%;
+  max-height: 480px;
+  border-radius: 4px;
+  display: block;
+  margin: 4px 0;
+}
+
+.cm-image-embed-linked { cursor: pointer; }
+.cm-image-embed-linked:hover img { filter: brightness(0.95); }
+
+/* ---------- AI diff-flash decoration ---------- */
+
+.cm-ai-stream-done {
+  border-radius: 2px;
+  animation: cm-ai-stream-done-pulse 1s ease-out forwards;
+}
+
+@keyframes cm-ai-stream-done-pulse {
+  0%   { background: var(--ai-done-bg-start); }
+  30%  { background: var(--ai-done-bg-peak); }
+  100% { background: var(--ai-done-bg-end); }
+}
+
+.chat-markdown { white-space: normal; }
+.chat-markdown > :first-child { margin-top: 0; }
+.chat-markdown > :last-child { margin-bottom: 0; }
+.chat-markdown p { margin: 0 0 8px; }
+.chat-markdown p:last-child { margin-bottom: 0; }
+.chat-markdown ul,
+.chat-markdown ol { margin: 0 0 8px; padding-left: 22px; }
+.chat-markdown li { margin: 2px 0; }
+.chat-markdown li > p { margin: 0; }
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4 { margin: 10px 0 6px; line-height: 1.25; font-weight: 600; }
+.chat-markdown h1 { font-size: 16px; }
+.chat-markdown h2 { font-size: 15px; }
+.chat-markdown h3,
+.chat-markdown h4 { font-size: 14px; }
+.chat-markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.chat-markdown pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.chat-markdown pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+.chat-markdown blockquote {
+  margin: 0 0 8px;
+  padding: 0 8px;
+  border-left: 3px solid var(--border-color);
+  color: var(--fg-secondary);
+}
+.chat-markdown a { color: var(--fg-accent); text-decoration: underline; }
+.chat-markdown table {
+  border-collapse: collapse;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid var(--border-color);
+  padding: 3px 6px;
+  text-align: left;
+}
+.chat-markdown hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 10px 0;
+}
+
+/* Working indicator shimmer — sweeps a blue band across muted text.
+   Copied verbatim from ../thepopebot/web/app/globals.css (--muted-foreground
+   mapped to this app's --fg-muted). */
+@keyframes thinking-shimmer {
+  0% { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.thinking-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--fg-muted) 0%,
+    var(--fg-muted) 25%,
+    hsl(215, 85%, 55%) 42%,
+    hsl(210, 100%, 82%) 50%,
+    hsl(215, 85%, 55%) 58%,
+    var(--fg-muted) 75%,
+    var(--fg-muted) 100%
+  );
+  background-size: 300% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation:
+    thinking-shimmer 2.5s ease-in-out infinite,
+    thinking-pulse 3s ease-in-out infinite;
 }

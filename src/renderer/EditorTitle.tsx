@@ -36,7 +36,7 @@ export default function EditorTitle({ value, onChange, onCommit, conflict }) {
   return (
     <input
       ref={inputRef}
-      className={`editor-title ${conflict ? 'has-conflict' : ''}`}
+      className={`block w-full shrink-0 border-none bg-transparent px-(--text-col-left) pb-5 pt-4 text-[30px] font-bold leading-[1.2] text-foreground outline-none focus:bg-primary/5 ${conflict ? 'text-destructive' : ''}`}
       value={value}
       placeholder="Untitled"
       onChange={(e) => onChange(e.target.value)}

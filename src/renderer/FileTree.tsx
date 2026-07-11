@@ -64,7 +64,7 @@ const FileTree = forwardRef<any, any>(function FileTree(
   return (
     <div
       ref={wrapRef}
-      className="tree-fill"
+      className="tree-fill h-full w-full"
       // In bookmark mode the parent sizes the tree to its content (fixedHeight)
       // and owns the scroll, so the daily-notes list can sit directly beneath it
       // and scroll as one. Otherwise the tree fills its container and scrolls
