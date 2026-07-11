@@ -467,7 +467,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose }: any) {
     const onDown = (e) => {
       const t = e.target;
       if (rootRef.current?.contains(t)) return;
-      if (t?.closest?.('.chat-sidebar-history')) return; // let the toggle handle itself
+      if (t?.closest?.('.chat-history-toggle')) return; // let the toggle handle itself
       onClose();
     };
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -1139,7 +1139,9 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         ><PlusIcon size={15} /></button>
         <button
           type="button"
-          className={cn('chat-sidebar-history', headerBtn, showHistory && 'bg-selected text-primary hover:bg-selected hover:text-primary')}
+          // 'chat-history-toggle' is an unstyled marker — HistoryPopover's
+          // outside-click guard ignores clicks on it.
+          className={cn('chat-history-toggle', headerBtn, showHistory && 'bg-selected text-primary hover:bg-selected hover:text-primary')}
           onClick={() => setShowHistory((v) => !v)}
           title="Chat history"
           aria-label="Chat history"

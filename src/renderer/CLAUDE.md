@@ -174,58 +174,42 @@ Settings → Daily Notes lets the user choose a dayjs format string (`YYYY-MM-DD
 
 The modal's title-bar shows a small `Saving…` / `Saved` / `Save failed` badge driven by `saveStatus` in `App.jsx` (`persistSettings` increments an in-flight counter so overlapping writes don't flash `saved` early). The save badge fades back to idle 1.5s after the last write completes.
 
-## Theme
+## Theme & design tokens
 
-Three modes (`light` / `dark` / `system`) stored in settings; system mode listens to `nativeTheme` updates via `theme:systemChanged`. The effective theme is set on `document.documentElement.dataset.theme` and also re-passed into the Editor (which recreates the view to swap `oneDark`).
+Three modes (`light` / `dark` / `system`) stored in settings; system mode listens to `nativeTheme` updates via `theme:systemChanged`. The effective theme is set on `document.documentElement.dataset.theme` and also re-passed into the Editor (which recreates the view to swap the light/dark syntax highlight style).
+
+**Tokens live in `app.css`** (the Tailwind v4 entry, imported by `main.tsx` and processed by `@tailwindcss/vite` — the plugin is registered in `electron.vite.config.js`'s renderer section). It defines the shadcn semantic tokens (`--background`, `--primary`, `--border`, …) plus app-specific ones (`--selected` accent-soft fill, `--sidebar`, `--chrome`, `--chat`, `--raise`, `--success/-soft`, `--bullet`, `--folder`, `--code-chip`, amber `--ring`) in light + dark, and maps them to Tailwind utilities via `@theme inline` (`bg-selected`, `text-muted-2`, `bg-chrome`, `font-chat`, …). Dark mode is a custom variant on `[data-theme="dark"]` — do NOT introduce a `.dark` class.
+
+The palette is the "polish spec": warm neutrals, one indigo accent (#5B57D8 light / #7D79E8 dark) used only for active/primary, amber keyboard-focus ring, JetBrains Mono for code/paths/line numbers, Instrument Sans (`font-chat`) for chat-panel message text only. All three fonts are self-hosted in `assets/fonts/` — never load fonts from the network.
+
+`styles.css` (loaded via `index.html`, unlayered so it wins over Tailwind's layers) is the LEGACY stylesheet — what remains is app-shell layout (`.app` grid, sidebar/resize handles, chat strip), CodeMirror widget styling (`.cm-*`), `.chat-markdown` typography, graph, and day-picker overrides. Don't add new component classes there; write Tailwind classes in the component instead.
 
 ## Reusable UI primitives
 
-- `Dialog.jsx` — base modal with overlay, keyboard handling, focus management.
-- `ConfirmDialog.jsx` — Dialog variant for confirms.
-- `ErrorMessage.jsx` — inline error banner used by app-level toasts and form-level warnings.
+shadcn/ui components live in `components/ui/` (installed via `npx shadcn@latest add <name>`, config in `components.json`, `cn()` in `lib/utils.ts`, `@/*` alias → `src/renderer/*`). Icons: `lucide-react` (a few app-specific ones remain in `Icons.tsx`).
+
+- `Dialog.tsx` — legacy-API wrapper (`open/onClose/title/children/footer`) over shadcn Dialog; portal + focus trap come from Radix.
+- `ConfirmDialog.tsx` — shadcn AlertDialog two-button confirm (`destructive` prop → red action).
+- `ErrorMessage.tsx` — shadcn Alert (destructive) banner.
+- `QuickSearch.tsx` — cmdk Command in a Dialog; fuzzysort does the ranking (`shouldFilter={false}`).
+- `Combobox.tsx` / `settings/FolderCombobox.tsx` — custom input + filtered listbox (freeForm typing), Tailwind-styled.
+- Toasts: `sonner` `<Toaster>` mounted in `App.tsx` OUTSIDE the `.app` grid (a stray grid child adds an implicit row and squeezes the layout). Use `toast()` for background events only; inline errors stay `ErrorMessage`.
 
 ## UI conventions (read before building any new dialog / settings page)
 
-The convention is **"look at the nearest similar component and copy its class usage"** — there's no separate styling guide doc. The CSS classes are already in `styles.css`; new dialogs and settings pages should compose them, not invent one-off `style={{}}` blocks.
+**Everything new is Tailwind + shadcn.** Compose `components/ui/*` primitives; style with Tailwind utilities against the semantic tokens (`bg-background`, `text-muted-foreground`, `border-border`, `bg-selected`, `bg-raise`, …). Never hardcode hex colors, never use `dark:` overrides for colors the tokens already handle, no `style={{}}` for colors/borders/fonts.
 
 **Templates:**
-- New settings section → copy `settings/AgentSecretsSection.jsx` (form + list pattern) or `settings/TranscriptionSection.jsx` (single-field-plus-test pattern). Wire into `SettingsModal.jsx`'s NAV and add an entry to `SETTINGS_SECTIONS` in `constants.js`.
-- New modal dialog → use `Dialog.jsx`. Buttons go in the `footer` slot using `dialog-button` / `dialog-button-primary` / `dialog-button-destructive`. Body fields use the settings-* classes below.
+- New settings section → copy `settings/AppearanceSection.tsx`: `<SettingsSection title description>` + `<SettingsGroup title>` per concern + `<SettingsDivider />` between groups (scaffolding in `settings/SectionUI.tsx`, 360px measure; pass `wide` for entity lists). Controls: shadcn `Field`/`FieldLabel`/`FieldDescription`, `Input`, `InputGroup` (Show/Hide, Verify addons), `Select`, `Checkbox`, `Switch`, `Slider`, `Button`. Wire into `SettingsModal.tsx`'s NAV + `SETTINGS_SECTIONS` in `constants.ts`.
+- New modal dialog → shadcn `Dialog`/`DialogContent`/`DialogHeader`/`DialogFooter` (or the legacy-API `Dialog.tsx` wrapper); confirms → `ConfirmDialog`. Footer buttons: `Button` (default = primary, `variant="outline"` = cancel, `variant="destructive"` = irreversible).
+- Icon buttons in chrome: 26px hit targets `size-[26px] rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground`; rail buttons 34px. Active state: `bg-selected text-primary`.
+- Menus → `DropdownMenu`; anchored pickers that must not own left-click → controlled `Popover` + `PopoverAnchor` (see SortBar's bookmark picker).
 
-**Settings page visual layout (the standard shape — every section follows it):**
-
-1. **One `<h2 className="settings-section-title">` per section**, immediately followed by **one `<p className="settings-section-desc">`** intro line. These are the page header — never more than one of each, never skip the desc.
-2. **Group related fields under `<h3 className="settings-subsection-title">` headers** whenever a section covers more than one distinct concern. A section with two-plus unrelated controls (e.g. Appearance = Theme + Editor + Bookmarks) should NOT stack bare `settings-field`s — give each concern its own subsection header. A single-topic section (e.g. Transcription) doesn't need subsections.
-3. **Spacing is owned by the CSS, not by inline styles.** `.settings-subsection-title` already carries `margin: 24px 0 8px 0` and `.settings-field + .settings-field` already carries `margin-top: 12px`. Do NOT add `style={{ marginTop: 24 }}` to a subsection title — it double-spaces and is redundant (some older sections like `SyncSection`/`AgentChatSection` still do this; don't copy it, and clean it up if you touch those files).
-4. **Every control sits in a `settings-field`** (label + input + optional `settings-field-hint`), or the right-aligned `settings-field-row` variant (label/help on the left, control on the right — see `DailyNoteSection`). Pick one variant per section and stay consistent within it.
-5. **Labels describe the control, not the section.** Under a "Theme" subsection the select's label is "Color theme", not "Theme" again — don't echo the header.
-
-**Standard class palette:**
-
-| Class | Use |
-|---|---|
-| `dialog-button` | Footer button (secondary / Cancel) |
-| `dialog-button-primary` | Footer button (primary action) |
-| `dialog-button-destructive` | Footer button (delete / disconnect) |
-| `settings-section` / `settings-section-title` / `settings-section-desc` | Top-level container + heading + intro paragraph for a settings page |
-| `settings-subsection-title` | Sub-heading within a section |
-| `settings-field` / `settings-field-label` / `settings-field-hint` | Form-field wrapper + label + helper-text underneath |
-| `settings-input` | Text / number input. Standard width, focus ring already wired. |
-| `settings-input-row` | Flex row when an input pairs with a button (e.g. Show/Hide, Verify) |
-| `settings-input-toggle` | The trailing button inside an `settings-input-row` |
-| `settings-input-mono` | Monospace variant for paths / URLs |
-| `settings-button` | Standalone button in a settings body (not footer) |
-| `workspace-list` / `workspace-row` / `workspace-meta` / `workspace-name` / `workspace-path` | List-of-entities pattern (workspaces, secrets) |
-| `icon-btn` | Small icon-only button (trash, edit, etc.) |
-
-**Errors / hints:**
-- Validation or operation error → `<ErrorMessage>{msg}</ErrorMessage>`. Don't use inline `style={{ color: 'red' }}`.
-- Field-level help text → `<p className="settings-field-hint">…</p>` (muted color).
-- Success / status note → `settings-field-hint` with `color: var(--accent)` is acceptable when nothing else fits.
-
-**When to add a new CSS class** (instead of reusing): only when the new shape genuinely has no existing analog. Example: the choice-card picker in `WorkspaceSyncDialog` (`.sync-choice` — title + description as a clickable action card) is distinct from `workspace-row` (entity list). Drop the new rules in `styles.css` under a clearly-labeled section comment, not inline.
-
-**Inline `style={{}}` is a smell.** Acceptable for one-off layout tweaks (`marginTop: 12` to separate two blocks). Not acceptable for colors, borders, fonts, button shapes — those should be classes.
+**Other rules that still hold:**
+- Labels describe the control, not the section ("Color theme", not "Theme" again).
+- Validation/operation error → `<ErrorMessage>`; helper text → `FieldDescription` / `text-xs text-muted-foreground`; success note → `text-xs text-success`.
+- Entity lists (workspaces, secrets): rows as `flex items-center justify-between rounded-lg border border-border px-3 py-2.5`.
+- Paths/URLs/tokens/commands render in `font-mono` (JetBrains Mono).
 
 ## Path helpers (`pathUtils.js`)
 
