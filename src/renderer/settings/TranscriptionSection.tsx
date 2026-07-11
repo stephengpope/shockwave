@@ -111,7 +111,6 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
         <div className="flex flex-col gap-1">
           <Button
             type="button"
-            variant="outline"
             size="sm"
             className="w-fit"
             onClick={onTest}

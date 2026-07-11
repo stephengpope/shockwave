@@ -29,7 +29,8 @@ export default function WorkspacesSection({
     >
       <SettingsGroup>
         <div>
-          <Button variant="outline" size="sm" onClick={onAdd}>
+          {/* The page's single primary action — row actions stay outline/ghost. */}
+          <Button size="sm" onClick={onAdd}>
             <Plus /> Add workspace
           </Button>
         </div>

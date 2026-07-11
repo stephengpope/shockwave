@@ -43,7 +43,6 @@ export default function AdvancedSection({ hasWorkspace, onRebuildCache }) {
         </p>
 
         <Button
-          variant="outline"
           size="sm"
           className="w-fit"
           onClick={onClick}

@@ -171,7 +171,8 @@ export default function AgentSecretsSection({ secrets, onChange }) {
       title="API Secrets"
       description="Store API tokens (GitHub, Linear, etc.) for the coding agent. Tokens are encrypted on this machine using your OS keychain. Names must be unique."
     >
-      <Button variant="outline" size="sm" className="w-fit" onClick={() => setDialogTarget({})}>
+      {/* The page's single primary action — row actions stay ghost. */}
+      <Button size="sm" className="w-fit" onClick={() => setDialogTarget({})}>
         <Plus />
         Add secret
       </Button>

@@ -139,7 +139,6 @@ export default function SyncSection({ sync, onSyncChange }) {
               </InputGroupAddon>
             </InputGroup>
             <Button
-              variant="outline"
               onClick={onVerify}
               disabled={!pat || verifyState.status === 'checking'}
             >

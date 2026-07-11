@@ -204,6 +204,7 @@ shadcn/ui components live in `components/ui/` (installed via `npx shadcn@latest 
 **Templates:**
 - New settings section → copy `settings/AppearanceSection.tsx`: `<SettingsSection title description>` + `<SettingsGroup title>` per concern + `<SettingsDivider />` between groups (scaffolding in `settings/SectionUI.tsx`, 360px measure; pass `wide` for entity lists). Controls: shadcn `Field`/`FieldLabel`/`FieldDescription`, `Input`, `InputGroup` (Show/Hide, Verify addons), `Select`, `Checkbox`, `Switch`, `Slider`, `Button`. Wire into `SettingsModal.tsx`'s NAV + `SETTINGS_SECTIONS` in `constants.ts`.
 - New modal dialog → shadcn `Dialog`/`DialogContent`/`DialogHeader`/`DialogFooter` (or the legacy-API `Dialog.tsx` wrapper); confirms → `ConfirmDialog`. Footer buttons: `Button` (default = primary, `variant="outline"` = cancel, `variant="destructive"` = irreversible).
+- **Button hierarchy: at most ONE primary (purple, default variant) button per settings page / dialog** — the page's main action. Everything else is `outline` (secondary), `ghost` (row icons), or `destructive`. Form-only pages (auto-saving selects/switches) have zero primaries.
 - Icon buttons in chrome: 26px hit targets `size-[26px] rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground`; rail buttons 34px. Active state: `bg-selected text-primary`.
 - Menus → `DropdownMenu`; anchored pickers that must not own left-click → controlled `Popover` + `PopoverAnchor` (see SortBar's bookmark picker).
 
