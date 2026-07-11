@@ -308,18 +308,6 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
           onKeyChange={updateKey}
         />
       </SettingsGroup>
-
-      <SettingsDivider />
-
-      <SettingsGroup title="System Prompt">
-        <p className="text-[13px] text-muted-foreground">
-          The agent's instructions are assembled automatically from your workspace's{' '}
-          <code className="font-mono text-xs">SOUL.md</code> (its role and voice — edit it like any
-          file, or leave it out for the built-in default) plus Shockwave's internal helper.
-          Per-project notes go in <code className="font-mono text-xs">AGENTS.md</code> at your
-          workspace root.
-        </p>
-      </SettingsGroup>
     </SettingsSection>
   );
 }
