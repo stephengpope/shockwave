@@ -233,7 +233,9 @@ html, body, #root {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
-.tree-wrap { flex: 1; min-height: 0; padding: 4px 0 8px; overflow-y: auto; }
+/* Horizontal inset so row fills / the selected-folder ring don't touch the
+   sidebar edges (polish spec §4: tree container padding 2px 8px). */
+.tree-wrap { flex: 1; min-height: 0; padding: 4px 8px 8px; overflow-y: auto; }
 .tree-fill { width: 100%; height: 100%; }
 
 /* ---------- Editor pane ---------- */
