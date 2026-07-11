@@ -188,6 +188,8 @@ The palette is the "polish spec": warm neutrals, one indigo accent (#5B57D8 ligh
 
 shadcn/ui components live in `components/ui/` (installed via `npx shadcn@latest add <name>`, config in `components.json`, `cn()` in `lib/utils.ts`, `@/*` alias → `src/renderer/*`). Icons: `lucide-react` (a few app-specific ones remain in `Icons.tsx`).
 
+**Updating vendored components:** `npm run ui:diff` shows upstream drift for every installed component (`npm run ui:diff -- button` for one). It's read-only. To update: `npx shadcn@latest add <name> --dry-run`, review, then merge preserving local edits — `sonner.tsx` is intentionally customized (data-theme instead of next-themes) and will always show drift.
+
 - `Dialog.tsx` — legacy-API wrapper (`open/onClose/title/children/footer`) over shadcn Dialog; portal + focus trap come from Radix.
 - `ConfirmDialog.tsx` — shadcn AlertDialog two-button confirm (`destructive` prop → red action).
 - `ErrorMessage.tsx` — shadcn Alert (destructive) banner.
