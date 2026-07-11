@@ -1,0 +1,6 @@
+node_modules
+out
+dist
+cli-tools
+# Vendored shadcn components keep upstream formatting so ui:diff stays clean
+src/renderer/components/ui/
