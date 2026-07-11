@@ -364,14 +364,17 @@ html, body, #root {
   font-weight: bold;
 }
 
-/* List-indent widening (polish spec §5: ~20px step per nesting level).
-   bulletPoints.ts marks each list line's leading whitespace with this class;
-   letter-spacing widens each indent space (≈4.4px at 16px Inter) to ≈10px, so
-   a 2-space nesting level renders ≈20px. Files keep standard 2-space nesting.
-   indentGuides.ts reads the SAME variable to keep the guide lines aligned —
-   change the value only here. */
-.cm-content { --list-indent-extra: 5.6px; }
-.cm-list-indent { letter-spacing: var(--list-indent-extra); }
+/* Indent width (polish spec §5: ~20px per nesting level). Files indent with
+   TABS (one per level; the editor types tabs too), so this one knob controls
+   EVERY indent — bullets, tasks, numbered lists, plain text. !important is
+   required and deliberate: CodeMirror writes `tab-size: 4` as an INLINE style
+   on .cm-content (from its tabSize facet, which only takes column counts, not
+   px) — author !important is the one thing that beats an inline style.
+   indentGuides.ts reads the computed value, so guides follow automatically. */
+.cm-content {
+  --editor-tab-size: 20px;
+  tab-size: var(--editor-tab-size) !important;
+}
 
 /* Indent guides (indentGuides.ts). The guide lines themselves are stacked 1px
    background gradients set as an inline style on each `.cm-iguide` line, placed

@@ -3,7 +3,7 @@ import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
 import { markdown, insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown';
-import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, LanguageDescription } from '@codemirror/language';
+import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, indentUnit, LanguageDescription } from '@codemirror/language';
 import { languages } from '@codemirror/language-data';
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { indentGuides } from './indentGuides.js';
@@ -397,6 +397,9 @@ const Editor = forwardRef<any, any>(function Editor(
       lineNumbers(),
       highlightActiveLine(),
       history(),
+      // Indent with TABS — one tab per nesting level. Rendering width comes
+      // from `tab-size` on .cm-content (app.css), the one knob for ALL indent.
+      indentUnit.of('\t'),
       indentOnInput(),
       indentGuides,
       languageCompartment.of(isMarkdown ? markdownExtension : []),
