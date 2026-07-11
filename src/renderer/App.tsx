@@ -37,6 +37,8 @@ import { useSendToAgent } from './hooks/useSendToAgent';
 import { useFsWatcher } from './hooks/useFsWatcher';
 import { useSettings } from './hooks/useSettings';
 import { useAppUpdate } from './hooks/useAppUpdate';
+import { Toaster } from '@/components/ui/sonner';
+import { Button } from '@/components/ui/button';
 
 const SAVE_DEBOUNCE_MS = 500;
 
@@ -1526,6 +1528,7 @@ export default function App() {
   }, [persistChatSidebar]);
 
   return (
+    <>
     <div
       className="app"
       style={{
@@ -1901,8 +1904,11 @@ export default function App() {
         title="Send to Agent"
         footer={
           <>
-            <button
-              className="dialog-button"
+            <Button variant="outline" onClick={() => setSendToAgentPending(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => {
                 const s = sendToAgentPending;
                 setSendToAgentPending(null);
@@ -1910,9 +1916,8 @@ export default function App() {
               }}
             >
               Append
-            </button>
-            <button
-              className="dialog-button dialog-button-primary"
+            </Button>
+            <Button
               onClick={() => {
                 const s = sendToAgentPending;
                 setSendToAgentPending(null);
@@ -1920,10 +1925,7 @@ export default function App() {
               }}
             >
               Replace
-            </button>
-            <button className="dialog-button" onClick={() => setSendToAgentPending(null)}>
-              Cancel
-            </button>
+            </Button>
           </>
         }
       >
@@ -1971,5 +1973,9 @@ export default function App() {
         />
       )}
     </div>
+    {/* Outside the .app grid — a stray grid child would add an implicit row
+        and squeeze the main layout. */}
+    <Toaster position="bottom-right" />
+    </>
   );
 }

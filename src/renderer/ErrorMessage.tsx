@@ -1,14 +1,18 @@
 import React from 'react';
+import { CircleAlert } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { cn } from '@/lib/utils';
 
-// Reusable red error banner with a little upward arrow. Pure presentational —
-// positioning (margins, max-width) is owned by the caller via `className`.
+// Reusable error banner. Pure presentational — positioning (margins,
+// max-width) is owned by the caller via `className`.
 //
 // Usage:
 //   <ErrorMessage className="error-message-title">Something went wrong</ErrorMessage>
-export default function ErrorMessage({ children, className = '' }) {
+export default function ErrorMessage({ children, className = '' }: any) {
   return (
-    <div className={`error-message ${className}`.trim()} role="alert">
-      {children}
-    </div>
+    <Alert variant="destructive" className={cn('error-message', className)}>
+      <CircleAlert />
+      <AlertDescription>{children}</AlertDescription>
+    </Alert>
   );
 }

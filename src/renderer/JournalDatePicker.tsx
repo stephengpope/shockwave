@@ -1,10 +1,11 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { DayPicker } from 'react-day-picker';
-import 'react-day-picker/style.css';
+import { Calendar } from '@/components/ui/calendar';
 
-// Anchored popover wrapping react-day-picker. Lets the underlying lib handle
-// all the calendar math (timezones, DST, locale-first-day-of-week, etc).
-// Closes on Esc or outside click. `anchor` is a {x, y} client-coords point.
+// Anchored popover wrapping the shadcn Calendar (react-day-picker under the
+// hood — it owns the calendar math: timezones, DST, locale-first-day-of-week).
+// Closes on Esc or outside click. `anchor` is a {x, y} client-coords point
+// (from a right-click), so this positions itself manually rather than using a
+// Radix popover, which needs a DOM anchor element.
 export default function JournalDatePicker({ open, anchor, initialDate, onPick, onClose }: any) {
   const ref = useRef<any>(null);
   const [month, setMonth] = useState(() => initialDate ?? new Date());
@@ -56,12 +57,12 @@ export default function JournalDatePicker({ open, anchor, initialDate, onPick, o
   return (
     <div
       ref={ref}
-      className="journal-popover"
+      className="fixed z-50 rounded-md border bg-popover text-popover-foreground shadow-md"
       style={{ left: pos.left, top: pos.top }}
       role="dialog"
       aria-label="Pick a journal date"
     >
-      <DayPicker
+      <Calendar
         mode="single"
         month={month}
         onMonthChange={setMonth}

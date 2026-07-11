@@ -6,6 +6,10 @@
 
 @import 'tailwindcss';
 
+/* electron-vite's custom Vite root defeats Tailwind's automatic source
+   detection — point it at the renderer sources explicitly. */
+@source './';
+
 /* Dark mode follows the app's existing <html data-theme="dark"> toggle. */
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
