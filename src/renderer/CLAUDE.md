@@ -28,7 +28,7 @@ The load effect (App.jsx) tracks the last-loaded `(tabId, path, isDark)` and ski
 ## In-app rename
 
 `renameOps.js` is the in-app rename flow. Order of operations (important):
-1. `api.renameFile` — main auto-disambiguates the target name if it collides with any `.md` file basename anywhere in the workspace (case-insensitive, via `src/main/pathResolver.js`'s `uniqueInWorkspace`). Returns the FINAL path used.
+1. `api.renameFileLiteral` — main renames to `toName` verbatim (no `.md` forcing, so extension changes like `Foo.md` → `Foo.txt` work) and throws on a same-folder collision. Returns the FINAL path used.
 2. `linkIndex.renameFile(oldPath, finalNewPath)` — re-keys the index.
 3. `rewriteReferences` — rewrites `[[OldName(#h|alias)?]]` to `[[NewName(#h|alias)?]]` (case-insensitive match, suffix preserved) in every file in `getBacklinks(oldBaseName)`. Self-references in the renamed file itself are also rewritten.
 4. Re-read the renamed file and `updateFile` it so its own outgoing links reflect any self-reference rewrites.

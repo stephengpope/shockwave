@@ -116,12 +116,6 @@ contextBridge.exposeInMainWorld('api', {
    */
   createFile: (dirPath, name, content) =>
     ipcRenderer.invoke('fs:createFile', { dirPath, name, content }),
-  /**
-   * Rename a file. Main auto-disambiguates the new basename workspace-wide.
-   * @param {string} fromPath @param {string} toName @returns {Promise<string>} Final new absolute path.
-   */
-  renameFile: (fromPath, toName) =>
-    ipcRenderer.invoke('fs:renameFile', { fromPath, toName }),
   /** Literal rename used by the file browser — `toName` is verbatim (no `.md`
    *  forcing). Throws on collision. @param {string} fromPath @param {string} toName @returns {Promise<string>} */
   renameFileLiteral: (fromPath, toName) =>

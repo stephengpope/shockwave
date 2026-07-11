@@ -652,23 +652,6 @@ ipcMain.handle('fs:createFile', async (_evt, { dirPath, name, content = '' }) =>
   return { path: target, mtime: st.mtimeMs };
 });
 
-ipcMain.handle('fs:renameFile', async (_evt, { fromPath, toName }) => {
-  const dir = path.dirname(fromPath);
-  const base = toName.replace(/\.md$/i, '').trim();
-  if (!base) throw new Error('Name cannot be empty');
-  // Same-folder uniqueness, ignoring the file being renamed. Duplicate basenames
-  // in different folders are allowed (the resolver disambiguates by path).
-  let candidate = path.join(dir, `${base}.md`);
-  let i = 1;
-  while (candidate !== fromPath) {
-    try { await fs.access(candidate); candidate = path.join(dir, `${base} ${i}.md`); i++; }
-    catch { break; }
-  }
-  if (candidate === fromPath) return candidate;
-  await fs.rename(fromPath, candidate);
-  return candidate;
-});
-
 // Literal rename (file-browser + title bar): the new name is used verbatim — no
 // `.md` stripping or forcing. A name ending in `.md` stays markdown; anything
 // else is a plain file. Rejects (throws) on a same-folder collision; duplicate
