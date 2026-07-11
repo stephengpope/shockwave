@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import ErrorMessage from '../ErrorMessage.jsx';
+import { SettingsSection } from './SectionUI';
+import { Switch } from '@/components/ui/switch';
 
 // Global on/off for the agent's bundled built-in skills (excalidraw, firecrawl,
 // playwright, …). This is the master default; a workspace can override any of
@@ -39,52 +42,45 @@ export default function BuiltinSkillsSection({ globalBuiltinSkills, onGlobalBuil
   const isEnabled = useCallback((fn: string) => globalBuiltinSkills?.[fn] !== 'disabled', [globalBuiltinSkills]);
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">Built-in Skills</h2>
-      <p className="settings-section-desc">
-        Skills bundled with the agent. These toggles are the global default; any
-        workspace can override them on its <strong>Manage Skills</strong> page.
-      </p>
-
-      {error && <div className="skill-error">{error}</div>}
+    <SettingsSection
+      title="Built-in Skills"
+      description={(
+        <>
+          Skills bundled with the agent. These toggles are the global default; any
+          workspace can override them on its <strong>Manage Skills</strong> page.
+        </>
+      )}
+    >
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
       {loading ? (
-        <div className="settings-empty">Loading…</div>
+        <div className="text-[13px] text-muted-foreground">Loading…</div>
       ) : builtin.length === 0 ? (
-        <div className="settings-empty">No built-in skills.</div>
+        <div className="text-[13px] text-muted-foreground">No built-in skills.</div>
       ) : (
-        <ul className="skill-list">
+        <ul className="flex flex-col">
           {builtin.map((s) => (
-            <li key={s.folderName} className="skill-row">
-              <div className="skill-info">
-                <div className="skill-name">{s.name}</div>
+            <li
+              key={s.folderName}
+              className="flex items-center justify-between gap-4 border-b border-border py-2.5 last:border-b-0"
+            >
+              <div className="min-w-0">
+                <div className="text-[13px] font-medium text-foreground">{s.name}</div>
                 {s.description && (
-                  <div className="skill-description" title={s.description}>{shortDescription(s.description)}</div>
+                  <div className="text-xs text-muted-foreground" title={s.description}>
+                    {shortDescription(s.description)}
+                  </div>
                 )}
               </div>
-              <div className="skill-controls">
-                <div className="skill-state-group" role="radiogroup" aria-label={`${s.name} (global)`}>
-                  {['enabled', 'disabled'].map((st) => {
-                    const active = (st === 'enabled') === isEnabled(s.folderName);
-                    return (
-                      <button
-                        key={st}
-                        type="button"
-                        role="radio"
-                        aria-checked={active}
-                        className={`skill-state-button ${active ? 'active' : ''}`}
-                        onClick={() => onGlobalBuiltinSkillToggle(s.folderName, st === 'enabled')}
-                      >
-                        {st === 'enabled' ? 'On' : 'Off'}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+              <Switch
+                checked={isEnabled(s.folderName)}
+                onCheckedChange={(v) => onGlobalBuiltinSkillToggle(s.folderName, v === true)}
+                aria-label={`${s.name} (global)`}
+              />
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </SettingsSection>
   );
 }

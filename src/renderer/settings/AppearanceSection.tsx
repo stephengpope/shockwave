@@ -1,5 +1,16 @@
 import React from 'react';
 import { THEME_MODES } from '../constants.js';
+import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 
 const OPTIONS = [
   { value: THEME_MODES.SYSTEM, label: 'System (follow your OS appearance)' },
@@ -16,51 +27,51 @@ export default function AppearanceSection({
   onDailyNotesInBookmarksChange,
 }) {
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">Appearance</h2>
-      <p className="settings-section-desc">Choose the color theme and editor display options.</p>
+    <SettingsSection title="Appearance" description="Choose the color theme and editor display options.">
+      <SettingsGroup title="Theme">
+        <Field>
+          <FieldLabel htmlFor="theme-mode">Color theme</FieldLabel>
+          <Select value={themeMode} onValueChange={onThemeModeChange}>
+            <SelectTrigger id="theme-mode" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </SettingsGroup>
 
-      <h3 className="settings-subsection-title">Theme</h3>
-      <div className="settings-field">
-        <label className="settings-field-label" htmlFor="theme-mode">Color theme</label>
-        <select
-          id="theme-mode"
-          className="settings-select"
-          value={themeMode}
-          onChange={(e) => onThemeModeChange(e.target.value)}
-        >
-          {OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
-      </div>
+      <SettingsDivider />
 
-      <h3 className="settings-subsection-title">Editor</h3>
-      <div className="settings-field">
-        <label className="settings-checkbox-row">
-          <input
-            type="checkbox"
+      <SettingsGroup title="Editor">
+        <Label className="gap-2.5 text-[13px] font-normal">
+          <Checkbox
             checked={!!hideLineNumbers}
-            onChange={(e) => onHideLineNumbersChange?.(e.target.checked)}
+            onCheckedChange={(v) => onHideLineNumbersChange?.(v === true)}
           />
-          <span>Hide line numbers in editor</span>
-        </label>
-      </div>
+          Hide line numbers in editor
+        </Label>
+      </SettingsGroup>
 
-      <h3 className="settings-subsection-title">Bookmarks</h3>
-      <div className="settings-field">
-        <label className="settings-checkbox-row">
-          <input
-            type="checkbox"
-            checked={!!dailyNotesInBookmarks}
-            onChange={(e) => onDailyNotesInBookmarksChange?.(e.target.checked)}
-          />
-          <span>Show daily notes below bookmarks</span>
-        </label>
-        <p className="settings-field-hint">
-          When the file tree is filtered to bookmarks, list your daily notes underneath so you can jump between them without leaving the bookmarks view.
-        </p>
-      </div>
-    </div>
+      <SettingsDivider />
+
+      <SettingsGroup title="Bookmarks">
+        <Field>
+          <Label className="gap-2.5 text-[13px] font-normal">
+            <Checkbox
+              checked={!!dailyNotesInBookmarks}
+              onCheckedChange={(v) => onDailyNotesInBookmarksChange?.(v === true)}
+            />
+            Show daily notes below bookmarks
+          </Label>
+          <FieldDescription className="pl-[26px]">
+            When the file tree is filtered to bookmarks, list your daily notes underneath so you can jump between them without leaving the bookmarks view.
+          </FieldDescription>
+        </Field>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

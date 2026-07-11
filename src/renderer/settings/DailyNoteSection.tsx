@@ -6,8 +6,21 @@ import {
   formatDailyNote,
 } from '../dailyNote.js';
 import FolderCombobox from './FolderCombobox.jsx';
+import { SettingsSection } from './SectionUI';
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 const CUSTOM_VALUE = '__custom__';
+// Radix Select forbids an empty-string item value; map '' (no template)
+// through a sentinel. The stored settings value stays ''.
+const NO_TEMPLATE_VALUE = '__none__';
 
 export default function DailyNoteSection({
   dailyNote,
@@ -23,8 +36,7 @@ export default function DailyNoteSection({
   const isPreset = DAILY_NOTE_FORMAT_PRESETS.includes(format);
   const previewToday = useMemo(() => formatDailyNote(format), [format]);
 
-  const onSelectChange = (e) => {
-    const v = e.target.value;
+  const onSelectChange = (v) => {
     if (v === CUSTOM_VALUE) {
       // Switch to custom mode without changing the saved format yet — but
       // we keep the current value as the seed so the input shows something
@@ -53,61 +65,52 @@ export default function DailyNoteSection({
   };
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">Daily Notes</h2>
-      <p className="settings-section-desc">
-        Configure how the calendar button creates and opens daily notes.
-      </p>
-
-      <div className="settings-field-row">
-        <div className="settings-field-text">
-          <label className="settings-field-label" htmlFor="daily-note-format">Date format</label>
-          <div className="settings-field-help">
-            Choose how daily notes are named in your workspace.
-          </div>
-        </div>
-        <select
-          id="daily-note-format"
-          className="settings-select"
-          value={isPreset ? format : CUSTOM_VALUE}
-          onChange={onSelectChange}
-        >
-          {DAILY_NOTE_FORMAT_PRESETS.map((p) => (
-            <option key={p} value={p}>{formatDailyNote(p)}</option>
-          ))}
-          <option value={CUSTOM_VALUE}>Custom</option>
-        </select>
-      </div>
+    <SettingsSection
+      title="Daily Notes"
+      description="Configure how the calendar button creates and opens daily notes."
+    >
+      <Field>
+        <FieldLabel htmlFor="daily-note-format">Date format</FieldLabel>
+        <Select value={isPreset ? format : CUSTOM_VALUE} onValueChange={onSelectChange}>
+          <SelectTrigger id="daily-note-format" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {DAILY_NOTE_FORMAT_PRESETS.map((p) => (
+              <SelectItem key={p} value={p}>{formatDailyNote(p)}</SelectItem>
+            ))}
+            <SelectItem value={CUSTOM_VALUE}>Custom</SelectItem>
+          </SelectContent>
+        </Select>
+        <FieldDescription className="text-xs">
+          Choose how daily notes are named in your workspace.
+        </FieldDescription>
+      </Field>
 
       {!isPreset && (
-        <div className="settings-field-row">
-          <div className="settings-field-text">
-            <label className="settings-field-label" htmlFor="daily-note-custom">Custom format</label>
-            <div className="settings-field-help">
-              For more syntax, refer to{' '}
-              <a href={DAILY_NOTE_FORMAT_HELP_URL} onClick={openHelp} className="settings-link">
-                format reference
-              </a>
-              .<br />
-              Your current syntax looks like this: <strong>{previewToday}</strong>
-            </div>
-          </div>
-          <input
+        <Field>
+          <FieldLabel htmlFor="daily-note-custom">Custom format</FieldLabel>
+          <Input
             id="daily-note-custom"
             type="text"
-            className="settings-input settings-input-mono"
+            className="font-mono"
             value={format}
             onChange={onCustomChange}
             placeholder="YYYY-MM-DD"
           />
-        </div>
+          <FieldDescription className="text-xs">
+            For more syntax, refer to{' '}
+            <a href={DAILY_NOTE_FORMAT_HELP_URL} onClick={openHelp}>
+              format reference
+            </a>
+            .<br />
+            Your current syntax looks like this: <strong>{previewToday}</strong>
+          </FieldDescription>
+        </Field>
       )}
 
-      <div className="settings-field-row">
-        <div className="settings-field-text">
-          <label className="settings-field-label" htmlFor="daily-note-folder">New file location</label>
-          <div className="settings-field-help">New daily notes will be placed here.</div>
-        </div>
+      <Field>
+        <FieldLabel htmlFor="daily-note-folder">New file location</FieldLabel>
         <FolderCombobox
           id="daily-note-folder"
           value={folder}
@@ -115,27 +118,33 @@ export default function DailyNoteSection({
           tree={tree}
           workspacePath={workspacePath}
         />
-      </div>
+        <FieldDescription className="text-xs">
+          New daily notes will be placed here.
+        </FieldDescription>
+      </Field>
 
-      <div className="settings-field-row">
-        <div className="settings-field-text">
-          <label className="settings-field-label" htmlFor="daily-note-template">Default template</label>
-          <div className="settings-field-help">
-            New daily notes start from this template. Configure the templates folder under Settings → Templates.
-          </div>
-        </div>
-        <select
-          id="daily-note-template"
-          className="settings-select"
-          value={templatePath}
-          onChange={(e) => onDailyNoteChange({ ...dailyNote, templatePath: e.target.value })}
+      <Field>
+        <FieldLabel htmlFor="daily-note-template">Default template</FieldLabel>
+        <Select
+          value={templatePath === '' ? NO_TEMPLATE_VALUE : templatePath}
+          onValueChange={(v) =>
+            onDailyNoteChange({ ...dailyNote, templatePath: v === NO_TEMPLATE_VALUE ? '' : v })
+          }
         >
-          <option value="">None</option>
-          {templateOptions.map((t) => (
-            <option key={t.value} value={t.value}>{t.name}</option>
-          ))}
-        </select>
-      </div>
-    </div>
+          <SelectTrigger id="daily-note-template" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NO_TEMPLATE_VALUE}>None</SelectItem>
+            {templateOptions.map((t) => (
+              <SelectItem key={t.value} value={t.value}>{t.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <FieldDescription className="text-xs">
+          New daily notes start from this template. Configure the templates folder under Settings → Templates.
+        </FieldDescription>
+      </Field>
+    </SettingsSection>
   );
 }

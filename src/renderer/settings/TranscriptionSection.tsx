@@ -1,6 +1,15 @@
 import React, { useRef, useState } from 'react';
 import { useVoiceInput } from '../voice/useVoiceInput.js';
 import { VoiceBars } from '../voice/VoiceBars.jsx';
+import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { Button } from '@/components/ui/button';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group';
 
 // Settings page for voice transcription. Two jobs:
 //   1. Capture + store the AssemblyAI API key (encrypted in main).
@@ -55,78 +64,85 @@ export default function TranscriptionSection({ transcription, onTranscriptionCha
       : 'Test microphone';
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">Transcription</h2>
-      <p className="settings-section-desc">
-        Voice input uses AssemblyAI streaming transcription. Get a key from{' '}
-        <a
-          href="#"
-          onClick={(e) => { e.preventDefault(); window.api.openExternal('https://www.assemblyai.com/dashboard/signup'); }}
-        >assemblyai.com</a>
-        . The key is encrypted on this machine using your OS keychain.
-      </p>
+    <SettingsSection
+      title="Transcription"
+      description={(
+        <>
+          Voice input uses AssemblyAI streaming transcription. Get a key from{' '}
+          <a
+            href="#"
+            className="text-primary underline underline-offset-2 hover:opacity-80"
+            onClick={(e) => { e.preventDefault(); window.api.openExternal('https://www.assemblyai.com/dashboard/signup'); }}
+          >assemblyai.com</a>
+          . The key is encrypted on this machine using your OS keychain.
+        </>
+      )}
+    >
+      <SettingsGroup>
+        <Field>
+          <FieldLabel htmlFor="transcription-key">AssemblyAI API key</FieldLabel>
+          <InputGroup>
+            <InputGroupInput
+              id="transcription-key"
+              type={showKey ? 'text' : 'password'}
+              value={apiKey}
+              onChange={(e) => update({ apiKey: e.target.value })}
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+            />
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton onClick={() => setShowKey((v) => !v)}>
+                {showKey ? 'Hide' : 'Show'}
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+        </Field>
+      </SettingsGroup>
 
-      <div className="settings-field">
-        <label className="settings-field-label" htmlFor="transcription-key">AssemblyAI API key</label>
-        <div className="settings-input-row">
-          <input
-            id="transcription-key"
-            className="settings-input"
-            type={showKey ? 'text' : 'password'}
-            value={apiKey}
-            onChange={(e) => update({ apiKey: e.target.value })}
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-          />
-          <button
+      <SettingsDivider />
+
+      <SettingsGroup title="Test microphone">
+        <p className="text-xs text-muted-foreground">
+          Verifies your key works AND grants the browser microphone permission so
+          the first click in the chat composer is instant.
+        </p>
+
+        <div className="flex flex-col gap-1">
+          <Button
             type="button"
-            className="settings-input-toggle"
-            onClick={() => setShowKey((v) => !v)}
+            variant="outline"
+            size="sm"
+            className="w-fit"
+            onClick={onTest}
+            disabled={!apiKey || (!voiceAvailable && !isConnecting && !isRecording)}
           >
-            {showKey ? 'Hide' : 'Show'}
-          </button>
+            {isRecording && <VoiceBars volumeRef={volumeRef} isRecording={isRecording} />}
+            <span>{buttonLabel}</span>
+          </Button>
+          {!apiKey && (
+            <p className="text-xs text-muted-foreground">Enter your AssemblyAI key first.</p>
+          )}
+          {apiKey && !voiceAvailable && !isConnecting && !isRecording && (
+            <p className="text-xs text-muted-foreground">Checking key…</p>
+          )}
+          {testError && <p className="text-xs text-destructive">{testError}</p>}
         </div>
-      </div>
 
-      <h3 className="settings-subsection-title" style={{ marginTop: 24 }}>Test microphone</h3>
-      <p className="settings-tab-intro">
-        Verifies your key works AND grants the browser microphone permission so
-        the first click in the chat composer is instant.
-      </p>
-
-      <div className="transcription-test">
-        <button
-          type="button"
-          className="settings-button"
-          onClick={onTest}
-          disabled={!apiKey || (!voiceAvailable && !isConnecting && !isRecording)}
-        >
-          {isRecording && <VoiceBars volumeRef={volumeRef} isRecording={isRecording} />}
-          <span style={{ marginLeft: isRecording ? 8 : 0 }}>{buttonLabel}</span>
-        </button>
-        {!apiKey && (
-          <p className="settings-field-hint">Enter your AssemblyAI key first.</p>
-        )}
-        {apiKey && !voiceAvailable && !isConnecting && !isRecording && (
-          <p className="settings-field-hint">Checking key…</p>
-        )}
-        {testError && <p className="settings-field-hint" style={{ color: 'var(--fg-error)' }}>{testError}</p>}
-      </div>
-
-      <div className="transcription-result">
-        {(finalText || partial) ? (
-          <div className="transcription-result-text">
-            <span>{finalText}</span>
-            {finalText && partial ? ' ' : ''}
-            <span className="transcription-partial">{partial}</span>
-          </div>
-        ) : (
-          <div className="transcription-result-placeholder">
-            Click and speak. We'll show what we hear.
-          </div>
-        )}
-      </div>
-    </div>
+        <div className="min-h-[60px] rounded-md border border-border bg-muted/40 px-3 py-2.5 text-[13px] leading-normal">
+          {(finalText || partial) ? (
+            <div className="text-foreground">
+              <span>{finalText}</span>
+              {finalText && partial ? ' ' : ''}
+              <span className="italic text-muted-foreground">{partial}</span>
+            </div>
+          ) : (
+            <div className="italic text-muted-foreground">
+              Click and speak. We'll show what we hear.
+            </div>
+          )}
+        </div>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

@@ -1,6 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { TrashIcon } from '../Icons.jsx';
+import { Trash2 } from 'lucide-react';
 import ConfirmDialog from '../ConfirmDialog.jsx';
+import ErrorMessage from '../ErrorMessage.jsx';
+import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
+import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { cn } from '@/lib/utils';
 
 // "Manage Skills" — per-workspace skills for the coding agent (active workspace):
 //   • Built-in (bundled) skills — a per-workspace on/off OVERRIDE of the global
@@ -96,92 +107,113 @@ export default function WorkspaceSkillsSection({ workspacePath, builtinSkills, g
   };
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">Manage Skills</h2>
-      <p className="settings-section-desc">
-        Skills for this workspace. Toggle the agent's built-ins just for this
-        workspace, or add your own — uploads are copied into the workspace and
-        travel with it.
-      </p>
+    <SettingsSection
+      title="Manage Skills"
+      description="Skills for this workspace. Toggle the agent's built-ins just for this workspace, or add your own — uploads are copied into the workspace and travel with it."
+    >
+      {error && <ErrorMessage>{error}</ErrorMessage>}
 
-      {error && <div className="skill-error">{error}</div>}
-
-      <h3 className="settings-subsection-title">Built-in</h3>
-      {loading ? (
-        <div className="settings-empty">Loading…</div>
-      ) : builtin.length === 0 ? (
-        <div className="settings-empty">No built-in skills.</div>
-      ) : (
-        <ul className="skill-list">
-          {builtin.map((s) => (
-            <li key={s.folderName} className="skill-row">
-              <div className="skill-info">
-                <div className="skill-name">{s.name}</div>
-                {s.description && (
-                  <div className="skill-description" title={s.description}>{shortDescription(s.description)}</div>
-                )}
-              </div>
-              <div className="skill-controls">
-                <div className="skill-state-group" role="radiogroup" aria-label={`${s.name} for this workspace`}>
-                  {['enabled', 'disabled'].map((st) => {
-                    const active = (st === 'enabled') === isBuiltinEnabled(s.folderName);
-                    return (
-                      <button
-                        key={st}
-                        type="button"
-                        role="radio"
-                        aria-checked={active}
-                        className={`skill-state-button ${active ? 'active' : ''}`}
-                        onClick={() => onBuiltinSkillToggle(s.folderName, st === 'enabled')}
-                      >
-                        {st === 'enabled' ? 'On' : 'Off'}
-                      </button>
-                    );
-                  })}
+      <SettingsGroup title="Built-in">
+        {loading ? (
+          <div className="text-xs text-muted-foreground">Loading…</div>
+        ) : builtin.length === 0 ? (
+          <div className="text-xs text-muted-foreground">No built-in skills.</div>
+        ) : (
+          <ul className="flex flex-col">
+            {builtin.map((s) => (
+              <li
+                key={s.folderName}
+                className="flex items-start justify-between gap-4 border-b border-border py-2.5 last:border-0"
+              >
+                <div className="min-w-0">
+                  <div className="text-[13px] font-medium">{s.name}</div>
+                  {s.description && (
+                    <div className="text-xs text-muted-foreground" title={s.description}>
+                      {shortDescription(s.description)}
+                    </div>
+                  )}
                 </div>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+                <Select
+                  value={isBuiltinEnabled(s.folderName) ? 'enabled' : 'disabled'}
+                  onValueChange={(st) => onBuiltinSkillToggle(s.folderName, st === 'enabled')}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="h-8 w-24 shrink-0"
+                    aria-label={`${s.name} for this workspace`}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="enabled">On</SelectItem>
+                    <SelectItem value="disabled">Off</SelectItem>
+                  </SelectContent>
+                </Select>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SettingsGroup>
 
-      <h3 className="settings-subsection-title">Uploaded</h3>
-      <button
-        type="button"
-        className={`skill-dropzone ${dragOver ? 'over' : ''}`}
-        onClick={onImportClick}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={onDrop}
-      >
-        Drop a skill folder here, or click to choose one. It's copied into this
-        workspace's <code>.shockwave/skills/</code> and travels with it.
-      </button>
+      <SettingsDivider />
 
-      {loading ? null : uploaded.length === 0 ? (
-        <div className="settings-empty">No uploaded skills yet.</div>
-      ) : (
-        <ul className="skill-list">
-          {uploaded.map((s) => (
-            <li key={s.folderName} className={`skill-row ${s.hasSkillMd ? '' : 'broken'}`}>
-              <div className="skill-info">
-                <div className="skill-name">
-                  {s.name}
-                  {!s.hasSkillMd && <span className="skill-broken-badge">no SKILL.md</span>}
-                </div>
-                {s.description && (
-                  <div className="skill-description" title={s.description}>{shortDescription(s.description)}</div>
+      <SettingsGroup title="Uploaded">
+        <button
+          type="button"
+          className={cn(
+            'w-full cursor-pointer rounded-md border border-dashed border-border bg-transparent p-4 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50',
+            dragOver && 'border-ring bg-accent/50'
+          )}
+          onClick={onImportClick}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+        >
+          Drop a skill folder here, or click to choose one. It's copied into this
+          workspace's <code>.shockwave/skills/</code> and travels with it.
+        </button>
+
+        {loading ? null : uploaded.length === 0 ? (
+          <div className="text-xs text-muted-foreground">No uploaded skills yet.</div>
+        ) : (
+          <ul className="flex flex-col">
+            {uploaded.map((s) => (
+              <li
+                key={s.folderName}
+                className={cn(
+                  'flex items-start justify-between gap-4 border-b border-border py-2.5 last:border-0',
+                  !s.hasSkillMd && 'opacity-70'
                 )}
-              </div>
-              <div className="skill-controls">
-                <button className="icon-btn" title="Remove skill" onClick={() => setConfirmRemove(s)}>
-                  <TrashIcon size={15} />
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+              >
+                <div className="min-w-0">
+                  <div className="text-[13px] font-medium">
+                    {s.name}
+                    {!s.hasSkillMd && (
+                      <span className="ml-2 rounded-sm bg-destructive/15 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                        no SKILL.md
+                      </span>
+                    )}
+                  </div>
+                  {s.description && (
+                    <div className="text-xs text-muted-foreground" title={s.description}>
+                      {shortDescription(s.description)}
+                    </div>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0 text-muted-foreground hover:text-destructive"
+                  title="Remove skill"
+                  onClick={() => setConfirmRemove(s)}
+                >
+                  <Trash2 />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SettingsGroup>
 
       <ConfirmDialog
         open={!!confirmRemove}
@@ -192,6 +224,6 @@ export default function WorkspaceSkillsSection({ workspacePath, builtinSkills, g
         onConfirm={() => { const s = confirmRemove; setConfirmRemove(null); if (s) onRemove(s); }}
         onClose={() => setConfirmRemove(null)}
       />
-    </div>
+    </SettingsSection>
   );
 }

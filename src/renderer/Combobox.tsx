@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 
 // Generic combobox: text input + filtered dropdown of suggestions.
 //
@@ -87,12 +89,11 @@ export default function Combobox({
   };
 
   return (
-    <div className={`combobox ${className}`} ref={rootRef}>
-      <input
+    <div className={cn('relative', className)} ref={rootRef}>
+      <Input
         ref={inputRef}
         id={id}
         type="text"
-        className="settings-input"
         value={draft}
         placeholder={placeholder}
         spellCheck={false}
@@ -103,13 +104,20 @@ export default function Combobox({
         onKeyDown={onKeyDown}
       />
       {open && filtered.length > 0 && (
-        <ul className="combobox-menu" role="listbox">
+        <ul
+          className="absolute z-50 mt-1 max-h-56 w-full overflow-auto rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+          role="listbox"
+        >
           {filtered.map((o, i) => (
             <li
               key={o}
               role="option"
               aria-selected={o === value}
-              className={`combobox-item ${i === highlight ? 'is-active' : ''}`}
+              className={cn(
+                'cursor-pointer rounded-sm px-2 py-1.5 text-[13px]',
+                i === highlight && 'bg-accent',
+                o === value && 'font-medium'
+              )}
               onMouseEnter={() => setHighlight(i)}
               onMouseDown={(e) => { e.preventDefault(); pick(o); }}
             >

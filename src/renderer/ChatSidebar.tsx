@@ -1,7 +1,9 @@
 import React, { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import { PaperclipIcon, PlayIcon, StopIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon, CopyIcon, CheckIcon, SearchIcon, PlusIcon, TrashIcon } from './Icons.jsx';
+import { cn } from '@/lib/utils';
 import { resolveImageUrl } from './imageWidgets.js';
 import {
   classify,
@@ -106,26 +108,30 @@ function formatToolResult(result) {
 
 // Per-tool detail rendering for the expanded view header (above the output).
 // Keep these terse — the collapsed-summary line already shows the headline arg.
+// Shared styling for the expanded tool-args area (JetBrains Mono, quiet).
+const toolArgsClass = 'mt-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-muted-foreground';
+const toolArgPathClass = 'font-mono text-[11px] text-muted-foreground break-all';
+
 function ToolArgsDetail({ toolName, args }) {
   const a = args ?? {};
   if (toolName === 'bash') {
     return (
-      <pre className="chat-tool-args chat-tool-args-shell">
-        <span className="chat-tool-shell-prompt">$ </span>{a.command ?? ''}
+      <pre className={toolArgsClass}>
+        <span className="select-none text-muted-2">$ </span>{a.command ?? ''}
       </pre>
     );
   }
   if (toolName === 'edit' && Array.isArray(a.edits)) {
     return (
-      <div className="chat-tool-args chat-tool-args-edit">
-        <div className="chat-tool-arg-path">{a.path ?? ''}</div>
+      <div className={toolArgsClass}>
+        <div className={toolArgPathClass}>{a.path ?? ''}</div>
         {a.edits.map((e, i) => (
-          <div key={i} className="chat-tool-edit-block">
+          <div key={i} className="mt-1">
             {String(e?.oldText ?? '').split('\n').map((ln, j) => (
-              <div key={`o${j}`} className="chat-tool-edit-del">- {ln}</div>
+              <div key={`o${j}`} className="text-destructive/80">- {ln}</div>
             ))}
             {String(e?.newText ?? '').split('\n').map((ln, j) => (
-              <div key={`n${j}`} className="chat-tool-edit-add">+ {ln}</div>
+              <div key={`n${j}`} className="text-success">+ {ln}</div>
             ))}
           </div>
         ))}
@@ -133,22 +139,22 @@ function ToolArgsDetail({ toolName, args }) {
     );
   }
   if (toolName === 'write') {
-    return <div className="chat-tool-args chat-tool-arg-path">{a.path ?? ''}</div>;
+    return <div className={`${toolArgsClass} ${toolArgPathClass}`}>{a.path ?? ''}</div>;
   }
   if (toolName === 'read' || toolName === 'ls') {
-    return <div className="chat-tool-args chat-tool-arg-path">{a.path ?? ''}</div>;
+    return <div className={`${toolArgsClass} ${toolArgPathClass}`}>{a.path ?? ''}</div>;
   }
   if (toolName === 'grep' || toolName === 'find') {
     return (
-      <div className="chat-tool-args">
-        <div className="chat-tool-arg-row"><span className="chat-tool-arg-key">pattern</span> {a.pattern ?? ''}</div>
-        {a.path && <div className="chat-tool-arg-row"><span className="chat-tool-arg-key">path</span> {a.path}</div>}
+      <div className={toolArgsClass}>
+        <div><span className="font-semibold text-muted-2">pattern</span> {a.pattern ?? ''}</div>
+        {a.path && <div><span className="font-semibold text-muted-2">path</span> {a.path}</div>}
       </div>
     );
   }
   let block = '';
   try { block = JSON.stringify(a, null, 2); } catch { block = String(a); }
-  return <pre className="chat-tool-args">{block}</pre>;
+  return <pre className={toolArgsClass}>{block}</pre>;
 }
 
 // Xs under 60s, Ym Xs over.
@@ -174,26 +180,29 @@ function AttachmentChip({ att, onRemove }: any) {
     }
   };
   return (
-    <div className={`chat-attachment chat-attachment-${att.kind}`}>
+    <div className="group relative">
       {att.kind === 'image' ? (
         <button
           type="button"
-          className="chat-attachment-thumb"
+          className="block size-12 rounded-lg border border-border bg-cover bg-center"
           onClick={handleClick}
           title={att.name}
           style={{ backgroundImage: `url("${att.dataUrl}")` }}
           aria-label={att.name}
         />
       ) : (
-        <div className="chat-attachment-text" title={`${att.name} · ${formatBytes(att.bytes)}`}>
-          <span className="chat-attachment-icon"><FileTextIcon size={18} /></span>
-          <span className="chat-attachment-name">{att.name}</span>
+        <div
+          className="flex max-w-40 items-center gap-1.5 rounded-lg border border-border bg-raise px-2 py-1.5"
+          title={`${att.name} · ${formatBytes(att.bytes)}`}
+        >
+          <span className="shrink-0 text-muted-foreground"><FileTextIcon size={16} /></span>
+          <span className="truncate text-[11px] text-foreground/85">{att.name}</span>
         </div>
       )}
       {onRemove && (
         <button
           type="button"
-          className="chat-attachment-remove"
+          className="absolute -right-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full border border-border bg-background text-muted-foreground opacity-0 shadow-sm hover:text-foreground group-hover:opacity-100"
           onClick={() => onRemove(att.id)}
           aria-label={`Remove ${att.name}`}
         ><XIcon size={10} /></button>
@@ -202,11 +211,11 @@ function AttachmentChip({ att, onRemove }: any) {
   );
 }
 
-function AttachmentRow({ attachments, onRemove, readOnly }: any) {
+function AttachmentRow({ attachments, onRemove }: any) {
   return (
-    <div className={`chat-attachments ${readOnly ? 'chat-attachments-readonly' : ''}`}>
+    <div className="flex flex-wrap gap-1.5">
       {attachments.map((a) => (
-        <AttachmentChip key={a.id} att={a} onRemove={readOnly ? null : onRemove} />
+        <AttachmentChip key={a.id} att={a} onRemove={onRemove ?? null} />
       ))}
     </div>
   );
@@ -230,7 +239,7 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       type="button"
-      className="chat-copy-btn"
+      className="mt-1 flex size-5 items-center justify-center rounded-sm text-muted-2 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/message:opacity-100"
       onClick={onClick}
       aria-label={copied ? 'Copied' : 'Copy message'}
       title={copied ? 'Copied' : 'Copy message'}
@@ -246,22 +255,24 @@ function CopyButton({ text }: { text: string }) {
 // new reference and re-renders.
 const MessageRow = memo(function MessageRow({ message: m }: any) {
   if (m.kind === 'user') {
+    // Right-aligned indigo bubble with an asymmetric radius "tail" (spec §6).
     return (
-      <div className="chat-message chat-user">
-        <div className="chat-bubble">
+      <div className="group/message flex flex-col items-end">
+        <div className="max-w-[82%] rounded-[16px_16px_5px_16px] bg-primary px-[13px] py-[9px] text-[13px] leading-[1.45] text-primary-foreground">
           {m.attachments && m.attachments.length > 0 && (
-            <AttachmentRow attachments={m.attachments} readOnly />
+            <div className="mb-1.5"><AttachmentRow attachments={m.attachments} /></div>
           )}
-          {m.text && <div className="chat-user-text">{m.text}</div>}
+          {m.text && <div className="whitespace-pre-wrap break-words">{m.text}</div>}
         </div>
         {m.text && <CopyButton text={m.text} />}
       </div>
     );
   }
   if (m.kind === 'assistant') {
+    // No bubble — full-width flowing text. The asymmetry IS the hierarchy.
     return (
-      <div className="chat-message chat-assistant">
-        <div className="chat-bubble chat-markdown">
+      <div className="group/message flex flex-col items-start">
+        <div className="chat-markdown w-full max-w-full text-[13.5px] leading-[1.6] text-foreground">
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS as any}>{m.text}</ReactMarkdown>
         </div>
         {m.text && <CopyButton text={m.text} />}
@@ -269,10 +280,10 @@ const MessageRow = memo(function MessageRow({ message: m }: any) {
     );
   }
   if (m.kind === 'thinking') {
-    return <div className="chat-message chat-tool-row"><ThinkingEntry entry={m} /></div>;
+    return <ThinkingEntry entry={m} />;
   }
   if (m.kind === 'tool') {
-    return <div className="chat-message chat-tool-row"><ToolEntry entry={m} /></div>;
+    return <ToolEntry entry={m} />;
   }
   return null;
 });
@@ -281,7 +292,7 @@ const MessageRow = memo(function MessageRow({ message: m }: any) {
 function SpinnerIcon({ size = 12 }: { size?: number }) {
   return (
     <svg
-      className="chat-spinner"
+      className="animate-spin"
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
       fill="none"
@@ -309,19 +320,22 @@ function ThinkingEntry({ entry }) {
   const [open, setOpen] = useState(true);
   const collapsedDone = entry.done && !open;
   return (
-    <div className="chat-thinking-block">
+    // Demoted aside (spec §6): small caption + chevron, body behind a 2px rule.
+    <div className="flex flex-col gap-[5px]">
       <button
         type="button"
-        className="chat-thinking-summary"
+        className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-2 hover:text-muted-foreground"
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="chat-tool-caret">{collapsedDone ? '▸' : '▾'}</span>
+        {collapsedDone
+          ? <ChevronRight className="size-3" strokeWidth={2.2} />
+          : <ChevronDown className="size-3" strokeWidth={2.2} />}
         {streaming
           ? (<><SpinnerIcon /><span className="thinking-shimmer">Thinking</span></>)
-          : (<span className="chat-thinking-label">Thought</span>)}
+          : (<span>Thought</span>)}
       </button>
       {(!entry.done || open) && entry.text && (
-        <div className="chat-thinking-body">{entry.text}</div>
+        <div className="whitespace-pre-wrap border-l-2 border-border pl-[11px] text-[13px] leading-[1.55] text-muted-foreground">{entry.text}</div>
       )}
     </div>
   );
@@ -330,24 +344,31 @@ function ThinkingEntry({ entry }) {
 function ToolEntry({ entry }) {
   const [open, setOpen] = useState(false);
   const running = !entry.done;
-  const statusClass = entry.isError ? 'chat-tool-status-error' : 'chat-tool-status-ok';
   return (
-    <div className={`chat-tool ${entry.isError ? 'chat-tool-error' : ''}`}>
-      <button type="button" className="chat-tool-summary" onClick={() => setOpen((v) => !v)}>
-        <span className="chat-tool-caret">{open ? '▾' : '▸'}</span>
-        <span className={`chat-tool-status ${statusClass}`}>
-          {running ? '' : entry.isError ? '✗' : '✓'}
+    // One-line quiet card (spec §6): chevron + status + mono command, truncated.
+    <div
+      className={cn(
+        'rounded-[10px] border border-border bg-raise px-2.5 py-[7px]',
+        entry.isError && 'border-destructive/30',
+      )}
+    >
+      <button type="button" className="flex w-full min-w-0 items-center gap-2 text-left" onClick={() => setOpen((v) => !v)}>
+        {open
+          ? <ChevronDown className="size-[13px] shrink-0 text-muted-2" strokeWidth={2.2} />
+          : <ChevronRight className="size-[13px] shrink-0 text-muted-2" strokeWidth={2.2} />}
+        <span className={cn('w-3 shrink-0 text-[11px] leading-none', entry.isError ? 'text-destructive' : 'text-success')}>
+          {running ? <SpinnerIcon size={11} /> : entry.isError ? '✗' : '✓'}
         </span>
-        <span className="chat-tool-name">{entry.toolName}</span>
-        <span className="chat-tool-arg">{toolSummary(entry.toolName, entry.args)}</span>
+        <span className="shrink-0 font-mono text-[11px] font-medium text-muted-foreground">{entry.toolName}</span>
+        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/80">{toolSummary(entry.toolName, entry.args)}</span>
       </button>
       {open && (
-        <div className="chat-tool-detail">
+        <div className="mt-1.5 border-t border-border pt-1.5">
           <ToolArgsDetail toolName={entry.toolName} args={entry.args} />
           {(entry.output || running) && (
-            <div className="chat-tool-output">
-              <span className="chat-tool-output-text">{entry.output}</span>
-              {running && <span className="chat-tool-cursor" aria-hidden="true">▌</span>}
+            <div className="mt-1.5 max-h-56 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-muted-foreground/90">
+              <span>{entry.output}</span>
+              {running && <span className="animate-pulse" aria-hidden="true">▌</span>}
             </div>
           )}
         </div>
@@ -514,26 +535,32 @@ function HistoryPopover({ currentSessionId, onSelect, onClose }: any) {
     <button
       key={it.sessionId}
       type="button"
-      className={`chat-history-row ${it.sessionId === currentSessionId ? 'chat-history-row-active' : ''}`}
+      className={cn(
+        'group/row flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent',
+        it.sessionId === currentSessionId && 'bg-selected hover:bg-selected',
+      )}
       onClick={() => onSelect(it.sessionId)}
     >
       <span
         role="button"
         tabIndex={0}
-        className={`chat-history-row-star ${isStarred ? 'chat-history-row-star-on' : ''}`}
+        className={cn(
+          'flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-2 hover:text-foreground',
+          isStarred && 'text-amber-500 hover:text-amber-500',
+        )}
         onClick={(e) => onToggleStar(e, it.sessionId, isStarred)}
         aria-label={isStarred ? 'Unstar chat' : 'Star chat'}
         title={isStarred ? 'Unstar' : 'Star'}
       ><StarIcon size={13} filled={isStarred} /></span>
-      <span className="chat-history-row-main">
-        <span className="chat-history-row-title">{it.title || 'Untitled chat'}</span>
-        {searching && it.snippet && <span className="chat-history-row-snippet">{it.snippet}</span>}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-[12.5px] text-foreground">{it.title || 'Untitled chat'}</span>
+        {searching && it.snippet && <span className="truncate text-[11px] text-muted-2">{it.snippet}</span>}
       </span>
-      {!searching && <span className="chat-history-row-time">{formatAgo(it.updatedAt)}</span>}
+      {!searching && <span className="shrink-0 text-[11px] text-muted-2">{formatAgo(it.updatedAt)}</span>}
       <span
         role="button"
         tabIndex={0}
-        className="chat-history-row-delete"
+        className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-2 opacity-0 hover:text-destructive group-hover/row:opacity-100"
         onClick={(e) => onDelete(e, it.sessionId)}
         aria-label="Delete chat"
         title="Delete chat"
@@ -545,27 +572,32 @@ function HistoryPopover({ currentSessionId, onSelect, onClose }: any) {
   const empty = items.length === 0 && !showStarred && !loading;
 
   return (
-    <div className="chat-history-popover" role="dialog" aria-label="Chat history" ref={rootRef}>
-      <div className="chat-history-search">
+    <div
+      className="absolute left-2 right-2 top-12 z-30 flex max-h-96 flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-md"
+      role="dialog"
+      aria-label="Chat history"
+      ref={rootRef}
+    >
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-muted-2">
         <SearchIcon size={13} />
         <input
           type="text"
-          className="chat-history-input"
+          className="w-full bg-transparent text-[12.5px] text-foreground outline-none placeholder:text-muted-2"
           placeholder="Search chats…"
           value={query}
           autoFocus
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      <div className="chat-history-list" onScroll={onScroll}>
+      <div className="flex-1 overflow-y-auto p-1" onScroll={onScroll}>
         {empty && (
-          <div className="chat-history-empty">{searching ? 'No matches' : 'No saved chats yet'}</div>
+          <div className="px-2 py-3 text-center text-xs text-muted-foreground">{searching ? 'No matches' : 'No saved chats yet'}</div>
         )}
         {showStarred && (
           <>
-            <div className="chat-history-section">Starred</div>
+            <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Starred</div>
             {starred.map((it) => renderRow(it, true))}
-            {items.length > 0 && <div className="chat-history-section">Recent</div>}
+            {items.length > 0 && <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Recent</div>}
           </>
         )}
         {items.map((it) => renderRow(it, false))}
@@ -1081,24 +1113,33 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     try { el.setSelectionRange(len, len); } catch { /* selection is cosmetic */ }
   }, []);
 
+  const headerBtn = 'flex size-[26px] shrink-0 items-center justify-center rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground';
+
   return (
-    <div className="chat-sidebar" role="region" aria-label="Coding agent chat" ref={sidebarRootRef} onClick={onSidebarClick}>
+    <div
+      className="relative flex h-full min-h-0 flex-col border-l border-border bg-chat"
+      role="region"
+      aria-label="Coding agent chat"
+      ref={sidebarRootRef}
+      onClick={onSidebarClick}
+    >
       {dragOver && (
-        <div className="chat-dropzone-overlay" aria-hidden="true">
-          <div className="chat-dropzone-message">Drop to attach</div>
+        <div className="absolute inset-0 z-40 flex items-center justify-center rounded-none border-2 border-dashed border-primary bg-primary/5" aria-hidden="true">
+          <div className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground">Drop to attach</div>
         </div>
       )}
-      <div className="chat-sidebar-header">
+      {/* 44px hairline-bottom header: history left, avatar+title centered, collapse right (spec §6). */}
+      <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-3">
         <button
           type="button"
-          className="chat-sidebar-clear"
+          className={headerBtn}
           onClick={onClear}
           title="Start a new chat"
           aria-label="New chat"
         ><PlusIcon size={15} /></button>
         <button
           type="button"
-          className={`chat-sidebar-history ${showHistory ? 'chat-sidebar-history-active' : ''}`}
+          className={cn('chat-sidebar-history', headerBtn, showHistory && 'bg-selected text-primary hover:bg-selected hover:text-primary')}
           onClick={() => setShowHistory((v) => !v)}
           title="Chat history"
           aria-label="Chat history"
@@ -1121,10 +1162,13 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
             <path d="M12 7v5l4 2" />
           </svg>
         </button>
-        <span className="chat-sidebar-title">
+        <span className="flex min-w-0 flex-1 items-center justify-center gap-[7px]">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+            <Sparkles className="size-[13px]" strokeWidth={1.7} />
+          </span>
           {renamingTitle ? (
             <input
-              className="chat-sidebar-title-input"
+              className="w-full max-w-48 rounded-sm border border-input bg-background px-1.5 py-0.5 text-[13px] font-semibold outline-none focus:border-ring"
               value={titleDraft}
               autoFocus
               onChange={(e) => setTitleDraft(e.target.value)}
@@ -1136,7 +1180,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
             />
           ) : (
             <span
-              className="chat-sidebar-title-text"
+              className="truncate text-[13px] font-semibold text-foreground"
               onDoubleClick={startRename}
               title={currentSessionId ? 'Double-click to rename' : undefined}
             >{sessionTitle || 'Agent Chat'}</span>
@@ -1145,7 +1189,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         {currentSessionId && (
           <button
             type="button"
-            className={`chat-sidebar-star ${sessionStarred ? 'chat-sidebar-star-on' : ''}`}
+            className={cn(headerBtn, sessionStarred && 'text-amber-500 hover:text-amber-500')}
             onClick={onToggleHeaderStar}
             title={sessionStarred ? 'Unstar chat' : 'Star chat'}
             aria-label={sessionStarred ? 'Unstar chat' : 'Star chat'}
@@ -1154,7 +1198,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         )}
         <button
           type="button"
-          className="chat-sidebar-close"
+          className={headerBtn}
           onClick={onClose}
           title="Collapse coding agent"
           aria-label="Collapse coding agent"
@@ -1168,36 +1212,41 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         />
       )}
 
-      <div ref={scrollRef} className="chat-messages">
+      {/* Conversation flows in Instrument Sans (spec §3/§6). */}
+      <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-3.5 py-4 font-chat">
         <ChatWorkspaceContext.Provider value={workspacePath}>
           {messages.map((m) => <MessageRow key={m.id} message={m} />)}
         </ChatWorkspaceContext.Provider>
         {running && (
-          <div className="chat-thinking">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-2">
             <SpinnerIcon />
             <span className="thinking-shimmer">Working</span>
-            <span className="chat-thinking-stats">
+            <span className="font-normal">
               {formatElapsed(elapsedMs)}
               {tokens > 0 && ` · ${formatTokens(tokens)} tokens`}
             </span>
           </div>
         )}
-        {error && <div className="chat-error">{error}</div>}
+        {error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">{error}</div>
+        )}
       </div>
 
-      <div className="chat-composer">
-        {attachments.length > 0 && (
-          <AttachmentRow attachments={attachments} onRemove={removeAttachment} />
-        )}
-        {rejected && (
-          <div className="chat-attachment-error">
-            <span>{rejected.name}: {rejected.reason}</span>
-            <button type="button" onClick={() => setRejected(null)} aria-label="Dismiss"><XIcon size={12} /></button>
-          </div>
-        )}
+      {/* Composer card: rounded 14px, lifted off the panel (spec §6). */}
+      <div className="shrink-0 px-3 pb-3 pt-2.5">
+        <div className="flex flex-col gap-2 rounded-[14px] border border-input bg-background px-3 py-2.5 shadow-(--shadow-raise)">
+          {attachments.length > 0 && (
+            <AttachmentRow attachments={attachments} onRemove={removeAttachment} />
+          )}
+          {rejected && (
+            <div className="flex items-center justify-between gap-2 rounded-md bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
+              <span className="min-w-0 truncate">{rejected.name}: {rejected.reason}</span>
+              <button type="button" className="shrink-0 hover:opacity-70" onClick={() => setRejected(null)} aria-label="Dismiss"><XIcon size={12} /></button>
+            </div>
+          )}
         <textarea
           ref={textareaRef}
-          className="chat-input"
+          className="max-h-44 w-full resize-none bg-transparent font-chat text-[13px] leading-normal text-foreground outline-none placeholder:text-muted-2"
           value={input + (partialText ? (input && !input.endsWith(' ') ? ' ' : '') + partialText : '')}
           placeholder="Ask the agent…"
           onChange={(e) => { setInput(e.target.value); setPartialText(''); }}
@@ -1213,34 +1262,39 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           style={{ display: 'none' }}
           onChange={onFileInputChange}
         />
-        <div className="chat-composer-actions">
-          <button
-            type="button"
-            className="chat-attach-btn"
-            onClick={onPickFiles}
-            disabled={running}
-            title="Attach images or text files"
-            aria-label="Attach files"
-          ><PaperclipIcon size={14} /></button>
-          {voiceAvailable && (
+        {/* Attach + mic left, square accent send right (spec §6). */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1">
             <button
               type="button"
-              className="chat-voice-btn"
-              data-state={voiceRecording ? 'recording' : voiceConnecting ? 'connecting' : 'idle'}
-              onClick={voiceRecording ? stopVoice : startVoice}
-              disabled={running || voiceConnecting}
-              title={voiceRecording ? 'Stop recording' : voiceConnecting ? 'Connecting…' : 'Voice input'}
-              aria-label={voiceRecording ? 'Stop recording' : 'Start voice input'}
-            >
-              {voiceRecording
-                ? <VoiceBars volumeRef={voiceVolumeRef} isRecording={voiceRecording} />
-                : <MicIcon size={14} />}
-            </button>
-          )}
+              className="flex size-[26px] items-center justify-center rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              onClick={onPickFiles}
+              disabled={running}
+              title="Attach images or text files"
+              aria-label="Attach files"
+            ><PaperclipIcon size={15} /></button>
+            {voiceAvailable && (
+              <button
+                type="button"
+                className={cn(
+                  'flex h-[26px] min-w-[26px] items-center justify-center rounded-[7px] px-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40',
+                  voiceRecording && 'bg-destructive/10 text-destructive hover:bg-destructive/10 hover:text-destructive',
+                )}
+                onClick={voiceRecording ? stopVoice : startVoice}
+                disabled={running || voiceConnecting}
+                title={voiceRecording ? 'Stop recording' : voiceConnecting ? 'Connecting…' : 'Voice input'}
+                aria-label={voiceRecording ? 'Stop recording' : 'Start voice input'}
+              >
+                {voiceRecording
+                  ? <VoiceBars volumeRef={voiceVolumeRef} isRecording={voiceRecording} />
+                  : <MicIcon size={15} />}
+              </button>
+            )}
+          </div>
           {running ? (
             <button
               type="button"
-              className="chat-stop-btn"
+              className="flex size-[29px] items-center justify-center rounded-[9px] bg-foreground/80 text-background hover:bg-foreground"
               onClick={onStop}
               title="Stop"
               aria-label="Stop"
@@ -1248,13 +1302,14 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           ) : (
             <button
               type="button"
-              className="chat-send-btn"
+              className="flex size-[29px] items-center justify-center rounded-[9px] bg-primary text-primary-foreground hover:bg-primary-hover disabled:pointer-events-none disabled:opacity-40"
               onClick={onSend}
               disabled={(!input.trim() && !partialText.trim() && attachments.length === 0) || !workspacePath}
               title="Send"
               aria-label="Send"
             ><PlayIcon size={14} /></button>
           )}
+        </div>
         </div>
       </div>
     </div>

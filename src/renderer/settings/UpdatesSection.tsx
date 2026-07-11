@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 import { APP_NAME } from '../constants.js';
+import { SettingsSection } from './SectionUI';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 // Settings → General → Updates. Shows the running version and a manual
 // "Check for updates" button with inline feedback. Detection + the ambient
@@ -28,34 +31,25 @@ export default function UpdatesSection({ appUpdate }) {
   }
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">Updates</h2>
-      <p className="settings-section-desc">
-        {APP_NAME} checks for new versions automatically. You can also check now.
-      </p>
-
-      <div className="settings-field">
-        <span className="settings-field-label">Current version: {current ? `v${current}` : '—'}</span>
+    <SettingsSection
+      title="Updates"
+      description={`${APP_NAME} checks for new versions automatically. You can also check now.`}
+    >
+      <div className="text-[13px] text-foreground">
+        Current version: {current ? `v${current}` : '—'}
       </div>
 
-      <button
-        type="button"
-        className="settings-button settings-button-primary settings-update-check"
-        onClick={onCheck}
-        disabled={checking}
-      >
+      <Button size="sm" className="w-fit" onClick={onCheck} disabled={checking}>
         Check for updates
-      </button>
+      </Button>
 
       {result && (
-        <p
-          className="settings-field-hint"
-          style={status?.updateAvailable ? { color: 'var(--accent)' } : undefined}
-        >
+        <p className={cn('text-xs', status?.updateAvailable ? 'text-primary' : 'text-muted-foreground')}>
           {result}{' '}
           {status?.updateAvailable && status.url && (
             <a
               href="#"
+              className="underline underline-offset-4"
               onClick={(e) => { e.preventDefault(); window.api.openExternal(status.url); }}
             >
               View release
@@ -63,6 +57,6 @@ export default function UpdatesSection({ appUpdate }) {
           )}
         </p>
       )}
-    </div>
+    </SettingsSection>
   );
 }

@@ -1,6 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import Dialog from '../Dialog.jsx';
 import ErrorMessage from '../ErrorMessage.jsx';
+import { cn } from '@/lib/utils';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { Badge } from '@/components/ui/badge';
 
 // Per-workspace sync configuration dialog.
 //
@@ -10,10 +23,6 @@ import ErrorMessage from '../ErrorMessage.jsx';
 //   - Adopt a workspace the user already turned into a git repo themselves
 //
 // If already configured, shows the origin URL + a Disconnect action.
-//
-// Buttons + form fields use the same `dialog-button` / `settings-input` /
-// `settings-field` patterns as AgentSecretsSection so the surface matches
-// the rest of Settings.
 
 const MODES = {
   PICK: 'pick',
@@ -151,214 +160,217 @@ export default function WorkspaceSyncDialog({ open, workspace, syncPat, activeWo
   if (mode === MODES.CLONE) {
     footer = (
       <>
-        <button className="dialog-button" onClick={() => setMode(MODES.PICK)} disabled={busy}>Back</button>
-        <button
-          className="dialog-button dialog-button-primary"
-          onClick={onClone}
-          disabled={busy || !remoteUrl.trim()}
-        >
+        <Button variant="outline" onClick={() => setMode(MODES.PICK)} disabled={busy}>Back</Button>
+        <Button onClick={onClone} disabled={busy || !remoteUrl.trim()}>
           {busy ? 'Cloning…' : 'Clone'}
-        </button>
+        </Button>
       </>
     );
   } else if (mode === MODES.LINK) {
     footer = (
       <>
-        <button className="dialog-button" onClick={() => setMode(MODES.PICK)} disabled={busy}>Back</button>
-        <button
-          className="dialog-button dialog-button-primary"
-          onClick={onLink}
-          disabled={busy || !remoteUrl.trim()}
-        >
+        <Button variant="outline" onClick={() => setMode(MODES.PICK)} disabled={busy}>Back</Button>
+        <Button onClick={onLink} disabled={busy || !remoteUrl.trim()}>
           {busy ? 'Linking…' : 'Link'}
-        </button>
+        </Button>
       </>
     );
   } else if (mode === MODES.INIT) {
     footer = (
       <>
-        <button className="dialog-button" onClick={() => setMode(MODES.PICK)} disabled={busy}>Back</button>
-        <button
-          className="dialog-button dialog-button-primary"
-          onClick={onInit}
-          disabled={busy || !repoName.trim()}
-        >
+        <Button variant="outline" onClick={() => setMode(MODES.PICK)} disabled={busy}>Back</Button>
+        <Button onClick={onInit} disabled={busy || !repoName.trim()}>
           {busy ? 'Creating…' : 'Create repo'}
-        </button>
+        </Button>
       </>
     );
   } else {
-    footer = <button className="dialog-button" onClick={onClose} disabled={busy}>Close</button>;
+    footer = <Button variant="outline" onClick={onClose} disabled={busy}>Close</Button>;
   }
 
   return (
-    <Dialog
-      open={open}
-      onClose={busy ? () => {} : onClose}
-      title={`Sync — ${workspace.name}`}
-      footer={footer}
-    >
-      {!hasPat && (
-        <ErrorMessage>
-          No GitHub PAT configured. Set one in Settings → GitHub Sync first.
-        </ErrorMessage>
-      )}
+    <Dialog open={open} onOpenChange={(next) => { if (!next && !busy) onClose(); }}>
+      <DialogContent className="text-[13px]" showCloseButton={!busy}>
+        <DialogHeader>
+          <DialogTitle>Sync — {workspace.name}</DialogTitle>
+        </DialogHeader>
 
-      {status === null && hasPat && (
-        <p style={{ margin: 0 }}>Checking workspace…</p>
-      )}
-
-      {alreadyConfigured && (
-        <div className="settings-field">
-          <div className="settings-field-label">Connected to</div>
-          <code className="settings-input-mono" style={{ display: 'block', padding: '6px 8px', wordBreak: 'break-all' }}>
-            {status.originUrl}
-          </code>
-          {isUserDisabled ? (
-            <>
-              <p className="settings-field-hint" style={{ marginTop: 8 }}>
-                Sync is paused for this workspace. The remote is still wired up — re-enable to resume.
-              </p>
-              <button
-                className="dialog-button dialog-button-primary"
-                onClick={() => onToggleDisabled(false)}
-                disabled={busy}
-                style={{ marginTop: 12 }}
-              >
-                {busy ? 'Working…' : 'Re-enable GitHub sync'}
-              </button>
-            </>
-          ) : (
-            <button
-              className="dialog-button"
-              onClick={() => onToggleDisabled(true)}
-              disabled={busy}
-              style={{ marginTop: 12 }}
-            >
-              {busy ? 'Working…' : 'Disable GitHub sync'}
-            </button>
+        <div className="flex flex-col gap-3">
+          {!hasPat && (
+            <ErrorMessage>
+              No GitHub PAT configured. Set one in Settings → GitHub Sync first.
+            </ErrorMessage>
           )}
-        </div>
-      )}
 
-      {hasPat && status && !alreadyConfigured && mode === MODES.PICK && (
-        <div>
-          <p style={{ margin: '0 0 12px 0' }}>How would you like to set up sync for this workspace?</p>
-          <div className="sync-choice-list">
-            <button className="sync-choice" onClick={() => setMode(MODES.CLONE)} disabled={busy}>
-              <span className="sync-choice-title">Clone existing GitHub repo</span>
-              <span className="sync-choice-desc">Pull a repo from GitHub into this (empty) workspace folder.</span>
-            </button>
-            <button className="sync-choice" onClick={() => setMode(MODES.INIT)} disabled={busy}>
-              <span className="sync-choice-title">Create new GitHub repo</span>
-              <span className="sync-choice-desc">Make a new repo under your account and push these files to it.</span>
-            </button>
-            <button className="sync-choice" onClick={() => setMode(MODES.LINK)} disabled={busy}>
-              <span className="sync-choice-title">Link to existing GitHub repo</span>
-              <span className="sync-choice-desc">Attach this workspace to a repo you already have on GitHub. Your files stay; sync resumes on the next tick.</span>
-            </button>
-          </div>
-        </div>
-      )}
+          {status === null && hasPat && (
+            <p className="m-0 text-muted-foreground">Checking workspace…</p>
+          )}
 
-      {hasPat && (mode === MODES.CLONE || mode === MODES.LINK) && (
-        <div>
-          <p style={{ margin: '0 0 12px 0' }}>
-            {mode === MODES.CLONE
-              ? 'Clone a GitHub repo into this workspace. Folder must be empty.'
-              : 'Attach this workspace to an existing GitHub repo. Your files stay where they are; the next sync tick commits and pushes them.'}
-          </p>
-          <div className="settings-field">
-            <label className="settings-field-label" htmlFor="ws-clone-filter">Repository</label>
-            <input
-              id="ws-clone-filter"
-              className="settings-input"
-              type="text"
-              placeholder={reposLoading ? 'Loading repos…' : 'Filter by name, or paste a URL'}
-              value={repoFilter}
-              onChange={(e) => {
-                setRepoFilter(e.target.value);
-                setRemoteUrl(e.target.value);
-              }}
-              autoFocus
-              spellCheck={false}
-              autoComplete="off"
-            />
-            <div className="sync-repo-list" role="listbox" aria-label="Your repositories">
-              {reposLoading && (
-                <div className="sync-repo-empty">Loading repos…</div>
-              )}
-              {!reposLoading && reposError && (
-                <div className="sync-repo-empty">Couldn't load repos: {reposError}. Paste a URL above instead.</div>
-              )}
-              {!reposLoading && !reposError && repos && filteredRepos.length === 0 && (
-                <div className="sync-repo-empty">No matching repos.</div>
-              )}
-              {!reposLoading && !reposError && filteredRepos.map((r) => {
-                const selected = remoteUrl === r.clone_url;
-                return (
-                  <button
-                    key={r.full_name}
-                    type="button"
-                    role="option"
-                    aria-selected={selected}
-                    className={`sync-repo-item${selected ? ' is-selected' : ''}`}
-                    onClick={() => {
-                      setRemoteUrl(r.clone_url);
-                      setRepoFilter(r.full_name);
-                    }}
+          {alreadyConfigured && (
+            <Field>
+              <FieldLabel>Connected to</FieldLabel>
+              <code className="block break-all rounded-md border border-border bg-raise px-2 py-1.5 font-mono text-xs">
+                {status.originUrl}
+              </code>
+              {isUserDisabled ? (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Sync is paused for this workspace. The remote is still wired up — re-enable to resume.
+                  </p>
+                  <Button
+                    className="self-start"
+                    onClick={() => onToggleDisabled(false)}
+                    disabled={busy}
                   >
-                    <span className="sync-repo-name">{r.full_name}</span>
-                    {r.private && <span className="sync-repo-tag">Private</span>}
-                  </button>
-                );
-              })}
+                    {busy ? 'Working…' : 'Re-enable GitHub sync'}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  variant="outline"
+                  className="self-start"
+                  onClick={() => onToggleDisabled(true)}
+                  disabled={busy}
+                >
+                  {busy ? 'Working…' : 'Disable GitHub sync'}
+                </Button>
+              )}
+            </Field>
+          )}
+
+          {hasPat && status && !alreadyConfigured && mode === MODES.PICK && (
+            <div>
+              <p className="m-0 mb-3">How would you like to set up sync for this workspace?</p>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  className="flex flex-col gap-1 rounded-lg border border-border p-3 text-left hover:border-ring hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                  onClick={() => setMode(MODES.CLONE)}
+                  disabled={busy}
+                >
+                  <span className="text-[13px] font-medium">Clone existing GitHub repo</span>
+                  <span className="text-xs text-muted-foreground">Pull a repo from GitHub into this (empty) workspace folder.</span>
+                </button>
+                <button
+                  type="button"
+                  className="flex flex-col gap-1 rounded-lg border border-border p-3 text-left hover:border-ring hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                  onClick={() => setMode(MODES.INIT)}
+                  disabled={busy}
+                >
+                  <span className="text-[13px] font-medium">Create new GitHub repo</span>
+                  <span className="text-xs text-muted-foreground">Make a new repo under your account and push these files to it.</span>
+                </button>
+                <button
+                  type="button"
+                  className="flex flex-col gap-1 rounded-lg border border-border p-3 text-left hover:border-ring hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                  onClick={() => setMode(MODES.LINK)}
+                  disabled={busy}
+                >
+                  <span className="text-[13px] font-medium">Link to existing GitHub repo</span>
+                  <span className="text-xs text-muted-foreground">Attach this workspace to a repo you already have on GitHub. Your files stay; sync resumes on the next tick.</span>
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
 
-      {hasPat && mode === MODES.INIT && (
-        <div>
-          <p style={{ margin: '0 0 12px 0' }}>
-            Create a new repo under your GitHub account and push this workspace
-            to it. Existing files will be committed and pushed by the next sync tick.
-          </p>
-          <div className="settings-field">
-            <label className="settings-field-label" htmlFor="ws-repo-name">Repository name</label>
-            <input
-              id="ws-repo-name"
-              className="settings-input"
-              type="text"
-              placeholder="my-notes"
-              value={repoName}
-              onChange={(e) => setRepoName(e.target.value)}
-              autoFocus
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </div>
-          <div className="settings-field">
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}>
-              <input
-                type="checkbox"
-                checked={makePrivate}
-                onChange={(e) => setMakePrivate(e.target.checked)}
-              />
-              Private repository
-            </label>
-          </div>
-        </div>
-      )}
+          {hasPat && (mode === MODES.CLONE || mode === MODES.LINK) && (
+            <div>
+              <p className="m-0 mb-3">
+                {mode === MODES.CLONE
+                  ? 'Clone a GitHub repo into this workspace. Folder must be empty.'
+                  : 'Attach this workspace to an existing GitHub repo. Your files stay where they are; the next sync tick commits and pushes them.'}
+              </p>
+              <Field>
+                <FieldLabel htmlFor="ws-clone-filter">Repository</FieldLabel>
+                <Input
+                  id="ws-clone-filter"
+                  type="text"
+                  placeholder={reposLoading ? 'Loading repos…' : 'Filter by name, or paste a URL'}
+                  value={repoFilter}
+                  onChange={(e) => {
+                    setRepoFilter(e.target.value);
+                    setRemoteUrl(e.target.value);
+                  }}
+                  autoFocus
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <div
+                  className="max-h-56 overflow-y-auto rounded-md border border-border"
+                  role="listbox"
+                  aria-label="Your repositories"
+                >
+                  {reposLoading && (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">Loading repos…</div>
+                  )}
+                  {!reposLoading && reposError && (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">Couldn't load repos: {reposError}. Paste a URL above instead.</div>
+                  )}
+                  {!reposLoading && !reposError && repos && filteredRepos.length === 0 && (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">No matching repos.</div>
+                  )}
+                  {!reposLoading && !reposError && filteredRepos.map((r) => {
+                    const selected = remoteUrl === r.clone_url;
+                    return (
+                      <button
+                        key={r.full_name}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={cn(
+                          'flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-accent',
+                          selected && 'bg-selected text-selected-foreground',
+                        )}
+                        onClick={() => {
+                          setRemoteUrl(r.clone_url);
+                          setRepoFilter(r.full_name);
+                        }}
+                      >
+                        <span className="truncate font-mono text-xs">{r.full_name}</span>
+                        {r.private && <Badge variant="outline">Private</Badge>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
+            </div>
+          )}
 
-      {error && (
-        <div style={{ marginTop: 12 }}>
-          <ErrorMessage>{error}</ErrorMessage>
+          {hasPat && mode === MODES.INIT && (
+            <div className="flex flex-col gap-3">
+              <p className="m-0">
+                Create a new repo under your GitHub account and push this workspace
+                to it. Existing files will be committed and pushed by the next sync tick.
+              </p>
+              <Field>
+                <FieldLabel htmlFor="ws-repo-name">Repository name</FieldLabel>
+                <Input
+                  id="ws-repo-name"
+                  type="text"
+                  placeholder="my-notes"
+                  value={repoName}
+                  onChange={(e) => setRepoName(e.target.value)}
+                  autoFocus
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </Field>
+              <Label className="gap-2.5 text-[13px] font-normal">
+                <Checkbox
+                  checked={makePrivate}
+                  onCheckedChange={(v) => setMakePrivate(v === true)}
+                />
+                Private repository
+              </Label>
+            </div>
+          )}
+
+          {error && <ErrorMessage>{error}</ErrorMessage>}
+          {okMsg && <p className="m-0 text-xs text-success">{okMsg}</p>}
         </div>
-      )}
-      {okMsg && (
-        <p className="settings-field-hint" style={{ color: 'var(--accent)', marginTop: 12 }}>{okMsg}</p>
-      )}
+
+        <DialogFooter>{footer}</DialogFooter>
+      </DialogContent>
     </Dialog>
   );
 }

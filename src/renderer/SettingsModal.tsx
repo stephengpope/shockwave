@@ -1,6 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { SETTINGS_SECTIONS } from './constants.js';
-import { XIcon, CheckCircleIcon } from './Icons.jsx';
+import { CheckCircleIcon } from './Icons.jsx';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
 import WorkspacesSection from './settings/WorkspacesSection.jsx';
 import AppearanceSection from './settings/AppearanceSection.jsx';
 import AgentChatSection from './settings/AgentChatSection.jsx';
@@ -47,8 +55,8 @@ const DEFAULT_SECTION = SETTINGS_SECTIONS.APPEARANCE;
 // Per-workspace sections need an active workspace. Shown when none is open.
 function NoWorkspaceNote() {
   return (
-    <div className="settings-section">
-      <div className="settings-empty">Open a workspace to configure this.</div>
+    <div className="px-7 py-6 text-sm text-muted-foreground">
+      Open a workspace to configure this.
     </div>
   );
 }
@@ -94,22 +102,24 @@ export default function SettingsModal({
   const [active, setActive] = useState(initialSection || DEFAULT_SECTION);
 
   const activeWs = (workspaces || []).find((w) => w.id === activeWorkspaceId);
-  const workspaceLabel = activeWs ? `Workspace (${activeWs.name})` : 'Workspace';
+  const workspaceLabel = activeWs ? `Workspace · ${activeWs.name}` : 'Workspace';
   const NAV = buildNav(workspaceLabel);
 
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   return (
-    <div className="settings-backdrop" onClick={onClose}>
-      <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent className="flex h-[620px] max-h-[85vh] w-[780px] max-w-[92vw] gap-0 overflow-hidden p-0 sm:max-w-[780px]">
+        <DialogHeader className="sr-only">
+          <DialogTitle>Settings</DialogTitle>
+          <DialogDescription>Application settings</DialogDescription>
+        </DialogHeader>
         {saveStatus && saveStatus !== 'idle' && (
-          <div className="settings-save-status" data-status={saveStatus}>
+          <div
+            className={cn(
+              'absolute right-12 top-3.5 z-10 flex items-center gap-1.5 text-xs',
+              saveStatus === 'error' ? 'text-destructive' : 'text-muted-foreground',
+              saveStatus === 'saved' && 'text-success',
+            )}
+          >
             {saveStatus === 'saving' && <span>Saving…</span>}
             {saveStatus === 'error' && <span>Save failed</span>}
             {saveStatus === 'saved' && (
@@ -120,18 +130,28 @@ export default function SettingsModal({
             )}
           </div>
         )}
-        <button className="settings-close" onClick={onClose} aria-label="Close settings"><XIcon size={16} /></button>
-        <nav className="settings-nav">
+        <nav className="flex w-[216px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-sidebar p-2.5 pt-4">
           {NAV.map((row, idx) => {
             if (row.kind === 'header') {
               return (
-                <div key={`h-${idx}`} className="settings-nav-header">{row.label}</div>
+                <div
+                  key={`h-${idx}`}
+                  className={cn(
+                    'px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2',
+                    idx === 0 ? 'pt-1.5' : 'pt-4',
+                  )}
+                >
+                  {row.label}
+                </div>
               );
             }
             return (
               <button
                 key={row.id}
-                className={`settings-nav-item ${active === row.id ? 'active' : ''}`}
+                className={cn(
+                  'rounded-lg px-3 py-[7px] text-left text-[13px] text-foreground/75 hover:bg-accent',
+                  active === row.id && 'bg-selected font-medium text-selected-foreground hover:bg-selected',
+                )}
                 onClick={() => setActive(row.id)}
               >
                 {row.label}
@@ -139,7 +159,7 @@ export default function SettingsModal({
             );
           })}
         </nav>
-        <div className="settings-detail">
+        <div className="min-w-0 flex-1 overflow-y-auto">
           {active === SETTINGS_SECTIONS.APPEARANCE && (
             <AppearanceSection
               themeMode={themeMode}
@@ -236,7 +256,7 @@ export default function SettingsModal({
             />
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

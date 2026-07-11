@@ -1,8 +1,18 @@
 import React, { useEffect, useState } from 'react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import Dialog from '../Dialog.jsx';
 import ConfirmDialog from '../ConfirmDialog.jsx';
 import ErrorMessage from '../ErrorMessage.jsx';
-import { TrashIcon, PencilIcon } from '../Icons.jsx';
+import { SettingsSection } from './SectionUI';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group';
 
 function formatUpdated(ms) {
   if (!ms) return '';
@@ -55,23 +65,18 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
       title={editing ? `Edit ${editing.name}` : 'Add secret'}
       footer={
         <>
-          <button className="dialog-button" onClick={onClose}>Cancel</button>
-          <button
-            className="dialog-button dialog-button-primary"
-            onClick={submit}
-            disabled={!canSubmit}
-          >
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={submit} disabled={!canSubmit}>
             {editing ? 'Save' : 'Add'}
-          </button>
+          </Button>
         </>
       }
     >
-      <form onSubmit={submit}>
-        <div className="settings-field">
-          <label className="settings-field-label" htmlFor="secret-name">Name</label>
-          <input
+      <form onSubmit={submit} className="flex flex-col gap-4">
+        <Field>
+          <FieldLabel htmlFor="secret-name">Name</FieldLabel>
+          <Input
             id="secret-name"
-            className="settings-input"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -81,31 +86,30 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
             autoFocus
           />
           {duplicateName && (
-            <p className="settings-field-hint" style={{ color: 'var(--fg-error)' }}>
+            <p className="text-xs text-destructive">
               A secret with this name already exists.
             </p>
           )}
-        </div>
+        </Field>
 
-        <div className="settings-field">
-          <label className="settings-field-label" htmlFor="secret-description">Description</label>
-          <input
+        <Field>
+          <FieldLabel htmlFor="secret-description">Description</FieldLabel>
+          <Input
             id="secret-description"
-            className="settings-input"
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Optional — what this token is for"
             autoComplete="off"
           />
-        </div>
+        </Field>
 
-        <div className="settings-field">
-          <label className="settings-field-label" htmlFor="secret-token">Token</label>
-          <div className="settings-input-row">
-            <input
+        <Field>
+          <FieldLabel htmlFor="secret-token">Token</FieldLabel>
+          <InputGroup>
+            <InputGroupInput
               id="secret-token"
-              className="settings-input"
+              className="font-mono"
               type={showToken ? 'text' : 'password'}
               value={token}
               onChange={(e) => setToken(e.target.value)}
@@ -113,21 +117,19 @@ function SecretFormDialog({ open, editing, secrets, onSubmit, onClose }) {
               autoComplete="off"
               autoCorrect="off"
             />
-            <button
-              type="button"
-              className="settings-input-toggle"
-              onClick={() => setShowToken((v) => !v)}
-            >
-              {showToken ? 'Hide' : 'Show'}
-            </button>
-          </div>
-        </div>
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton onClick={() => setShowToken((v) => !v)}>
+                {showToken ? 'Hide' : 'Show'}
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+        </Field>
 
         {error && <ErrorMessage>{error}</ErrorMessage>}
 
         {/* Submit button rendered in dialog footer; this hidden submit lets
             Enter in the form fire the same submit handler. */}
-        <button type="submit" style={{ display: 'none' }} aria-hidden tabIndex={-1} />
+        <button type="submit" className="hidden" aria-hidden tabIndex={-1} />
       </form>
     </Dialog>
   );
@@ -164,25 +166,24 @@ export default function AgentSecretsSection({ secrets, onChange }) {
   };
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">API Secrets</h2>
-      <p className="settings-section-desc">
-        Store API tokens (GitHub, Linear, etc.) for the coding agent. Tokens are encrypted on
-        this machine using your OS keychain. Names must be unique.
-      </p>
-
-      <button className="workspace-add" onClick={() => setDialogTarget({})}>
-        + Add secret
-      </button>
+    <SettingsSection
+      wide
+      title="API Secrets"
+      description="Store API tokens (GitHub, Linear, etc.) for the coding agent. Tokens are encrypted on this machine using your OS keychain. Names must be unique."
+    >
+      <Button variant="outline" size="sm" className="w-fit" onClick={() => setDialogTarget({})}>
+        <Plus />
+        Add secret
+      </Button>
 
       {(!secrets || secrets.length === 0) ? (
-        <div className="settings-empty">No secrets yet.</div>
+        <div className="text-[13px] text-muted-foreground">No secrets yet.</div>
       ) : (
-        <ul className="workspace-list">
+        <ul className="flex flex-col gap-2">
           {secrets.map((s) => (
             <li
               key={s.name}
-              className="workspace-row"
+              className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-muted/50"
               role="button"
               tabIndex={0}
               onClick={() => setDialogTarget(s)}
@@ -192,32 +193,33 @@ export default function AgentSecretsSection({ secrets, onChange }) {
                   setDialogTarget(s);
                 }
               }}
-              style={{ cursor: 'pointer' }}
             >
-              <div className="workspace-meta">
-                <div className="workspace-name">{s.name}</div>
+              <div className="min-w-0">
+                <div className="text-[13px] font-medium text-foreground">{s.name}</div>
                 {s.description && (
-                  <div className="workspace-path" title={s.description}>{s.description}</div>
+                  <div className="truncate text-xs text-muted-foreground" title={s.description}>{s.description}</div>
                 )}
-                <div className="workspace-path">Updated {formatUpdated(s.updatedAt)}</div>
+                <div className="text-xs text-muted-foreground">Updated {formatUpdated(s.updatedAt)}</div>
               </div>
-              <div className="workspace-actions" onClick={(e) => e.stopPropagation()}>
-                <button
-                  className="icon-btn"
+              <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
                   onClick={() => setDialogTarget(s)}
                   title={`Edit ${s.name}`}
                   aria-label={`Edit ${s.name}`}
                 >
-                  <PencilIcon size={14} />
-                </button>
-                <button
-                  className="icon-btn"
+                  <Pencil className="size-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
                   onClick={() => setConfirmDelete(s.name)}
                   title={`Delete ${s.name}`}
                   aria-label={`Delete ${s.name}`}
                 >
-                  <TrashIcon size={14} />
-                </button>
+                  <Trash2 className="size-3.5" />
+                </Button>
               </div>
             </li>
           ))}
@@ -241,6 +243,6 @@ export default function AgentSecretsSection({ secrets, onChange }) {
         onConfirm={() => onDelete(confirmDelete)}
         onClose={() => setConfirmDelete(null)}
       />
-    </div>
+    </SettingsSection>
   );
 }

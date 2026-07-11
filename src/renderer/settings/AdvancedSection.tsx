@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { SettingsSection, SettingsGroup } from './SectionUI';
+import { Button } from '@/components/ui/button';
 
 // Maintenance actions that don't belong to any one feature section.
 //
@@ -29,42 +31,40 @@ export default function AdvancedSection({ hasWorkspace, onRebuildCache }) {
   };
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">Advanced</h2>
-      <p className="settings-section-desc">
-        Maintenance actions for this workspace. You shouldn't normally need these.
-      </p>
+    <SettingsSection
+      title="Advanced"
+      description="Maintenance actions for this workspace. You shouldn't normally need these."
+    >
+      <SettingsGroup title="Link cache">
+        <p className="text-xs text-muted-foreground">
+          The link index (wiki-links, backlinks, graph) is cached per file and
+          re-parses only what changed on each launch. Rebuild it if links,
+          backlinks, or the graph ever look out of sync with your files.
+        </p>
 
-      <h3 className="settings-subsection-title">Link cache</h3>
-      <p className="settings-tab-intro">
-        The link index (wiki-links, backlinks, graph) is cached per file and
-        re-parses only what changed on each launch. Rebuild it if links,
-        backlinks, or the graph ever look out of sync with your files.
-      </p>
-
-      <div className="settings-field">
-        <button
-          type="button"
-          className="settings-button"
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-fit"
           onClick={onClick}
           disabled={!hasWorkspace || state === 'running'}
         >
           {state === 'running' ? 'Rebuilding…' : 'Rebuild link cache'}
-        </button>
+        </Button>
         {!hasWorkspace && (
-          <p className="settings-field-hint">Open a workspace first.</p>
+          <p className="text-xs text-muted-foreground">Open a workspace first.</p>
         )}
         {state === 'done' && (
-          <p className="settings-field-hint" style={{ color: 'var(--accent)' }}>
+          <p className="text-xs text-primary">
             Rebuilt — re-parsed {count} file{count === 1 ? '' : 's'}.
           </p>
         )}
         {state === 'error' && (
-          <p className="settings-field-hint" style={{ color: 'var(--fg-error)' }}>
+          <p className="text-xs text-destructive">
             Rebuild failed. Check the logs.
           </p>
         )}
-      </div>
-    </div>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

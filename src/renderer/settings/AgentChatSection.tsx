@@ -1,6 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import Combobox from '../Combobox.jsx';
 import { DEFAULT_PROVIDER_SLUG } from '../constants.js';
+import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group';
 
 // Our generic OpenAI-compatible endpoint slug (Ollama, LM Studio, vLLM, gateways).
 const COMPATIBLE_SLUG = 'openai-compatible';
@@ -95,25 +111,31 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
 
   return (
     <>
-      <div className="settings-field">
-        <label className="settings-field-label" htmlFor={`${idPrefix}-provider`}>Provider</label>
-        <Combobox
-          id={`${idPrefix}-provider`}
-          options={providers}
+      <Field>
+        <FieldLabel htmlFor={`${idPrefix}-provider`}>Provider</FieldLabel>
+        <Select
           value={provider}
           // Switching providers invalidates the model AND the endpoint — clear
           // both so a stale openai-compatible baseUrl doesn't bleed across.
-          onChange={(next) => onChange({ provider: next, model: '', baseUrl: '' })}
-          freeForm={false}
-        />
-      </div>
+          onValueChange={(next) => onChange({ provider: next, model: '', baseUrl: '' })}
+        >
+          <SelectTrigger id={`${idPrefix}-provider`} className="w-full">
+            <SelectValue>{provider || undefined}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {providers.map((p) => (
+              <SelectItem key={p} value={p}>{p}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
 
       {isCompatible && (
-        <div className="settings-field">
-          <label className="settings-field-label" htmlFor={`${idPrefix}-base-url`}>Base URL</label>
-          <input
+        <Field>
+          <FieldLabel htmlFor={`${idPrefix}-base-url`}>Base URL</FieldLabel>
+          <Input
             id={`${idPrefix}-base-url`}
-            className="settings-input settings-input-mono"
+            className="font-mono"
             type="text"
             value={baseUrl ?? ''}
             placeholder="http://localhost:11434/v1"
@@ -122,79 +144,95 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
             autoComplete="off"
             autoCorrect="off"
           />
-          <p className="settings-field-hint">
+          <FieldDescription className="text-xs">
             Ollama: http://localhost:11434/v1<br />
             LM Studio: http://localhost:1234/v1
-          </p>
-        </div>
+          </FieldDescription>
+        </Field>
       )}
 
-      <div className="settings-field">
-        <label className="settings-field-label" htmlFor={`${idPrefix}-model`}>Model</label>
-        <Combobox
-          id={`${idPrefix}-model`}
-          options={models}
-          value={model}
-          onChange={(next) => onChange({ model: next })}
-          // Built-in providers: validated dropdown — you can filter by typing but
-          // can only commit a real catalog model, so a nonexistent id can't be
-          // saved. openai-compatible has no catalog (local/custom endpoints), so
-          // it stays free-form (type the id yourself; Test populates the list).
-          freeForm={isCompatible}
-        />
+      <Field>
+        <FieldLabel htmlFor={`${idPrefix}-model`}>Model</FieldLabel>
+        {/* Built-in providers: validated dropdown — only a real catalog model
+            can be committed, so a nonexistent id can't be saved.
+            openai-compatible has no catalog (local/custom endpoints), so it
+            stays a free-form combobox (type the id yourself; Test populates
+            the suggestion list). */}
+        {isCompatible ? (
+          <Combobox
+            id={`${idPrefix}-model`}
+            options={models}
+            value={model}
+            onChange={(next) => onChange({ model: next })}
+            freeForm
+          />
+        ) : (
+          <Select value={model} onValueChange={(next) => onChange({ model: next })}>
+            <SelectTrigger id={`${idPrefix}-model`} className="w-full">
+              <SelectValue placeholder={model || undefined}>{model || undefined}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {models.map((m) => (
+                <SelectItem key={m} value={m}>{m}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         {/* Surface a saved model that isn't in the current catalog (e.g. a stale
             or mistyped id from before validation) so it's obvious it won't run. */}
         {!isCompatible && model && models.length > 0 && !models.includes(model) && (
-          <p className="settings-field-hint" style={{ color: 'var(--fg-error)' }}>
+          <p className="text-xs text-destructive">
             “{model}” isn’t in {provider}’s catalog — pick a model from the list.
           </p>
         )}
-      </div>
+      </Field>
 
       {isCompatible && (
-        <div className="settings-field">
-          <label className="settings-field-label" htmlFor={`${idPrefix}-ctx`}>Context window</label>
-          <input
+        <Field>
+          <FieldLabel htmlFor={`${idPrefix}-ctx`}>Context window</FieldLabel>
+          <Input
             id={`${idPrefix}-ctx`}
-            className="settings-input"
             type="number"
             min={1}
             value={contextWindow ?? ''}
             placeholder="128000"
             onChange={(e) => onChange({ contextWindow: e.target.value ? Number(e.target.value) : undefined })}
           />
-          <p className="settings-field-hint">Tokens the model can hold. Leave blank for 128000.</p>
-        </div>
+          <FieldDescription className="text-xs">Tokens the model can hold. Leave blank for 128000.</FieldDescription>
+        </Field>
       )}
 
       {thinkingLevels.length > 1 && (
-        <div className="settings-field">
-          <label className="settings-field-label" htmlFor={`${idPrefix}-thinking`}>Reasoning</label>
-          <select
-            id={`${idPrefix}-thinking`}
-            className="settings-input"
+        <Field>
+          <FieldLabel htmlFor={`${idPrefix}-thinking`}>Reasoning</FieldLabel>
+          <Select
             value={thinkingLevel ?? 'off'}
-            onChange={(e) => onChange({ thinkingLevel: e.target.value })}
+            onValueChange={(next) => onChange({ thinkingLevel: next })}
           >
-            {thinkingLevels.map((l) => (
-              <option key={l} value={l}>{THINKING_LABELS[l] ?? l}</option>
-            ))}
-          </select>
-          <p className="settings-field-hint">
+            <SelectTrigger id={`${idPrefix}-thinking`} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {thinkingLevels.map((l) => (
+                <SelectItem key={l} value={l}>{THINKING_LABELS[l] ?? l}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <FieldDescription className="text-xs">
             Extended thinking before each reply. Higher = more reasoning, more tokens and latency.
             Streamed live in the chat sidebar.
-          </p>
-        </div>
+          </FieldDescription>
+        </Field>
       )}
 
-      <div className="settings-field">
-        <label className="settings-field-label" htmlFor={`${idPrefix}-key`}>
+      <Field>
+        <FieldLabel htmlFor={`${idPrefix}-key`}>
           API key{isCompatible ? ' (optional for local)' : ''}
-        </label>
-        <div className="settings-input-row">
-          <input
+        </FieldLabel>
+        <InputGroup>
+          <InputGroupInput
             id={`${idPrefix}-key`}
-            className="settings-input"
+            className="font-mono"
             type={showKey ? 'text' : 'password'}
             value={apiKey}
             onChange={(e) => onKeyChange(e.target.value)}
@@ -202,38 +240,31 @@ function ProviderModelKey({ idPrefix, provider, model, apiKey, baseUrl, contextW
             autoComplete="off"
             autoCorrect="off"
           />
-          <button
-            type="button"
-            className="settings-input-toggle"
-            onClick={() => setShowKey((v) => !v)}
-          >
-            {showKey ? 'Hide' : 'Show'}
-          </button>
-          {/* Test is openai-compatible only: it probes {baseUrl}/models, which is
-              uniform for OpenAI-style endpoints. Cloud providers have non-uniform
-              /models paths + auth, and pi already supplies their model lists, so
-              their keys just validate on first message. */}
-          {isCompatible && (
-            <button
-              type="button"
-              className="settings-input-toggle"
-              onClick={handleValidate}
-              disabled={validateState === 'loading' || !baseUrl}
-              title="Test connection (GET /models)"
-            >
-              {validateLabel}
-            </button>
-          )}
-        </div>
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton onClick={() => setShowKey((v) => !v)}>
+              {showKey ? 'Hide' : 'Show'}
+            </InputGroupButton>
+            {/* Test is openai-compatible only: it probes {baseUrl}/models, which is
+                uniform for OpenAI-style endpoints. Cloud providers have non-uniform
+                /models paths + auth, and pi already supplies their model lists, so
+                their keys just validate on first message. */}
+            {isCompatible && (
+              <InputGroupButton
+                onClick={handleValidate}
+                disabled={validateState === 'loading' || !baseUrl}
+                title="Test connection (GET /models)"
+              >
+                {validateLabel}
+              </InputGroupButton>
+            )}
+          </InputGroupAddon>
+        </InputGroup>
         {isCompatible && validateMsg && (
-          <p
-            className="settings-field-hint"
-            style={{ color: validateState === 'error' ? 'var(--fg-error)' : 'var(--accent)' }}
-          >
+          <p className={validateState === 'error' ? 'text-xs text-destructive' : 'text-xs text-success'}>
             {validateMsg}
           </p>
         )}
-      </div>
+      </Field>
     </>
   );
 }
@@ -260,33 +291,35 @@ export default function AgentChatSection({ codingAgent, onCodingAgentChange }) {
   const updateKey = (value) => updateCa({ providerKeys: { ...caProviderKeys, [caProvider]: value } });
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">Agent Chat</h2>
-      <p className="settings-section-desc">
-        The chat sidebar agent can read, edit, and run commands inside your active workspace.
-        API keys are encrypted on this machine using your OS keychain.
-      </p>
+    <SettingsSection
+      title="Agent Chat"
+      description="The chat sidebar agent can read, edit, and run commands inside your active workspace. API keys are encrypted on this machine using your OS keychain."
+    >
+      <SettingsGroup title="LLM">
+        <ProviderModelKey
+          idPrefix="coding-agent"
+          provider={caProvider}
+          model={caModel}
+          apiKey={caApiKey}
+          baseUrl={caBaseUrl}
+          contextWindow={caContextWindow}
+          thinkingLevel={caThinkingLevel}
+          onChange={updateCa}
+          onKeyChange={updateKey}
+        />
+      </SettingsGroup>
 
-      <h3 className="settings-subsection-title">LLM</h3>
-      <ProviderModelKey
-        idPrefix="coding-agent"
-        provider={caProvider}
-        model={caModel}
-        apiKey={caApiKey}
-        baseUrl={caBaseUrl}
-        contextWindow={caContextWindow}
-        thinkingLevel={caThinkingLevel}
-        onChange={updateCa}
-        onKeyChange={updateKey}
-      />
+      <SettingsDivider />
 
-      <h3 className="settings-subsection-title">System Prompt</h3>
-      <p className="settings-tab-intro">
-        The agent's instructions are assembled automatically from your workspace's{' '}
-        <code>SOUL.md</code> (its role and voice — edit it like any file, or leave it out for the
-        built-in default) plus Shockwave's internal helper. Per-project notes go in{' '}
-        <code>AGENTS.md</code> at your workspace root.
-      </p>
-    </div>
+      <SettingsGroup title="System Prompt">
+        <p className="text-[13px] text-muted-foreground">
+          The agent's instructions are assembled automatically from your workspace's{' '}
+          <code className="font-mono text-xs">SOUL.md</code> (its role and voice — edit it like any
+          file, or leave it out for the built-in default) plus Shockwave's internal helper.
+          Per-project notes go in <code className="font-mono text-xs">AGENTS.md</code> at your
+          workspace root.
+        </p>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

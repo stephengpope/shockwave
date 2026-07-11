@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 
 // Collect every folder path relative to the workspace root, sorted.
 // '/' (root) is included as the first option.
@@ -84,12 +86,11 @@ export default function FolderCombobox({
   const activeOption = toDisplay(value);
 
   return (
-    <div className="folder-combobox" ref={rootRef}>
-      <input
+    <div className="relative" ref={rootRef}>
+      <Input
         ref={inputRef}
         id={id}
         type="text"
-        className="settings-input"
         value={draft}
         placeholder={placeholder}
         onFocus={() => setOpen(true)}
@@ -97,13 +98,19 @@ export default function FolderCombobox({
         onKeyDown={onKeyDown}
       />
       {open && filtered.length > 0 && (
-        <ul className="folder-combobox-menu" role="listbox">
+        <ul
+          className="absolute z-50 mt-1 max-h-56 w-full overflow-auto rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+          role="listbox"
+        >
           {filtered.map((f) => (
             <li
               key={f}
               role="option"
               aria-selected={f === activeOption}
-              className={`folder-combobox-item ${f === activeOption ? 'is-active' : ''}`}
+              className={cn(
+                'cursor-pointer rounded-sm px-2 py-1.5 text-[13px] hover:bg-accent',
+                f === activeOption && 'bg-accent font-medium'
+              )}
               onMouseDown={(e) => { e.preventDefault(); pick(f); }}
             >
               {f}

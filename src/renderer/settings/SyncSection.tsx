@@ -1,4 +1,10 @@
 import React, { useEffect, useState } from 'react';
+import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group';
+import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
+import ErrorMessage from '../ErrorMessage.jsx';
 
 // GitHub sync settings.
 //   1. PAT — encrypted on disk via OS keychain (main, safeStorage). Shown
@@ -84,8 +90,8 @@ export default function SyncSection({ sync, onSyncChange }) {
     if (verifyState.status !== 'idle') setVerifyState({ status: 'idle' });
   };
 
-  const onIntervalChange = (e) => {
-    const n = Number.parseInt(e.target.value, 10);
+  const onIntervalChange = (values) => {
+    const n = Number.parseInt(values?.[0], 10);
     if (!Number.isFinite(n)) return;
     const clamped = Math.max(MIN_INTERVAL, Math.min(MAX_INTERVAL, n));
     update({ pullIntervalSeconds: clamped });
@@ -94,109 +100,108 @@ export default function SyncSection({ sync, onSyncChange }) {
   const install = INSTALL_INSTRUCTIONS[gitState.platform] || INSTALL_INSTRUCTIONS.linux;
 
   return (
-    <div className="settings-section">
-      <h2 className="settings-section-title">GitHub Sync</h2>
-      <p className="settings-section-desc">
-        Sync each workspace to its own GitHub repository. Create a fine-grained
-        Personal Access Token at{' '}
-        <a
-          href="#"
-          onClick={(e) => { e.preventDefault(); window.api.openExternal('https://github.com/settings/tokens?type=beta'); }}
-        >github.com/settings/tokens</a>
-        {' '}with <code>Contents: Read and write</code> on the repos you want
-        to sync. The token is encrypted on this machine using your OS keychain.
-      </p>
+    <SettingsSection
+      title="GitHub Sync"
+      description={(
+        <>
+          Sync each workspace to its own GitHub repository. Create a fine-grained
+          Personal Access Token at{' '}
+          <a
+            href="#"
+            className="text-primary hover:underline"
+            onClick={(e) => { e.preventDefault(); window.api.openExternal('https://github.com/settings/tokens?type=beta'); }}
+          >github.com/settings/tokens</a>
+          {' '}with <code className="font-mono text-xs">Contents: Read and write</code> on the repos you want
+          to sync. The token is encrypted on this machine using your OS keychain.
+        </>
+      )}
+    >
+      <SettingsGroup title="Authentication">
+        <Field>
+          <FieldLabel htmlFor="sync-pat">GitHub Personal Access Token</FieldLabel>
+          <div className="flex gap-2">
+            <InputGroup className="flex-1">
+              <InputGroupInput
+                id="sync-pat"
+                type={showPat ? 'text' : 'password'}
+                className="font-mono text-[13px]"
+                value={pat}
+                onChange={onPatChange}
+                spellCheck={false}
+                autoComplete="off"
+                autoCorrect="off"
+                placeholder="github_pat_…"
+              />
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton onClick={() => setShowPat((v) => !v)}>
+                  {showPat ? 'Hide' : 'Show'}
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+            <Button
+              variant="outline"
+              onClick={onVerify}
+              disabled={!pat || verifyState.status === 'checking'}
+            >
+              {verifyState.status === 'checking' ? 'Verifying…' : 'Verify'}
+            </Button>
+          </div>
+          {verifyState.status === 'ok' && (
+            <p className="text-xs text-success">
+              ✓ Signed in as <strong>{verifyState.login}</strong>
+              {verifyState.name ? ` (${verifyState.name})` : ''}
+            </p>
+          )}
+          {verifyState.status === 'error' && (
+            <ErrorMessage>{verifyState.error}</ErrorMessage>
+          )}
+        </Field>
+      </SettingsGroup>
 
-      <div className="settings-field">
-        <label className="settings-field-label" htmlFor="sync-pat">GitHub Personal Access Token</label>
-        <div className="settings-input-row">
-          <input
-            id="sync-pat"
-            className="settings-input"
-            type={showPat ? 'text' : 'password'}
-            value={pat}
-            onChange={onPatChange}
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            placeholder="github_pat_…"
+      <SettingsDivider />
+
+      <SettingsGroup title="Sync engine">
+        <Field>
+          <div className="flex items-center justify-between">
+            <FieldLabel htmlFor="sync-interval">Pull interval</FieldLabel>
+            <span className="text-xs text-muted-foreground">{interval}s</span>
+          </div>
+          <Slider
+            id="sync-interval"
+            min={MIN_INTERVAL}
+            max={MAX_INTERVAL}
+            step={1}
+            value={[interval]}
+            onValueChange={onIntervalChange}
           />
-          <button
-            type="button"
-            className="settings-input-toggle"
-            onClick={() => setShowPat((v) => !v)}
-          >
-            {showPat ? 'Hide' : 'Show'}
-          </button>
-          <button
-            type="button"
-            className="settings-button"
-            onClick={onVerify}
-            disabled={!pat || verifyState.status === 'checking'}
-          >
-            {verifyState.status === 'checking' ? 'Verifying…' : 'Verify'}
-          </button>
-        </div>
-        {verifyState.status === 'ok' && (
-          <p className="settings-field-hint" style={{ color: 'var(--fg-success, #2a9d4a)' }}>
-            ✓ Signed in as <strong>{verifyState.login}</strong>
-            {verifyState.name ? ` (${verifyState.name})` : ''}
-          </p>
-        )}
-        {verifyState.status === 'error' && (
-          <p className="settings-field-hint" style={{ color: 'var(--fg-error)' }}>
-            {verifyState.error}
-          </p>
-        )}
-      </div>
+          <FieldDescription className="text-xs">
+            How often each synced workspace tries to pull and push.
+            Min {MIN_INTERVAL}s, max {MAX_INTERVAL}s.
+          </FieldDescription>
+        </Field>
+      </SettingsGroup>
 
-      <div className="settings-field">
-        <label className="settings-field-label" htmlFor="sync-interval">
-          Pull interval (seconds)
-        </label>
-        <input
-          id="sync-interval"
-          className="settings-input"
-          type="number"
-          min={MIN_INTERVAL}
-          max={MAX_INTERVAL}
-          value={interval}
-          onChange={onIntervalChange}
-          style={{ width: 120 }}
-        />
-        <p className="settings-field-hint">
-          How often each synced workspace tries to pull and push.
-          Min {MIN_INTERVAL}s, max {MAX_INTERVAL}s.
-        </p>
-      </div>
+      <SettingsDivider />
 
-      <h3 className="settings-subsection-title" style={{ marginTop: 24 }}>System</h3>
-      {gitState.status === 'checking' && (
-        <p className="settings-field-hint">Checking for git…</p>
-      )}
-      {gitState.status === 'ok' && (
-        <p className="settings-field-hint" style={{ color: 'var(--fg-success, #2a9d4a)' }}>
-          ✓ {gitState.version}
-        </p>
-      )}
-      {gitState.status === 'missing' && (
-        <div className="settings-field" style={{ marginTop: 8 }}>
-          <p className="settings-field-hint" style={{ color: 'var(--fg-error)' }}>
-            git not found on PATH. Sync requires git to be installed.
-          </p>
-          <p className="settings-field-hint" style={{ marginTop: 8 }}>
-            <strong>{install.label}:</strong> {install.body}
-          </p>
-          <pre style={{
-            background: 'var(--bg-elevated, #f5f5f5)',
-            padding: '8px 12px',
-            borderRadius: 4,
-            fontSize: 12,
-            margin: '4px 0 0',
-            whiteSpace: 'pre-wrap',
-          }}>{install.cmd}</pre>
-        </div>
-      )}
-    </div>
+      <SettingsGroup title="System">
+        {gitState.status === 'checking' && (
+          <p className="text-xs text-muted-foreground">Checking for git…</p>
+        )}
+        {gitState.status === 'ok' && (
+          <p className="text-xs text-success">✓ {gitState.version}</p>
+        )}
+        {gitState.status === 'missing' && (
+          <div className="flex flex-col gap-2">
+            <ErrorMessage>
+              git not found on PATH. Sync requires git to be installed.
+            </ErrorMessage>
+            <p className="text-xs text-muted-foreground">
+              <strong>{install.label}:</strong> {install.body}
+            </p>
+            <pre className="m-0 rounded-md bg-raise px-3 py-2 font-mono text-xs whitespace-pre-wrap">{install.cmd}</pre>
+          </div>
+        )}
+      </SettingsGroup>
+    </SettingsSection>
   );
 }
