@@ -1661,10 +1661,13 @@ export default function App() {
           return (
             <button
               type="button"
-              className="update-pill"
+              // Soft status pill, not a CTA (polish spec §5). Anchored to the
+              // editor pane's top-right, below the tab strip.
+              className="absolute right-3 top-[42px] z-20 inline-flex items-center gap-1.5 rounded-full border border-success/20 bg-success-soft px-2.5 py-1 text-[11.5px] font-medium text-success hover:brightness-95"
               onClick={() => window.api.openExternal(u.url!)}
               title={`Version ${u.latest} is available — you're on ${u.current}. Click to view the release.`}
             >
+              <span className="size-1.5 rounded-full bg-success" />
               Update available
             </button>
           );

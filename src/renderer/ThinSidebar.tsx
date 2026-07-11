@@ -1,5 +1,20 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React from 'react';
 import { PageIcon, FolderIcon, GraphIcon, CalendarIcon, TemplateIcon } from './Icons.jsx';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { cn } from '@/lib/utils';
+
+// 34px icon buttons on the chrome-colored rail (polish spec §4/§8).
+const railBtn = cn(
+  'flex size-[34px] items-center justify-center rounded-lg text-muted-foreground',
+  'hover:bg-accent hover:text-foreground',
+  'disabled:pointer-events-none disabled:opacity-40',
+);
+const railBtnActive = 'bg-selected text-primary hover:bg-selected hover:text-primary';
 
 export default function ThinSidebar({
   onNewFile,
@@ -18,28 +33,10 @@ export default function ThinSidebar({
   // interaction triggers a render. Acceptable for a glyph.
   const todayDay = new Date().getDate();
 
-  const tplWrapRef = useRef<any>(null);
-  const [tplOpen, setTplOpen] = useState(false);
-
-  // Close the template popover on outside click / Escape.
-  useEffect(() => {
-    if (!tplOpen) return;
-    const onDown = (e) => {
-      if (tplWrapRef.current && !tplWrapRef.current.contains(e.target)) setTplOpen(false);
-    };
-    const onKey = (e) => { if (e.key === 'Escape') setTplOpen(false); };
-    window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [tplOpen]);
-
   return (
-    <div className="thin-sidebar">
+    <div className="flex flex-col items-center gap-[3px] border-r border-border bg-chrome pt-3">
       <button
-        className="thin-sidebar-btn"
+        className={railBtn}
         onClick={onNewFile}
         disabled={disabled}
         title="New file"
@@ -48,7 +45,7 @@ export default function ThinSidebar({
         <PageIcon />
       </button>
       <button
-        className="thin-sidebar-btn"
+        className={railBtn}
         onClick={onOpenJournal}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -62,7 +59,7 @@ export default function ThinSidebar({
         <CalendarIcon day={todayDay} />
       </button>
       <button
-        className="thin-sidebar-btn"
+        className={railBtn}
         onClick={onNewFolder}
         disabled={disabled}
         title="New folder"
@@ -70,43 +67,33 @@ export default function ThinSidebar({
       >
         <FolderIcon />
       </button>
-      <div className="thin-sidebar-tpl" ref={tplWrapRef}>
-        <button
-          className={`thin-sidebar-btn ${tplOpen ? 'active' : ''}`}
-          onClick={() => setTplOpen((v) => !v)}
-          disabled={disabled}
-          title="Insert template"
-          aria-label="Insert template"
-          aria-haspopup="listbox"
-          aria-expanded={tplOpen}
-        >
-          <TemplateIcon />
-        </button>
-        {tplOpen && !disabled && (
-          <ul className="template-picker" role="listbox">
-            {templates.length === 0 ? (
-              <li className="template-picker-empty">No templates — set a folder in Settings → Templates</li>
-            ) : (
-              templates.map((t) => (
-                <li
-                  key={t.path}
-                  role="option"
-                  className="template-picker-item"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    setTplOpen(false);
-                    onPickTemplate?.(t.path);
-                  }}
-                >
-                  {t.name}
-                </li>
-              ))
-            )}
-          </ul>
-        )}
-      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            className={cn(railBtn, 'data-[state=open]:bg-selected data-[state=open]:text-primary')}
+            disabled={disabled}
+            title="Insert template"
+            aria-label="Insert template"
+          >
+            <TemplateIcon />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="right" align="start">
+          {templates.length === 0 ? (
+            <div className="max-w-56 px-2 py-1.5 text-xs text-muted-foreground">
+              No templates — set a folder in Settings → Templates
+            </div>
+          ) : (
+            templates.map((t) => (
+              <DropdownMenuItem key={t.path} onSelect={() => onPickTemplate?.(t.path)}>
+                {t.name}
+              </DropdownMenuItem>
+            ))
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <button
-        className={`thin-sidebar-btn ${graphMode ? 'active' : ''}`}
+        className={cn(railBtn, graphMode && railBtnActive)}
         onClick={onToggleGraph}
         disabled={disabled}
         title={graphMode ? 'Back to editor' : 'Graph view'}

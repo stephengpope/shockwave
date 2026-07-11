@@ -1,8 +1,25 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Tree } from 'react-arborist';
+import { ChevronDown, ChevronRight, FileText, Folder } from 'lucide-react';
 import { FILE_ACTIONS } from './constants.js';
 import { SIDEBAR_IMAGE_MIME } from './imagePaste.js';
 import { isOpenable } from './MediaView.js';
+import { cn } from '@/lib/utils';
+
+// Row visuals shared with DailyNotesPanel (same look as the file browser).
+export const treeRowClass = (selected: boolean) => cn(
+  'flex h-6 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[12.5px] text-foreground/85',
+  'hover:bg-accent',
+  selected && 'bg-accent',
+);
+
+export function TreeFileIcon() {
+  return <FileText className="size-3.5 shrink-0 text-muted-2" strokeWidth={1.6} />;
+}
+
+export function TreeFolderIcon() {
+  return <Folder className="size-[15px] shrink-0 fill-folder stroke-none" />;
+}
 
 const FileTree = forwardRef<any, any>(function FileTree(
   { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, conflictMode, checkRenameConflict, onRootContextMenu, fixedHeight },
@@ -110,7 +127,10 @@ function RenameInput({ node, isFolder, checkRenameConflict }: any) {
   return (
     <input
       autoFocus
-      className={`tree-rename-input ${conflict ? 'has-conflict' : ''}`}
+      className={cn(
+        'h-5 w-full min-w-0 rounded-sm border border-input bg-background px-1 text-[12.5px] outline-none focus:border-ring',
+        conflict && 'border-destructive focus:border-destructive',
+      )}
       value={val}
       onChange={(e) => setVal(e.target.value)}
       onBlur={() => node.reset()}
@@ -214,7 +234,13 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, get
     <div
       ref={dragHandle}
       style={style}
-      className={`tree-row ${node.isSelected ? 'selected' : ''} ${willReceiveDrop ? 'drop-target' : ''}`}
+      className={cn(
+        treeRowClass(node.isSelected),
+        // Selected folder gets the amber keyboard-focus ring (polish spec §4);
+        // selected files keep the quiet gray fill from treeRowClass.
+        node.isSelected && isFolder && 'inset-ring-[1.5px] inset-ring-ring',
+        willReceiveDrop && 'bg-selected',
+      )}
       onClick={(e) => {
         // react-arborist's default Row wrapper around this Node also binds
         // onClick={node.handleClick}. If we don't stop propagation, the click
@@ -236,14 +262,16 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, get
       onContextMenu={handleContextMenu}
       onDragStart={handleDragStart}
     >
-      <span className="tree-caret">
-        {isFolder ? (node.isOpen ? '▾' : '▸') : ''}
+      <span className="flex w-[13px] shrink-0 items-center">
+        {isFolder && (node.isOpen
+          ? <ChevronDown className="size-[11px] text-muted-2" strokeWidth={2.4} />
+          : <ChevronRight className="size-[11px] text-muted-2" strokeWidth={2.4} />)}
       </span>
-      <span className="tree-icon">{isFolder ? '📁' : '📄'}</span>
+      {isFolder ? <TreeFolderIcon /> : <TreeFileIcon />}
       {node.isEditing ? (
         <RenameInput node={node} isFolder={isFolder} checkRenameConflict={checkRenameConflict} />
       ) : (
-        <span className="tree-name">{node.data.name}</span>
+        <span className={cn('truncate', isFolder && 'font-medium')}>{node.data.name}</span>
       )}
     </div>
   );

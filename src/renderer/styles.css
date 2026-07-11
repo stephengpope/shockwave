@@ -123,7 +123,7 @@ html, body, #root {
 
 .app {
   display: grid;
-  grid-template-columns: 40px var(--sidebar-width, 260px) minmax(0, 1fr) var(--chat-col-width, 28px);
+  grid-template-columns: 48px var(--sidebar-width, 260px) minmax(0, 1fr) var(--chat-col-width, 28px);
   height: 100vh;
 }
 
@@ -3431,11 +3431,12 @@ html, body, #root {
    margin + 18px caret = 34px), so the label sits slightly left of the file
    names — like a section label above the rows. */
 .sidebar-list-header {
-  padding: 2px 8px 8px 34px;
-  font-size: 11px;
+  /* 10px uppercase, wide tracking (polish spec §4). */
+  padding: 6px 8px;
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.09em;
   color: var(--fg-muted);
 }
 
