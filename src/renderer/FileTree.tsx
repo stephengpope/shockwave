@@ -235,12 +235,12 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, get
   return (
     <div
       ref={dragHandle}
-      style={style}
+      // react-arborist supplies the nesting indent as an inline paddingLeft,
+      // which beats the class padding — fold the row's own 12px inset into it.
+      style={{ ...style, paddingLeft: `${(parseFloat(style?.paddingLeft) || 0) + 12}px` }}
       className={cn(
+        // Selected folders and files share the same quiet gray fill.
         treeRowClass(node.isSelected),
-        // Selected folder gets the amber keyboard-focus ring (polish spec §4);
-        // selected files keep the quiet gray fill from treeRowClass.
-        node.isSelected && isFolder && 'inset-ring-[1.5px] inset-ring-ring',
         willReceiveDrop && 'bg-selected',
       )}
       onClick={(e) => {
