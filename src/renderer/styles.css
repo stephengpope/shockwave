@@ -864,7 +864,8 @@ html, body, #root {
 
 .cm-content,
 .cm-line {
-  line-height: 1.6;
+  /* Editor body rhythm (polish spec §5). */
+  line-height: 27px;
 }
 
 .cm-task-checkbox {
@@ -877,8 +878,10 @@ html, body, #root {
 .cm-bullet {
   display: inline-block;
   width: 1ch;
+  /* Wider bullet→text gap (polish spec §5) — deliberate breathing room. */
+  margin-right: 4px;
   text-align: center;
-  color: var(--accent);
+  color: var(--bullet);
   font-weight: bold;
 }
 
@@ -893,8 +896,8 @@ html, body, #root {
 /* Inline `code` — monospace pill (codeBlocks.ts). Horizontal padding only so
    line-height doesn't jump. */
 .cm-inline-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.875em;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8em;
   background: var(--bg-code);
   border-radius: 4px;
   padding: 0.05em 0.35em;
@@ -903,8 +906,8 @@ html, body, #root {
 /* Fenced ``` block — full-width background box (line decorations, codeBlocks.ts).
    The emptied fence lines read as the box's top/bottom padding. */
 .cm-code-block {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.875em;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
   background: var(--bg-code);
 }
 .cm-code-block-first {

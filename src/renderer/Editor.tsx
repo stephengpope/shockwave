@@ -7,7 +7,10 @@ import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, LanguageDescr
 import { languages } from '@codemirror/language-data';
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { indentGuides } from './indentGuides.js';
-import { oneDark } from '@codemirror/theme-one-dark';
+// Only the SYNTAX colors come from one-dark — editor chrome (backgrounds,
+// gutter, active line) is token-driven via CSS vars so dark mode matches the
+// app's warm palette (polish spec §9) instead of one-dark's cool blue-gray.
+import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark';
 import { taskCheckboxes, taskEnterKeymap } from './taskCheckboxes.js';
 import { blankLineOutdentKeymap } from './blankLineOutdent.js';
 import { listContinueKeymap } from './listContinue.js';
@@ -56,7 +59,7 @@ function computeStats(state) {
  *   onChange()                     — fired when the user changes the doc (not for programmatic load)
  *   getPageIndexRef                — ref whose .current is the latest pageIndex Map (autocomplete reads it live)
  *   getVaultPathRef                — ref whose .current is the active workspace path
- *   dark                           — boolean; when changed, the editor is recreated with/without oneDark
+ *   dark                           — boolean; when changed, the editor is recreated with the light/dark syntax highlight style
  *
  * Ref API (parent uses it to load content + read state):
  *   setContent(text, viewState?)   — replaces doc; restores cursor/scroll if viewState provided, else resets to top
@@ -397,7 +400,7 @@ const Editor = forwardRef<any, any>(function Editor(
       indentOnInput(),
       indentGuides,
       languageCompartment.of(isMarkdown ? markdownExtension : []),
-      syntaxHighlighting(defaultHighlightStyle),
+      syntaxHighlighting(dark ? oneDarkHighlightStyle : defaultHighlightStyle),
       livePreviewCompartment.of(initialLive),
       imagePaste({
         getActiveFilePath: () => getActiveFilePathRef?.current ?? null,
@@ -448,24 +451,29 @@ const Editor = forwardRef<any, any>(function Editor(
           overflow: 'visible',
           fontFamily: 'Inter, sans-serif',
           backgroundColor: 'transparent',
+          // Comfortable-but-compact editor body (polish spec §5).
+          lineHeight: '27px',
         },
         '.cm-content': { paddingLeft: '0', paddingRight: 'var(--text-col-left)' },
         '.cm-activeLine': { backgroundColor: 'var(--bg-active-line)' },
         '.cm-activeLineGutter': { backgroundColor: 'var(--bg-active-line)' },
-        '.cm-gutters': { backgroundColor: 'transparent', borderRight: 'none' },
+        '.cm-gutters': { backgroundColor: 'transparent', borderRight: 'none', color: 'var(--text-muted-2)' },
         '.cm-lineNumbers': { paddingLeft: '0', paddingRight: '0' },
         // Gutter is 66px wide (hardcoded). CodeMirror's built-in .cm-line
         // padding-left adds 6px, so typed text lands at 72 = --text-col-left,
-        // the column title and backlinks anchor to. Numbers right-align inside.
+        // the column title and backlinks anchor to. Numbers right-align inside,
+        // in tabular JetBrains Mono so digits don't shift at 10→11 (spec §5).
         '.cm-lineNumbers .cm-gutterElement': {
           minWidth: '66px',
           paddingRight: '12px',
           boxSizing: 'border-box',
           textAlign: 'right',
+          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+          fontSize: '12px',
+          fontVariantNumeric: 'tabular-nums',
         },
       }),
     ];
-    if (dark) extensions.push(oneDark);
 
     const state = EditorState.create({ doc: '', extensions });
     const view = new EditorView({ state, parent: hostRef.current });
