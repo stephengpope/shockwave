@@ -3,7 +3,8 @@ import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab, undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
 import { markdown, insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown';
-import { syntaxHighlighting, defaultHighlightStyle, indentOnInput } from '@codemirror/language';
+import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, LanguageDescription } from '@codemirror/language';
+import { languages } from '@codemirror/language-data';
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { indentGuides } from './indentGuides.js';
 import { oneDark } from '@codemirror/theme-one-dark';
@@ -64,7 +65,7 @@ function computeStats(state) {
  *   clear()                        — empties the doc, resets cursor
  */
 const Editor = forwardRef<any, any>(function Editor(
-  { onLinkClick, onChange, getCacheRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, dark, viewMode, isMarkdown, hideLineNumbers },
+  { onLinkClick, onChange, getCacheRef, getVaultPathRef, getActiveFilePathRef, flushDraftToDiskRef, onImageError, onRequestUrl, onSendToAgent, onStats, onHistory, dark, viewMode, isMarkdown, filePath, hideLineNumbers },
   ref,
 ) {
   const hostRef = useRef<any>(null);
@@ -83,6 +84,29 @@ const Editor = forwardRef<any, any>(function Editor(
   const historyRef = useRef(onHistory);
   const statsRafRef = useRef(0);
   const isProgrammaticRef = useRef(false);
+  const langGenerationRef = useRef(0);
+
+  // Swap the language grammar for the current file. Markdown is synchronous
+  // (the extension is prebuilt); code grammars come from
+  // @codemirror/language-data and lazy-load via dynamic import, so the file
+  // shows as plain text for the first open of a filetype until the chunk
+  // arrives. The generation counter guards against a stale load resolving
+  // after the user has switched files (or the view was rebuilt).
+  const applyLanguage = (view, langCmp, isMd, path) => {
+    const gen = ++langGenerationRef.current;
+    if (isMd) {
+      view.dispatch({ effects: langCmp.reconfigure(markdownExtensionRef.current) });
+      return;
+    }
+    const name = path ? path.slice(path.lastIndexOf('/') + 1) : '';
+    const desc = name ? LanguageDescription.matchFilename(languages, name) : null;
+    view.dispatch({ effects: langCmp.reconfigure([]) });
+    if (!desc) return;
+    desc.load().then((support) => {
+      if (langGenerationRef.current !== gen || viewRef.current !== view) return;
+      view.dispatch({ effects: langCmp.reconfigure(support) });
+    }).catch(() => {});
+  };
 
   useEffect(() => { linkClickRef.current = onLinkClick; }, [onLinkClick]);
   useEffect(() => { changeRef.current = onChange; }, [onChange]);
@@ -92,9 +116,10 @@ const Editor = forwardRef<any, any>(function Editor(
   useEffect(() => { statsRef.current = onStats; }, [onStats]);
   useEffect(() => { historyRef.current = onHistory; }, [onHistory]);
 
-  // Toggle the live-preview decoration bundle and the markdown grammar without
+  // Toggle the live-preview decoration bundle and the language grammar without
   // rebuilding the editor. Cursor, history, scroll all survive a reconfigure.
-  // Non-markdown files get no grammar (plain text) and never show live preview.
+  // Non-markdown files get their language's grammar by filename (or plain
+  // text when unrecognized) and never show live preview.
   useEffect(() => {
     const view = viewRef.current;
     const cmp = livePreviewCompartmentRef.current;
@@ -102,13 +127,9 @@ const Editor = forwardRef<any, any>(function Editor(
     const langCmp = languageCompartmentRef.current;
     if (!view || !cmp || !live || !langCmp) return;
     const nextLive = (viewMode === VIEW_MODES.RAW || !isMarkdown) ? [] : live;
-    view.dispatch({
-      effects: [
-        cmp.reconfigure(nextLive),
-        langCmp.reconfigure(isMarkdown ? markdownExtensionRef.current : []),
-      ],
-    });
-  }, [viewMode, isMarkdown]);
+    view.dispatch({ effects: cmp.reconfigure(nextLive) });
+    applyLanguage(view, langCmp, isMarkdown, filePath);
+  }, [viewMode, isMarkdown, filePath]);
 
   // "Hide line numbers" doesn't actually remove the gutter — we keep its
   // reserved width so the text column doesn't shift left. The class on the
@@ -332,11 +353,13 @@ const Editor = forwardRef<any, any>(function Editor(
     const livePreviewCompartment = new Compartment();
     livePreviewCompartmentRef.current = livePreviewCompartment;
 
-    // Markdown grammar lives in its own compartment so non-markdown files can
-    // drop it entirely (plain text — no markdown-flavored coloring of code).
+    // The language grammar lives in its own compartment so non-markdown files
+    // can swap in their own grammar (matched by filename via language-data) or
+    // drop highlighting entirely. `codeLanguages` gives fenced code blocks in
+    // markdown the same lazy-loaded grammars.
     const languageCompartment = new Compartment();
     languageCompartmentRef.current = languageCompartment;
-    const markdownExtension = markdown({ addKeymap: false, extensions: [{ remove: ['SetextHeading'] }] });
+    const markdownExtension = markdown({ addKeymap: false, codeLanguages: languages, extensions: [{ remove: ['SetextHeading'] }] });
     markdownExtensionRef.current = markdownExtension;
 
     // Decorations that turn the editor into a live preview. Toggling them off
@@ -447,6 +470,9 @@ const Editor = forwardRef<any, any>(function Editor(
     const state = EditorState.create({ doc: '', extensions });
     const view = new EditorView({ state, parent: hostRef.current });
     viewRef.current = view;
+    // Rebuilds (dark toggle) don't re-run the reconfigure effect above, so a
+    // non-markdown file's grammar must be re-applied here.
+    if (!isMarkdown) applyLanguage(view, languageCompartment, false, filePath);
     statsRef.current?.({ words: 0, chars: 0 });
     historyRef.current?.({ canUndo: false, canRedo: false });
     return () => {

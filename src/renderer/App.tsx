@@ -1732,6 +1732,7 @@ export default function App() {
                   dark={isDark}
                   viewMode={viewMode}
                   isMarkdown={activeIsMarkdown}
+                  filePath={activeFile}
                   hideLineNumbers={hideLineNumbers}
                 />
               </div>
