@@ -219,15 +219,19 @@ export interface ShockwaveApi {
   };
 
   agent: {
-    send(text: string, images?: Array<{ type: 'image'; source: unknown }>): Promise<void>;
-    abort(): Promise<void>;
-    reset(): Promise<void>;
+    /** Send to a chat. sessionId is renderer-minted (UUID) for new chats.
+     *  Mid-turn sends are steered into the running turn. */
+    send(opts: { sessionId: string; text: string; images?: Array<{ type: 'image'; source: unknown }> }): Promise<void>;
+    abort(sessionId: string): Promise<void>;
+    /** Chats with a turn in flight (re-seed the running set after reload). */
+    runningSessions(): Promise<string[]>;
     listProviders(): Promise<Array<{ slug: string; label: string }>>;
     listModels(provider: string): Promise<Array<{ id: string; label: string }>>;
     listThinkingLevels(opts: { provider: string; model: string }): Promise<string[]>;
     validateConnection(opts: { baseUrl: string; apiKey?: string }): Promise<{ ok: boolean; models?: string[]; error?: string }>;
+    /** Every event is stamped with the sessionId of the chat it belongs to. */
     onEvent(cb: (evt: unknown) => void): Unsubscribe;
-    onError(cb: (payload: { message: string }) => void): Unsubscribe;
+    onError(cb: (payload: { sessionId?: string; message: string }) => void): Unsubscribe;
     onOpenFile(cb: (payload: { path: string }) => void): Unsubscribe;
   };
 
@@ -237,7 +241,6 @@ export interface ShockwaveApi {
     setStarred(opts: { sessionId: string; starred: boolean }): Promise<void>;
     searchSessions(opts: { query: string; limit?: number }): Promise<ChatSearchHit[]>;
     getMessages(sessionId: string): Promise<ChatMessage[]>;
-    newSession(): Promise<void>;
     openSession(sessionId: string): Promise<{ session?: ChatSession; messages: ChatMessage[] }>;
     deleteSession(sessionId: string): Promise<void>;
     renameSession(opts: { sessionId: string; title: string }): Promise<void>;

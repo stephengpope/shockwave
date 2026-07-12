@@ -267,14 +267,19 @@ contextBridge.exposeInMainWorld('api', {
   // ---- Coding agent (pi) --------------------------------------------------
 
   agent: {
-    /** Send a prompt to the agent. Resolves when pi's `agent_end` fires (or the call rejects on setup error).
+    /** Send a prompt to a chat's agent. `sessionId` is the chat's id — a
+     *  renderer-minted UUID for a brand-new chat, or the saved id for an
+     *  existing one. If that chat is mid-turn, the message is steered into the
+     *  running turn. Resolves when the turn ends (steers resolve on queue).
      *  Images are pi `ImageContent[]` shapes (data URLs decoded by main).
-     *  @param {string} text @param {Array<{ type:'image', source: any }>} [images] @returns {Promise<void>} */
-    send: (text, images) => ipcRenderer.invoke('agent:send', { text, images }),
-    /** Abort the running agent. Resolves once teardown completes. @returns {Promise<void>} */
-    abort: () => ipcRenderer.invoke('agent:abort'),
-    /** Tear down the current session. Next send creates a fresh one. @returns {Promise<void>} */
-    reset: () => ipcRenderer.invoke('agent:reset'),
+     *  @param {{ sessionId: string, text: string, images?: Array<{ type:'image', source: any }> }} opts
+     *  @returns {Promise<void>} */
+    send: (opts) => ipcRenderer.invoke('agent:send', opts),
+    /** Abort the given chat's running turn. @param {string} sessionId @returns {Promise<void>} */
+    abort: (sessionId) => ipcRenderer.invoke('agent:abort', sessionId),
+    /** Chats with a turn currently in flight (re-seed after window reload).
+     *  @returns {Promise<string[]>} */
+    runningSessions: () => ipcRenderer.invoke('agent:runningSessions'),
     /** @returns {Promise<Array<{ slug: string, label: string }>>} Available LLM providers. */
     listProviders: () => ipcRenderer.invoke('agent:listProviders'),
     /** @param {string} provider @returns {Promise<Array<{ id: string, label: string }>>} Models for that provider. */
@@ -295,7 +300,7 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('agent:event', listener);
     },
     /** Fires when the agent fails to start (no key, bad model, etc.).
-     *  @param {(payload: { message: string }) => void} cb @returns {Unsubscribe} */
+     *  @param {(payload: { sessionId?: string, message: string }) => void} cb @returns {Unsubscribe} */
     onError: (cb) => {
       const listener = (_evt, payload) => cb(payload);
       ipcRenderer.on('agent:error', listener);
@@ -330,9 +335,8 @@ contextBridge.exposeInMainWorld('api', {
     /** Messages for one chat, ordered — the renderer rebuilds the transcript.
      *  @param {string} sessionId @returns {Promise<Array<any>>} */
     getMessages: (sessionId) => ipcRenderer.invoke('chat:getMessages', sessionId),
-    /** Start a fresh chat (next send creates a new persisted session). @returns {Promise<void>} */
-    newSession: () => ipcRenderer.invoke('chat:newSession'),
-    /** Resume a saved chat. @param {string} sessionId
+    /** Open a saved chat (row + messages for hydration; the session itself
+     *  boots lazily on the next send). @param {string} sessionId
      *  @returns {Promise<{ session?: any, messages: Array<any> }>} */
     openSession: (sessionId) => ipcRenderer.invoke('chat:openSession', sessionId),
     /** Delete a chat (cascades its messages). @param {string} sessionId @returns {Promise<void>} */

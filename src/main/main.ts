@@ -10,7 +10,7 @@ import * as parcelWatcher from '@parcel/watcher';
 import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
 import { createWatcherDispatch } from './watcherDispatch.js';
-import { agentSend, agentAbort, agentReset, agentOpenSession, listThinkingLevels } from './codingAgent.js';
+import { agentSend, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions, listThinkingLevels } from './codingAgent.js';
 import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred } from './db/index.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
 import { scaffoldNewProject } from './prompt/index.js';
@@ -1370,13 +1370,15 @@ ipcMain.handle('sync:resetToRemote', async (_evt, workspacePath) => {
 
 // ---- Coding agent (pi) ----
 //
-// One pi AgentSession at a time. The renderer sends `agent:send` with the prompt
-// text; main reads the current workspace and coding-agent settings, lazily creates
-// or reuses a session, then forwards every pi event back via `agent:event`. The
-// renderer relies on the event stream's `agent_start` / `agent_end` boundaries to
-// gate its send button.
+// One live pi AgentSession per chat (see codingAgent.ts). The renderer sends
+// `agent:send` with the chat's sessionId (a renderer-minted UUID for new chats)
+// plus the prompt text; main reads the current workspace and coding-agent
+// settings, lazily creates or reuses that chat's session, then forwards every
+// pi event back via `agent:event` — each stamped with its sessionId so the
+// renderer can route it to the right chat. Sends to a chat that is mid-turn
+// are steered into the running turn by codingAgent.ts.
 
-ipcMain.handle('agent:send', async (evt, { text, images }) => {
+ipcMain.handle('agent:send', async (evt, { sessionId, text, images }) => {
   const win = BrowserWindow.fromWebContents(evt.sender);
   if (!win) return;
   const emit = (channel, payload) => {
@@ -1395,6 +1397,7 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
 
     await agentSend(
       {
+        sessionId,
         text,
         images,
         workspacePath,
@@ -1412,9 +1415,13 @@ ipcMain.handle('agent:send', async (evt, { text, images }) => {
       (event) => emit('agent:event', event),
     );
   } catch (err: any) {
-    emit('agent:error', { message: err?.message ?? String(err) });
+    emit('agent:error', { sessionId, message: err?.message ?? String(err) });
   }
 });
+
+// Chats with a turn in flight — the renderer re-seeds its running set from
+// this after a window reload.
+ipcMain.handle('agent:runningSessions', () => agentRunningSessions());
 
 // ---- Skills (built-in = bundled, app-global; uploaded = per-workspace) ----
 // `skills:list` returns both sets for the given workspace; built-in toggle state
@@ -1454,12 +1461,8 @@ ipcMain.handle('skills:remove', async (_evt, { workspacePath, folderName }) => {
   return removeWorkspaceSkill(workspacePath, folderName);
 });
 
-ipcMain.handle('agent:abort', async () => {
-  try { await agentAbort(); } catch { /* abort is best-effort */ }
-});
-
-ipcMain.handle('agent:reset', async () => {
-  try { await agentReset(); } catch { /* reset is best-effort */ }
+ipcMain.handle('agent:abort', async (_evt, sessionId) => {
+  try { await agentAbort(sessionId); } catch { /* abort is best-effort */ }
 });
 
 // ---- Chat history (SQLite: display + search; pi's JSONL: continuation) ----
@@ -1502,22 +1505,20 @@ ipcMain.handle('chat:getMessages', async (_evt, sessionId) => {
   return getMessages(sessionId);
 });
 
-// Start a fresh chat (same as the chat "new session" button → agentReset).
-ipcMain.handle('chat:newSession', async () => {
-  try { await agentReset(); } catch { /* best-effort */ }
-});
-
-// Resume a saved chat: hand pi the JSONL + stored prompt for the next send.
-// Returns the messages so the renderer can hydrate the UI immediately.
+// Open a saved chat: return its row + messages so the renderer can hydrate the
+// UI. No main-side session work — the chat's session boots (or is reused) on
+// the next send, resolved from the DB by sessionId.
 ipcMain.handle('chat:openSession', async (_evt, sessionId) => {
   const row = getSession(sessionId);
   if (!row) return { messages: [] };
-  await agentOpenSession({ jsonlPath: row.jsonlPath, systemPrompt: row.systemPrompt });
   return { session: row, messages: getMessages(sessionId) };
 });
 
 ipcMain.handle('chat:deleteSession', async (_evt, sessionId) => {
-  if (sessionId) deleteSession(sessionId);
+  if (!sessionId) return;
+  // Abort + drop any live session first so a running turn can't keep writing.
+  try { await agentDisposeSession(sessionId); } catch { /* best-effort */ }
+  deleteSession(sessionId);
 });
 
 ipcMain.handle('chat:renameSession', async (_evt, { sessionId, title }) => {
@@ -1868,7 +1869,7 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
 
 ipcMain.handle('fs:watchStop', stopWatcher);
 
-app.on('before-quit', () => { stopWatcher(); agentReset().catch(() => {}); });
+app.on('before-quit', () => { stopWatcher(); agentDisposeAll().catch(() => {}); });
 
 // Drain any pending settings writes (notably the window-bounds save fired
 // from each window's `close` handler) before the process exits. Without this

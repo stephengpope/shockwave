@@ -9,7 +9,7 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 - `linkParser.js` — ESM mirror of the wiki-link parser in `src/renderer/linkIndex.js` (intentionally kept as `.js` so both processes load the exact same module bytes — see parser-parity rule in root).
 - `renameCorrelator.js` — pairs unlink+add events into rename events. See below.
 - `watcherDispatch.js` — maps a `@parcel/watcher` event batch to correlator/pending-state calls. Imported by BOTH `main.ts` (real sinks) and the correlator/e2e tests (tmp-dir sinks), so main and the tests exercise identical watcher logic — same parity discipline as `linkParser.js`. Handles the parcel-specific shapes: atomic-save-as-`create`-of-known-path, folder-rename via directory expansion, deletes-before-creates batch ordering.
-- `codingAgent.ts` — pi `AgentSession` lifecycle, system-prompt override, emit-callback wrapping for the failed-image splice.
+- `codingAgent.ts` — pi `AgentSession` lifecycle: one live session per chat in a map, sessionId-stamped events, mid-turn steering, system-prompt override, failed-image splice.
 - `prompt/` — coding-agent system-prompt assembly. `tools.ts` (the tool catalog rendered into the prompt), `helper.ts` (`buildShockwaveHelper` — the app mechanics, sections as named consts), `soul.ts` (`DEFAULT_SOUL` + `AGENTS_STUB` + `readSoul`/`scaffoldNewProject`), `index.ts` (`assembleSystemPrompt`). See "System prompt" below.
 - `agentTokensExtension.ts` — pi extension exposing `list_agent_secrets` + `get_agent_secret`; installed via `installAgentTokensBridge` at startup.
 - `skillLibrary.ts` — on-disk skill library under `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` and the workspace-override resolution.
@@ -108,9 +108,17 @@ Registered before `app.ready` via `registerSchemesAsPrivileged({scheme: 'app', p
 
 ## Coding agent (main side)
 
-Keeps **one** pi `AgentSession` at a time, keyed by `(workspacePath, provider, model, apiKey, effectiveSystemPrompt)`. The next `agent:send` whose key differs from the stored one tears down the previous session and creates a new one — there is no eager invalidation on settings change, only lazy reconciliation on the next send. `app.on('before-quit')` calls `agentReset()` to abort cleanly.
+Keeps **one live pi `AgentSession` per chat** in a `Map<sessionId, Entry>` (`codingAgent.ts`) — chats run concurrently and switching chats never aborts a turn. Chat IDs are **renderer-minted UUIDs** (see `chatStore.ts`); main hands them to pi via `SessionManager.create(..., { id })`, so every event is routable from the first millisecond. Open-vs-new is derived from the DB: a stored row with a `jsonlPath` → `SessionManager.open` (resume); no row → create under the supplied id.
 
-The agent runs with the **active workspace as `cwd`**, and uses an in-memory `AuthStorage` + `SessionManager` (sessions do not survive an app restart).
+Lifecycle rules:
+
+- **Send to an idle chat** → boot (or reuse) that chat's session, run the turn, persist messages to the DB on `agent_end`. A concurrent boot for the same id awaits the in-flight boot (`booting` map) — two managers on one JSONL would corrupt it.
+- **Send to a chat mid-turn** → **steer**: `session.prompt(text, { streamingBehavior: 'steer' })`; pi queues it and delivers at the next step boundary of the running turn.
+- **Config change** (model/key/thinking — the `makeKey` fields) on an idle chat → its session is rebuilt on the next send, continuing the same JSONL with its frozen prompt. Mid-turn config changes wait: a running entry is reused unconditionally.
+- **Dispose** (`session.dispose()` + map delete) happens ONLY on chat delete (`chat:deleteSession` aborts first) and `before-quit` (`agentDisposeAll`). Idle sessions hold no timers/sockets — just their transcript on the heap — so there is no idle eviction.
+- Every event forwarded to the renderer is stamped with its `sessionId` (both `agent:event` and `agent:error`). `agent:runningSessions` returns the ids with a turn in flight (renderer reseeds its running set after a window reload).
+
+The agent runs with the **active workspace as `cwd`** and an in-memory `AuthStorage`. Live session objects don't survive an app restart, but chats do: pi's JSONL is the continuation source of truth, and every send re-opens it on demand.
 
 ### System prompt
 
@@ -213,7 +221,7 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 | Bookmarks | `bookmarks:read`, `bookmarks:write` |
 | Theme | `theme:getInitial`; plus `theme:systemChanged` push event |
 | Voice | `voice:getToken` |
-| Agent | `agent:send`, `agent:abort`, `agent:reset`, `agent:listProviders`, `agent:listModels`; plus push events: `agent:event` (per pi event), `agent:error` |
+| Agent | `agent:send` (takes `sessionId`; steers if that chat is mid-turn), `agent:abort` (per sessionId), `agent:runningSessions`, `agent:listProviders`, `agent:listModels`; plus push events: `agent:event` / `agent:error` (every payload stamped with its `sessionId`) |
 | Skills | `skills:list`, `skills:libraryDir`, `skills:importPicker`, `skills:importFromPath`, `skills:remove` |
 | Sync | `sync:verifyPat`, `sync:checkGit`, `sync:workspaceStatus`, `sync:setupClone`, `sync:setupInitAndCreate`, `sync:setupExistingLocal`, `sync:teardown`, `sync:setWorkspaceDisabled`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`, `sync:listConflicts`, `sync:resolveConflict`, `sync:keepConflict`, `sync:resetConflict`, `sync:keepAll`, `sync:resetToRemote`; plus push events `sync:status` (carries `conflicts[]` when paused), `sync:flushRequest` |
 

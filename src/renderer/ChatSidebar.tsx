@@ -1,4 +1,4 @@
-import React, { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
@@ -16,6 +16,8 @@ import {
 } from './chatAttachments.js';
 import { useVoiceInput } from './voice/useVoiceInput.js';
 import { VoiceBars } from './voice/VoiceBars.jsx';
+import * as chatStore from './chatStore.js';
+import { EMPTY_CHAT } from './chatStore.js';
 
 // Workspace path available to MARKDOWN_COMPONENTS' `img` override via context,
 // so the module-level components object stays referentially stable (preserving
@@ -93,25 +95,6 @@ function toolSummary(toolName, args) {
     default:
       try { return JSON.stringify(a).slice(0, 120); } catch { return ''; }
   }
-}
-
-// Pi tool results are shaped { content: [{type:'text', text}, ...], details? }.
-// Concat text items; ignore non-text (images). Fall back to JSON for unknowns.
-function formatToolResult(result) {
-  if (result == null) return '';
-  if (typeof result === 'string') return result;
-  if (typeof result === 'object') {
-    if (Array.isArray(result.content)) {
-      return result.content
-        .filter((c) => c && c.type === 'text' && typeof c.text === 'string')
-        .map((c) => c.text)
-        .join('');
-    }
-    if (typeof result.output === 'string') return result.output;
-    if (typeof result.text === 'string') return result.text;
-    try { return JSON.stringify(result, null, 2); } catch { return String(result); }
-  }
-  return String(result);
 }
 
 // Per-tool detail rendering for the expanded view header (above the output).
@@ -405,46 +388,6 @@ function StarIcon({ size = 14, filled = false }: { size?: number; filled?: boole
   );
 }
 
-// Rebuild the UI transcript from stored DB message rows (chat:getMessages).
-// The DB keeps one row per pi message: an assistant turn carries its text +
-// thinking + tool CALLS (tool_calls JSON); each tool RESULT is its own role='tool'
-// row. We re-pair them here into the sidebar's flat kind-tagged model, absorbing
-// each result into the tool row created from the matching call (by tool_call_id).
-// Order within an assistant turn: thinking → text → tool calls. (isError isn't
-// persisted, so hydrated tool rows render as non-error; images degrade to text.)
-function hydrateMessages(rows) {
-  const results = new Map();
-  for (const r of rows) {
-    if (r.role === 'tool' && r.toolCallId) results.set(r.toolCallId, r.content ?? '');
-  }
-  const out: any[] = [];
-  for (const r of rows) {
-    if (r.role === 'user') {
-      out.push({ id: `h${r.seq}`, kind: 'user', text: r.content ?? '' });
-    } else if (r.role === 'assistant') {
-      if (r.reasoning) out.push({ id: `h${r.seq}-k`, kind: 'thinking', text: r.reasoning, done: true });
-      if (r.content) out.push({ id: `h${r.seq}-t`, kind: 'assistant', text: r.content });
-      if (r.toolCalls) {
-        let calls: any[] = [];
-        try { calls = JSON.parse(r.toolCalls) || []; } catch { /* corrupt row → skip its tools */ }
-        calls.forEach((c, i) => {
-          out.push({
-            id: `h${r.seq}-c${i}`,
-            kind: 'tool',
-            toolCallId: c.id,
-            toolName: c.name,
-            args: c.arguments,
-            output: results.get(c.id) ?? '',
-            isError: false,
-            done: true,
-          });
-        });
-      }
-    }
-  }
-  return out;
-}
-
 // "3m", "2h", "5d", or a date past a week — for the history list.
 function formatAgo(ms) {
   const s = Math.floor((Date.now() - ms) / 1000);
@@ -461,7 +404,7 @@ function formatAgo(ms) {
 // Popover of recent + searchable chats. Anchored under the header history button.
 // Recents paginate on scroll (keyset via the last row's updatedAt); a non-empty
 // query switches to full-text search across the workspace's chats.
-function HistoryPopover({ currentSessionId, onSelect, onClose }: any) {
+function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDeleted }: any) {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<any[]>([]);
   const [hasMore, setHasMore] = useState(true);
@@ -530,7 +473,8 @@ function HistoryPopover({ currentSessionId, onSelect, onClose }: any) {
     await window.api.chat.deleteSession(sessionId);
     setItems((prev) => prev.filter((x) => x.sessionId !== sessionId));
     setStarredList((prev) => prev.filter((x) => x.sessionId !== sessionId));
-  }, []);
+    onDeleted?.(sessionId);
+  }, [onDeleted]);
 
   const onToggleStar = useCallback(async (e, sessionId, currentlyStarred) => {
     e.stopPropagation();
@@ -564,7 +508,11 @@ function HistoryPopover({ currentSessionId, onSelect, onClose }: any) {
         <span className="truncate text-[12.5px] text-foreground">{it.title || 'Untitled chat'}</span>
         {searching && it.snippet && <span className="truncate text-[11px] text-muted-2">{it.snippet}</span>}
       </span>
-      {!searching && <span className="shrink-0 text-[11px] text-muted-2">{formatAgo(it.updatedAt)}</span>}
+      {runningIds?.has(it.sessionId) ? (
+        <span className="shrink-0 text-primary" title="Responding…" aria-label="Responding"><SpinnerIcon size={12} /></span>
+      ) : (
+        !searching && <span className="shrink-0 text-[11px] text-muted-2">{formatAgo(it.updatedAt)}</span>
+      )}
       <span
         role="button"
         tabIndex={0}
@@ -615,19 +563,36 @@ function HistoryPopover({ currentSessionId, onSelect, onClose }: any) {
 }
 
 const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath }, ref) {
-  const [messages, setMessages] = useState<any[]>([]);
-  const [input, setInput] = useState('');
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<any>(null);
-  const [elapsedMs, setElapsedMs] = useState(0);
-  const [tokens, setTokens] = useState(0);
-  const [attachments, setAttachments] = useState<any[]>([]);
+  // All chat state (transcripts, running flags, drafts, counters) lives in
+  // chatStore — OUTSIDE this component — so background chats keep streaming
+  // and nothing is lost when the sidebar collapses (unmount) or the workspace
+  // switches (remount). This component is a view over the active chat's entry.
+  // The store owns the single agent-event subscription; there is none here.
+  const snap = useSyncExternalStore(chatStore.subscribe, chatStore.getState);
+  const currentSessionId = workspacePath ? snap.activeByWorkspace[workspacePath] ?? null : null;
+  const chat = (currentSessionId && snap.chats[currentSessionId]) || EMPTY_CHAT;
+  const chatIdRef = useRef<string | null>(currentSessionId);
+  chatIdRef.current = currentSessionId;
+
+  // Mint the workspace's active chat on mount / workspace switch.
+  useEffect(() => {
+    if (workspacePath) chatStore.ensureActiveChat(workspacePath);
+  }, [workspacePath]);
+
+  const { messages, running, error, tokens, queuedCount, attachments } = chat;
+  const input = chat.draft;
+  const sessionTitle = chat.title;
+  const sessionStarred = chat.starred;
+
+  // Chats with a turn in flight (any workspace) — drives the history spinner.
+  const runningIds = useMemo(
+    () => new Set(Object.keys(snap.chats).filter((id) => snap.chats[id].running)),
+    [snap.chats],
+  );
+
+  // Local view-only state.
   const [rejected, setRejected] = useState<any>(null); // { name, reason }
   const [dragOver, setDragOver] = useState(false);
-  // Saved-chat identity + the history popover.
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [sessionTitle, setSessionTitle] = useState<string | null>(null);
-  const [sessionStarred, setSessionStarred] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [renamingTitle, setRenamingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -635,36 +600,41 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
   // (replaced as the model refines, then committed into `input` on end_of_turn).
   const [partialText, setPartialText] = useState('');
   const voiceVolumeRef = useRef(0);
-  const currentAssistantIdRef = useRef<any>(null);
-  const currentThinkingIdRef = useRef<any>(null);
-  const idCounterRef = useRef(0);
   const scrollRef = useRef<any>(null);
   const textareaRef = useRef<any>(null);
   const fileInputRef = useRef<any>(null);
   const sidebarRootRef = useRef<any>(null);
-  const lastSentUserIdRef = useRef<any>(null);
-  const runStartRef = useRef(0);
-  const tickerRef = useRef<any>(null);
   const dragCounterRef = useRef(0);
 
-  const nextId = () => `m${++idCounterRef.current}`;
-
-  // Subscribe to agent events from main.
+  // Elapsed ticker — display-only, derived from the store's runStartAt so the
+  // store isn't churned 5×/sec. Just re-renders this component while running.
+  const [, forceTick] = useReducer((x) => x + 1, 0);
   useEffect(() => {
-    const offEvent = window.api.agent.onEvent((evt) => {
-      handleAgentEvent(evt);
-    });
-    const offError = window.api.agent.onError(({ message }) => {
-      setRunning(false);
-      setError(message);
-      if (tickerRef.current) { clearInterval(tickerRef.current); tickerRef.current = null; }
-    });
-    return () => {
-      offEvent?.();
-      offError?.();
-      if (tickerRef.current) { clearInterval(tickerRef.current); tickerRef.current = null; }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!running || !chat.runStartAt) return;
+    const t = setInterval(forceTick, 200);
+    return () => clearInterval(t);
+  }, [running, chat.runStartAt]);
+  const elapsedMs = running && chat.runStartAt ? Date.now() - chat.runStartAt : chat.elapsedMs;
+
+  // Store-backed setters with the local-state call shapes the handlers below
+  // (and the voice hook) expect. Each resolves the chat id at call time via
+  // chatIdRef so stable closures always hit the active chat.
+  const setInput = useCallback((value: any) => {
+    const id = chatIdRef.current ?? (workspacePath ? chatStore.ensureActiveChat(workspacePath) : null);
+    if (!id) return;
+    const next = typeof value === 'function' ? value(chatStore.getState().chats[id]?.draft ?? '') : value;
+    chatStore.setDraft(id, next);
+  }, [workspacePath]);
+
+  const setAttachments = useCallback((updater: any) => {
+    const id = chatIdRef.current ?? (workspacePath ? chatStore.ensureActiveChat(workspacePath) : null);
+    if (!id) return;
+    chatStore.setAttachments(id, typeof updater === 'function' ? updater : () => updater);
+  }, [workspacePath]);
+
+  const setError = useCallback((message: any) => {
+    const id = chatIdRef.current;
+    if (id) chatStore.setError(id, message);
   }, []);
 
   // Auto-scroll to bottom when new messages arrive.
@@ -698,148 +668,6 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     onVolumeChange: (rms) => { voiceVolumeRef.current = rms; },
   });
 
-  const handleAgentEvent = useCallback((evt) => {
-    if (!evt || !evt.type) return;
-    if (evt.type === 'agent_start') {
-      setRunning(true);
-      currentThinkingIdRef.current = null;
-      setError(null);
-      setTokens(0);
-      setElapsedMs(0);
-      runStartRef.current = Date.now();
-      if (tickerRef.current) clearInterval(tickerRef.current);
-      tickerRef.current = setInterval(() => {
-        setElapsedMs(Date.now() - runStartRef.current);
-      }, 200);
-      return;
-    }
-    if (evt.type === 'agent_end') {
-      setRunning(false);
-      currentAssistantIdRef.current = null;
-      // Freeze any still-open thinking block (guards a missing thinking_end).
-      currentThinkingIdRef.current = null;
-      setMessages((prev) => prev.map((m) => (m.kind === 'thinking' && !m.done ? { ...m, done: true } : m)));
-      if (runStartRef.current) setElapsedMs(Date.now() - runStartRef.current);
-      if (tickerRef.current) { clearInterval(tickerRef.current); tickerRef.current = null; }
-      return;
-    }
-    if (evt.type === 'turn_end') {
-      // Pi's normalized Usage: { input, output, cacheRead, cacheWrite, totalTokens, cost }.
-      // Sum totalTokens across turns — each turn re-pays for the context, so this
-      // matches actual billed usage for the run.
-      const total = evt.message?.usage?.totalTokens;
-      if (typeof total === 'number') setTokens((prev) => prev + total);
-      return;
-    }
-    if (evt.type === 'message_update') {
-      const inner = evt.assistantMessageEvent;
-      if (!inner) return;
-      // Extended-thinking stream. Rendered as a collapsible block above the
-      // assistant text — live "Thinking" (shimmer + spinner) while streaming,
-      // frozen to a static "Thought" block on thinking_end.
-      if (inner.type === 'thinking_start') {
-        const id = nextId();
-        currentThinkingIdRef.current = id;
-        currentAssistantIdRef.current = null;
-        setMessages((prev) => [...prev, { id, kind: 'thinking', text: '', done: false }]);
-        return;
-      }
-      if (inner.type === 'thinking_delta') {
-        const id = currentThinkingIdRef.current;
-        const delta = inner.delta ?? '';
-        if (!id) {
-          const newId = nextId();
-          currentThinkingIdRef.current = newId;
-          setMessages((prev) => [...prev, { id: newId, kind: 'thinking', text: delta, done: false }]);
-          return;
-        }
-        setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, text: m.text + delta } : m)));
-        return;
-      }
-      if (inner.type === 'thinking_end') {
-        const id = currentThinkingIdRef.current;
-        currentThinkingIdRef.current = null;
-        if (id) setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, done: true } : m)));
-        return;
-      }
-      if (inner.type === 'text_start') {
-        const id = nextId();
-        currentAssistantIdRef.current = id;
-        setMessages((prev) => [...prev, { id, kind: 'assistant', text: '' }]);
-        return;
-      }
-      if (inner.type === 'text_delta') {
-        const id = currentAssistantIdRef.current;
-        if (!id) {
-          const newId = nextId();
-          currentAssistantIdRef.current = newId;
-          setMessages((prev) => [...prev, { id: newId, kind: 'assistant', text: inner.delta ?? '' }]);
-          return;
-        }
-        setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, text: m.text + (inner.delta ?? '') } : m)));
-        return;
-      }
-      return;
-    }
-    if (evt.type === 'tool_execution_start') {
-      currentAssistantIdRef.current = null;
-      currentThinkingIdRef.current = null;
-      const id = nextId();
-      setMessages((prev) => [...prev, {
-        id,
-        kind: 'tool',
-        toolCallId: evt.toolCallId,
-        toolName: evt.toolName,
-        args: evt.args,
-        output: '',
-        isError: false,
-        done: false,
-      }]);
-      return;
-    }
-    if (evt.type === 'tool_execution_update') {
-      setMessages((prev) => prev.map((m) => (
-        m.kind === 'tool' && m.toolCallId === evt.toolCallId
-          ? { ...m, output: formatToolResult(evt.partialResult) }
-          : m
-      )));
-      return;
-    }
-    if (evt.type === 'tool_execution_end') {
-      setMessages((prev) => prev.map((m) => (
-        m.kind === 'tool' && m.toolCallId === evt.toolCallId
-          ? { ...m, output: formatToolResult(evt.result), isError: !!evt.isError, done: true }
-          : m
-      )));
-      return;
-    }
-    if (evt.type === 'shockwave_session') {
-      // Main tells us which saved chat is now active (on create/open/continue).
-      setCurrentSessionId(evt.sessionId ?? null);
-      setSessionTitle(evt.title ?? null);
-      setSessionStarred(!!evt.starred);
-      return;
-    }
-    if (evt.type === 'shockwave_session_titled') {
-      // Auto-title landed (fire-and-forget) — reflect it if it's the live chat.
-      setCurrentSessionId((cur) => {
-        if (cur === evt.sessionId) setSessionTitle(evt.title ?? null);
-        return cur;
-      });
-      return;
-    }
-    if (evt.type === 'agent_send_failed') {
-      // Main popped the bad user+failure messages from pi state. Mirror by
-      // removing the matching user message from our transcript and surfacing
-      // the provider error in the banner.
-      const badId = lastSentUserIdRef.current;
-      lastSentUserIdRef.current = null;
-      setMessages((prev) => prev.filter((m) => m.id !== badId));
-      setError(evt.errorMessage ?? 'Send failed.');
-      return;
-    }
-  }, []);
-
   const onSend = useCallback(async () => {
     // Commit any in-flight partial transcript before submitting. The textarea
     // displays input+partial as one string, so the user expects the partial
@@ -848,16 +676,11 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     if (partialText) {
       const sep = input && !input.endsWith(' ') ? ' ' : '';
       typed = (input + sep + partialText).trim();
-      setInput(input + sep + partialText);
       setPartialText('');
     }
     if (!typed && attachments.length === 0) return;
-    if (running) return;
-    if (!workspacePath) {
-      setError('Open a workspace first.');
-      return;
-    }
-    setError(null);
+    if (!workspacePath) return; // composer is disabled without a workspace
+    const id = chatIdRef.current ?? chatStore.ensureActiveChat(workspacePath);
     setRejected(null);
 
     const imageAttachments = attachments.filter((a) => a.kind === 'image');
@@ -865,98 +688,84 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
     const promptText = composePromptText(typed, textAttachments);
     const images = toImageContents(imageAttachments);
 
-    const userId = nextId();
-    lastSentUserIdRef.current = userId;
-    setMessages((prev) => [...prev, {
-      id: userId,
-      kind: 'user',
+    chatStore.setDraft(id, '');
+    chatStore.setAttachments(id, () => []);
+    // If this chat is mid-turn, main steers the message into the running turn.
+    await chatStore.sendToChat(id, {
       text: typed,
+      promptText,
+      images,
       attachments: attachments.map((a) => ({ ...a })),
-    }]);
-    setInput('');
-    setAttachments([]);
-    setRunning(true);
-    try {
-      await window.api.agent.send(promptText, images);
-    } catch (err: any) {
-      setRunning(false);
-      setError(err?.message ?? String(err));
-    }
-  }, [input, partialText, attachments, running, workspacePath]);
+    });
+  }, [input, partialText, attachments, workspacePath]);
 
   const onStop = useCallback(async () => {
-    try { await window.api.agent.abort(); } catch { /* abort is best-effort */ }
+    const id = chatIdRef.current;
+    if (id) await chatStore.abortChat(id);
   }, []);
 
-  const onClear = useCallback(async () => {
-    try { await window.api.agent.reset(); } catch { /* reset is best-effort */ }
-    if (tickerRef.current) { clearInterval(tickerRef.current); tickerRef.current = null; }
-    currentAssistantIdRef.current = null;
-    lastSentUserIdRef.current = null;
-    setMessages([]);
-    setError(null);
-    setRunning(false);
-    setTokens(0);
-    setElapsedMs(0);
-    setAttachments([]);
+  // "New chat": mint a fresh entry and switch to it. The previous chat is
+  // untouched — if it's mid-turn it keeps running in the background (spinner
+  // in the history popover; its transcript keeps accumulating in the store).
+  const onClear = useCallback(() => {
+    if (!workspacePath) return;
+    chatStore.newChat(workspacePath);
     setRejected(null);
-    setCurrentSessionId(null);
-    setSessionTitle(null);
-    setSessionStarred(false);
     setRenamingTitle(false);
-  }, []);
+    setPartialText('');
+  }, [workspacePath]);
 
   // Star / unstar the active chat (header star button).
   const onToggleHeaderStar = useCallback(async () => {
-    if (!currentSessionId) return;
+    const id = chatIdRef.current;
+    if (!id || !chat.persisted) return;
     const next = !sessionStarred;
-    setSessionStarred(next);
-    try { await window.api.chat.setStarred({ sessionId: currentSessionId, starred: next }); }
-    catch { setSessionStarred(!next); }
-  }, [currentSessionId, sessionStarred]);
+    chatStore.setStarred(id, next);
+    try { await window.api.chat.setStarred({ sessionId: id, starred: next }); }
+    catch { chatStore.setStarred(id, !next); }
+  }, [chat.persisted, sessionStarred]);
 
   // Inline rename of the active chat's title (double-click the header title).
   const startRename = useCallback(() => {
-    if (!currentSessionId) return;
+    if (!chatIdRef.current || !chat.persisted) return;
     setTitleDraft(sessionTitle ?? '');
     setRenamingTitle(true);
-  }, [currentSessionId, sessionTitle]);
+  }, [chat.persisted, sessionTitle]);
 
   const commitRename = useCallback(async () => {
+    const id = chatIdRef.current;
     const title = titleDraft.trim();
     setRenamingTitle(false);
-    if (!currentSessionId || !title || title === sessionTitle) return;
-    setSessionTitle(title);
-    try { await window.api.chat.renameSession({ sessionId: currentSessionId, title }); }
+    if (!id || !title || title === sessionTitle) return;
+    chatStore.setTitle(id, title);
+    try { await window.api.chat.renameSession({ sessionId: id, title }); }
     catch { /* rename is best-effort */ }
-  }, [currentSessionId, titleDraft, sessionTitle]);
+  }, [titleDraft, sessionTitle]);
 
-  // Open a saved chat from the history popover: hydrate the transcript from the
-  // DB and hand pi the session so the next send continues it.
+  // Open a saved chat from the history popover. Cold chats hydrate from the
+  // DB; chats already in the store (e.g. running in the background) switch
+  // instantly with their live transcript intact.
   const onOpenSession = useCallback(async (sessionId) => {
     setShowHistory(false);
-    if (sessionId === currentSessionId) return;
+    if (sessionId === chatIdRef.current) return;
     try {
-      const { session, messages: rows } = await window.api.chat.openSession(sessionId);
-      if (tickerRef.current) { clearInterval(tickerRef.current); tickerRef.current = null; }
-      currentAssistantIdRef.current = null;
-      currentThinkingIdRef.current = null;
-      lastSentUserIdRef.current = null;
-      setMessages(hydrateMessages(rows || []));
-      setCurrentSessionId(sessionId);
-      setSessionTitle(session?.title ?? null);
-      setSessionStarred(!!session?.starred);
+      await chatStore.openChat(sessionId, workspacePath);
       setRenamingTitle(false);
-      setError(null);
-      setRunning(false);
-      setTokens(0);
-      setElapsedMs(0);
-      setAttachments([]);
       setRejected(null);
+      setPartialText('');
     } catch (err: any) {
       setError(err?.message ?? String(err));
     }
-  }, [currentSessionId]);
+  }, [workspacePath, setError]);
+
+  // A chat was deleted from the history popover (main already aborted +
+  // disposed its live session). Drop it from the store; if it was the one on
+  // screen, move to a fresh chat.
+  const onDeletedSession = useCallback((sessionId) => {
+    const wasActive = sessionId === chatIdRef.current;
+    chatStore.removeChat(sessionId);
+    if (wasActive && workspacePath) chatStore.newChat(workspacePath);
+  }, [workspacePath]);
 
   const ingestFiles = useCallback(async (fileList) => {
     const files = [...(fileList ?? [])];
@@ -1007,11 +816,11 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
         reason: `${first.name}: ${first.reason} (+${failures.length - 1} more)`,
       });
     }
-  }, []);
+  }, [setAttachments]);
 
   const removeAttachment = useCallback((id) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
-  }, []);
+  }, [setAttachments]);
 
   const onPickFiles = useCallback(() => {
     fileInputRef.current?.click();
@@ -1105,7 +914,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
       const len = el.value.length;
       try { el.setSelectionRange(len, len); } catch { /* selection is cosmetic */ }
     },
-  }), [input]);
+  }), [input, setInput]);
 
   // Click anywhere in the sidebar that isn't an interactive element or active
   // text selection -> focus the composer textarea and put the caret at the end.
@@ -1192,11 +1001,11 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
             <span
               className="truncate text-[13px] font-semibold text-foreground"
               onDoubleClick={startRename}
-              title={currentSessionId ? 'Double-click to rename' : undefined}
+              title={chat.persisted ? 'Double-click to rename' : undefined}
             >{sessionTitle || 'Agent Chat'}</span>
           )}
         </span>
-        {currentSessionId && (
+        {chat.persisted && (
           <button
             type="button"
             className={cn(headerBtn, sessionStarred && 'text-amber-500 hover:text-amber-500')}
@@ -1219,6 +1028,8 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           currentSessionId={currentSessionId}
           onSelect={onOpenSession}
           onClose={() => setShowHistory(false)}
+          runningIds={runningIds}
+          onDeleted={onDeletedSession}
         />
       )}
 
@@ -1234,6 +1045,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
             <span className="font-normal">
               {formatElapsed(elapsedMs)}
               {tokens > 0 && ` · ${formatTokens(tokens)} tokens`}
+              {queuedCount > 0 && ` · ${queuedCount} queued`}
             </span>
           </div>
         )}
@@ -1279,7 +1091,6 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
               type="button"
               className="flex size-[26px] items-center justify-center rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
               onClick={onPickFiles}
-              disabled={running}
               title="Attach images or text files"
               aria-label="Attach files"
             ><PaperclipIcon size={15} /></button>
@@ -1291,7 +1102,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
                   voiceRecording && 'bg-destructive/10 text-destructive hover:bg-destructive/10 hover:text-destructive',
                 )}
                 onClick={voiceRecording ? stopVoice : startVoice}
-                disabled={running || voiceConnecting}
+                disabled={voiceConnecting}
                 title={voiceRecording ? 'Stop recording' : voiceConnecting ? 'Connecting…' : 'Voice input'}
                 aria-label={voiceRecording ? 'Stop recording' : 'Start voice input'}
               >
@@ -1301,24 +1112,28 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
               </button>
             )}
           </div>
-          {running ? (
-            <button
-              type="button"
-              className="flex size-[29px] items-center justify-center rounded-[9px] bg-foreground/80 text-background hover:bg-foreground"
-              onClick={onStop}
-              title="Stop"
-              aria-label="Stop"
-            ><StopIcon size={14} /></button>
-          ) : (
+          {/* While running, Stop and Send coexist: Enter/Send steers the
+              message into the running turn (pi queues it and delivers at the
+              next step boundary). */}
+          <div className="flex items-center gap-1.5">
+            {running && (
+              <button
+                type="button"
+                className="flex size-[29px] items-center justify-center rounded-[9px] bg-foreground/80 text-background hover:bg-foreground"
+                onClick={onStop}
+                title="Stop"
+                aria-label="Stop"
+              ><StopIcon size={14} /></button>
+            )}
             <button
               type="button"
               className="flex size-[29px] items-center justify-center rounded-[9px] bg-primary text-primary-foreground hover:bg-primary-hover disabled:pointer-events-none disabled:opacity-40"
               onClick={onSend}
               disabled={(!input.trim() && !partialText.trim() && attachments.length === 0) || !workspacePath}
-              title="Send"
+              title={running ? 'Send (steers the running response)' : 'Send'}
               aria-label="Send"
             ><PlayIcon size={14} /></button>
-          )}
+          </div>
         </div>
         </div>
       </div>

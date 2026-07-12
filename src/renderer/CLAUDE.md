@@ -73,19 +73,30 @@ For the `app://media/...` protocol see `src/main/CLAUDE.md`. Renderer pieces:
 
 ## Coding agent (renderer side: chat sidebar)
 
-Right-side chat sidebar (`ChatSidebar.jsx`) backed by `@earendil-works/pi-coding-agent`. The sidebar is collapsed to a 28px strip by default; clicking the strip expands it. State (`chatSidebarOpen`, `chatSidebarWidth`) is persisted to settings.
+Right-side chat sidebar (`ChatSidebar.tsx`) backed by `@earendil-works/pi-coding-agent`. The sidebar is collapsed to a 28px strip by default; clicking the strip expands it. State (`chatSidebarOpen`, `chatSidebarWidth`) is persisted to settings.
 
-For the main-side session lifecycle (session keying, skills, agent-tokens bridge, failed-image guard, system prompt) see `src/main/CLAUDE.md`.
+For the main-side session lifecycle (per-chat session map, steering, skills, agent-tokens bridge, failed-image guard, system prompt) see `src/main/CLAUDE.md`.
 
-### Event protocol consumed by the sidebar
+### chatStore.ts — per-chat state outside the React tree
 
-`agent_start` / `agent_end` gate the running state. `turn_end` carries pi's normalized `usage` (we sum `totalTokens` across turns; each turn re-pays for context so the sum matches billed usage). `message_update` carries `assistantMessageEvent` which is either `text_start` (open a new assistant bubble) or `text_delta` (append to current bubble). `tool_execution_start` / `tool_execution_update` / `tool_execution_end` build collapsible tool entries keyed by `toolCallId`. Assistant text is rendered through `react-markdown` + `remark-gfm`. The sidebar also runs an elapsed-time ticker and a shimmer "Working" indicator while pi is running.
+Chats run **concurrently** in main, so their state can't live in component state (the sidebar unmounts on collapse and remounts on workspace switch). `chatStore.ts` is a module store (consumed via `useSyncExternalStore`) holding one entry per chat, keyed by sessionId: transcript, `running`, tokens/elapsed, error, composer draft + attachments, streaming cursors, and `activeByWorkspace` (which chat each workspace shows). Rules:
+
+- **One event subscription for the whole app**, made lazily inside the store, never torn down. Main stamps every `agent:event` / `agent:error` with its `sessionId`; the store routes it into that chat's entry whether or not it's on screen. The on-screen transcript is always just `chats[activeId].messages` — there is **no DB merge on switch**; the DB is only for cold loads (`openChat`, first touch of a saved chat this app run).
+- **New chats mint their sessionId here** (`crypto.randomUUID`) — main hands it to pi, so events are routable before the first byte streams back.
+- State is replaced immutably on every update so untouched message rows keep referential identity (preserves `MessageRow`'s memo).
+- `ChatSidebar` is a view over the active entry. Its only local state is view-stuff (popover open, rename draft, drag-over, voice partials). "New chat" just mints a fresh entry — the previous chat keeps running in the background (spinner on its row in the history popover; switching into it mid-turn shows the live stream).
+- **Sending while the chat is running steers** — main queues the message into the running turn; the composer never locks, and Stop + Send coexist while running. `queue_update` events drive the "N queued" hint on the Working line.
+- After a window reload the store reseeds running flags from `agent:runningSessions`.
+
+### Event protocol consumed by the store
+
+`agent_start` / `agent_end` gate the per-chat running state. `turn_end` carries pi's normalized `usage` (we sum `totalTokens` across turns; each turn re-pays for context so the sum matches billed usage). `message_update` carries `assistantMessageEvent` (`thinking_start/delta/end`, `text_start`, `text_delta`). `tool_execution_start` / `tool_execution_update` / `tool_execution_end` build collapsible tool entries keyed by `toolCallId`. `shockwave_session` / `shockwave_session_titled` carry chat identity (title, star). Assistant text is rendered through `react-markdown` + `remark-gfm`.
 
 **`MessageRow` is wrapped in `React.memo`** so typing in the composer doesn't re-parse every prior assistant bubble's markdown through `react-markdown`. Keep `MessageRow`'s prop surface narrow (just the message object) — adding non-memoized callbacks would defeat this.
 
 ### Workspace change
 
-The chat sidebar is mounted with `key={workspacePath ?? 'no-workspace'}` in `App.jsx`, so switching workspaces remounts it and clears the transcript. The pi session itself is reset lazily on the next send (because the session key changes).
+The chat sidebar is mounted with `key={workspacePath ?? 'no-workspace'}` in `App.tsx`, so switching workspaces remounts it — but the store survives, so transcripts, drafts, and running chats are all intact; the remounted sidebar simply shows the new workspace's active chat (`activeByWorkspace`). Chats running in another workspace keep streaming into the store.
 
 ### Attachments (`chatAttachments.js`)
 
