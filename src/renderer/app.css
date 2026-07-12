@@ -234,11 +234,11 @@
 
   --shadow-popover: 0 4px 16px rgba(0, 0, 0, 0.12);
 
-  /* AI streaming highlight (yellow while writing, green pulse on done). */
+  /* AI streaming highlight (yellow while writing, soft accent pulse on done). */
   --ai-stream-bg: #fdf6d8;
-  --ai-done-bg-start: #e8f6ec;
-  --ai-done-bg-peak: #c6ebd1;
-  --ai-done-bg-end: rgba(198, 235, 209, 0);
+  --ai-done-bg-start: rgba(91, 87, 216, 0.06);
+  --ai-done-bg-peak: rgba(91, 87, 216, 0.16);
+  --ai-done-bg-end: rgba(91, 87, 216, 0);
 
   /* Graph view colors. */
   --graph-node: #5b57d8;
@@ -278,11 +278,11 @@
   --indent-line: #333336;
   --indent-line-active: #4c4c50;
 
-  /* Muted amber + green so the streaming highlight sits comfortably on dark bg. */
+  /* Muted amber + soft accent pulse so highlights sit comfortably on dark bg. */
   --ai-stream-bg: #4a4015;
-  --ai-done-bg-start: #1f3a2a;
-  --ai-done-bg-peak: #2f5a3f;
-  --ai-done-bg-end: rgba(47, 90, 63, 0);
+  --ai-done-bg-start: rgba(125, 121, 232, 0.10);
+  --ai-done-bg-peak: rgba(125, 121, 232, 0.24);
+  --ai-done-bg-end: rgba(125, 121, 232, 0);
 
   --graph-node: #7d79e8;
   --graph-link: rgba(255, 255, 255, 0.25);
