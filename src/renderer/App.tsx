@@ -1863,6 +1863,11 @@ export default function App() {
             {bootDone ? `Welcome to ${APP_NAME}. Add a workspace from the gear icon to get started.` : ''}
           </div>
         )}
+        {/* Toasts anchor to the editor pane (bottom-right, lifted above the
+            status bar) — over the content being read, not the chat column.
+            The Toaster's own class swaps sonner's fixed positioning for
+            absolute, so this relative pane is the containing block. */}
+        <Toaster position="bottom-right" offset={{ bottom: 44, right: 14 }} />
       </main>
 
       {chatSidebarOpen ? (
@@ -2039,9 +2044,6 @@ export default function App() {
         />
       )}
     </div>
-    {/* Outside the .app grid — a stray grid child would add an implicit row
-        and squeeze the main layout. */}
-    <Toaster position="bottom-right" />
     </>
   );
 }

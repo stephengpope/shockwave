@@ -16,6 +16,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
     // Sonner doesn't expose per-toast ids in the DOM, so this dismisses the
     // stack — fine in practice, there's rarely more than one.
     <div
+      className="contents"
       onClick={(e) => {
         const el = e.target as HTMLElement;
         if (el.closest("[data-sonner-toast]") && !el.closest("button")) toast.dismiss();
@@ -26,7 +27,9 @@ const Toaster = ({ ...props }: ToasterProps) => {
       // richColors activates the per-type --success-*/--error-*/--warning-*
       // vars below (without it every type renders on --normal-bg).
       richColors
-      className="toaster group"
+      // !absolute: sonner positions its list fixed to the viewport; the app
+      // anchors it inside the editor pane instead (see App.tsx).
+      className="toaster group !absolute"
       icons={{
         success: <CircleCheckIcon className="size-4" />,
         info: <InfoIcon className="size-4" />,
