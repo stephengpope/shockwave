@@ -86,6 +86,9 @@
   --text-muted-2: #9a9a93; /* section headers, line numbers, timestamps */
   --success: #2e7d46;
   --success-soft: #eaf6ee;
+  --warning: #9a5a2e;
+  --warning-soft: #f8f0e4;
+  --destructive-soft: #faedec;
   --bullet: #8b88e0;
   --folder: #b4bdd0;
   --code-chip: #f1f0ec;
@@ -124,6 +127,9 @@
   --text-muted-2: #6c6c66;
   --success: #5fd08a;
   --success-soft: rgba(95, 208, 138, 0.14);
+  --warning: #e0a35c;
+  --warning-soft: rgba(224, 163, 92, 0.14);
+  --destructive-soft: rgba(229, 100, 90, 0.14);
   --bullet: #9e9bec;
   --folder: #7f88a3;
   --code-chip: rgba(255, 255, 255, 0.08);
@@ -162,6 +168,9 @@
   --color-muted-2: var(--text-muted-2);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-destructive-soft: var(--destructive-soft);
   --color-bullet: var(--bullet);
   --color-folder: var(--folder);
   --color-code-chip: var(--code-chip);

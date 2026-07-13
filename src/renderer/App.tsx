@@ -41,6 +41,10 @@ import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { Button } from '@/components/ui/button';
 
+// Dev-only: lets headless CDP sessions fire test toasts to check styling
+// without touching app state (window.__toast.error('…')).
+if (import.meta.env.DEV) (window as any).__toast = toast;
+
 const SAVE_DEBOUNCE_MS = 500;
 
 function genWorkspaceId() {
@@ -342,7 +346,8 @@ export default function App() {
         },
       });
     } else if (cur === 'disabled' && syncStatus?.detail && syncStatus.detail !== 'Sync is turned off') {
-      toast.error('Sync stopped', { description: syncStatus.detail, id: 'sync-disabled' });
+      // Errors carry detail worth reading — hold them longer than the 4s default.
+      toast.error('Sync stopped', { description: syncStatus.detail, id: 'sync-disabled', duration: 8000 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncStatus]);
@@ -1537,7 +1542,7 @@ export default function App() {
     });
     const offError = window.api.agent.onError(({ message }: any) => {
       if (chatSidebarOpenRef.current) return; // sidebar shows its own inline banner
-      toast.error('Agent error', { description: message });
+      toast.error('Agent error', { description: message, duration: 8000 });
     });
     return () => { offEvent?.(); offError?.(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
