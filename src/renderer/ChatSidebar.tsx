@@ -18,6 +18,7 @@ import { useVoiceInput } from './voice/useVoiceInput.js';
 import { VoiceBars } from './voice/VoiceBars.jsx';
 import * as chatStore from './chatStore.js';
 import { EMPTY_CHAT } from './chatStore.js';
+import ConfirmDialog from './ConfirmDialog.jsx';
 
 // Workspace path available to MARKDOWN_COMPONENTS' `img` override via context,
 // so the module-level components object stays referentially stable (preserving
@@ -409,19 +410,26 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   const [items, setItems] = useState<any[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
+  // Pending delete confirmation: { sessionId, title } | null.
+  const [confirmDelete, setConfirmDelete] = useState<any>(null);
+  const confirmDeleteRef = useRef<any>(null);
+  confirmDeleteRef.current = confirmDelete;
   const rootRef = useRef<any>(null);
   const searching = query.trim().length > 0;
 
   // Dismiss on any click/focus outside the popover (ignoring the header toggle,
-  // which owns its own open/close), or on Escape.
+  // which owns its own open/close), or on Escape. Suspended while the delete
+  // confirmation is up — its portal renders outside the popover, and Escape
+  // there should close the dialog, not the popover.
   useEffect(() => {
     const onDown = (e) => {
+      if (confirmDeleteRef.current) return;
       const t = e.target;
       if (rootRef.current?.contains(t)) return;
       if (t?.closest?.('.chat-history-toggle')) return; // let the toggle handle itself
       onClose();
     };
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => { if (e.key === 'Escape' && !confirmDeleteRef.current) onClose(); };
     document.addEventListener('mousedown', onDown, true);
     document.addEventListener('focusin', onDown, true);
     document.addEventListener('keydown', onKey);
@@ -468,8 +476,12 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
     }
   }, [searching, loading, hasMore, items, loadRecents]);
 
-  const onDelete = useCallback(async (e, sessionId) => {
+  const onDelete = useCallback((e, it) => {
     e.stopPropagation();
+    setConfirmDelete({ sessionId: it.sessionId, title: it.title });
+  }, []);
+
+  const performDelete = useCallback(async (sessionId) => {
     await window.api.chat.deleteSession(sessionId);
     setItems((prev) => prev.filter((x) => x.sessionId !== sessionId));
     setStarredList((prev) => prev.filter((x) => x.sessionId !== sessionId));
@@ -517,7 +529,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         role="button"
         tabIndex={0}
         className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-2 opacity-0 hover:text-destructive group-hover/row:opacity-100"
-        onClick={(e) => onDelete(e, it.sessionId)}
+        onClick={(e) => onDelete(e, it)}
         aria-label="Delete chat"
         title="Delete chat"
       ><TrashIcon size={12} /></span>
@@ -558,6 +570,22 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
         )}
         {items.map((it) => renderRow(it, false))}
       </div>
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={() => {
+          const pending = confirmDelete;
+          setConfirmDelete(null);
+          if (pending) performDelete(pending.sessionId);
+        }}
+        title="Delete chat?"
+        message={
+          `"${confirmDelete?.title || 'Untitled chat'}" and its messages will be permanently deleted.` +
+          (runningIds?.has(confirmDelete?.sessionId) ? ' This chat is currently responding — the response will be stopped.' : '')
+        }
+        confirmLabel="Delete"
+        destructive
+      />
     </div>
   );
 }
