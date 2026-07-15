@@ -245,7 +245,7 @@ export default function App() {
     saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onDailyNotesInBookmarksChange,
     onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
-    onCodingAgentChange, onGlobalBuiltinSkillToggle, onAgentSecretsChange, onTranscriptionChange,
+    onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSyncChange, onSyncDisabledChange,
   } = useSettings({ activeWorkspacePath: workspacePath });
 
@@ -1876,7 +1876,7 @@ export default function App() {
             className="absolute inset-y-0 -left-[3px] z-10 w-1.5 cursor-col-resize"
             onMouseDown={onChatSidebarResizeStart}
           />
-          <ChatSidebar ref={setChatSidebarRef} onClose={toggleChatSidebar} workspacePath={workspacePath} />
+          <ChatSidebar ref={setChatSidebarRef} onClose={toggleChatSidebar} workspacePath={workspacePath} onOpenSecrets={() => openSettings(SETTINGS_SECTIONS.AGENT_SECRETS)} />
         </aside>
       ) : (
         <button
@@ -2025,14 +2025,13 @@ export default function App() {
           templateOptions={templateOptions}
           builtinSkills={builtinSkills}
           onBuiltinSkillToggle={onBuiltinSkillToggle}
-          globalBuiltinSkills={codingAgentSettings.builtinSkills ?? {}}
-          onGlobalBuiltinSkillToggle={onGlobalBuiltinSkillToggle}
           tree={tree}
           workspacePath={workspacePath}
           codingAgent={codingAgentSettings}
           onCodingAgentChange={onCodingAgentChange}
           agentSecrets={agentSecrets}
           onAgentSecretsChange={onAgentSecretsChange}
+          onReloadSecrets={reloadAgentSecrets}
           transcription={transcription}
           onTranscriptionChange={onTranscriptionChange}
           sync={sync}

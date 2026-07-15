@@ -159,18 +159,17 @@ export async function removeWorkspaceSkill(workspacePath, folderName) {
 }
 
 // The absolute skill-folder paths pi should load for a workspace:
-//   • each built-in that resolves ON — the workspace override wins, else the
-//     global default, else enabled (default-on).
+//   • each built-in that resolves ON — the workspace toggle decides; an absent
+//     key means enabled (default-on). There is no global tier.
 //   • every uploaded workspace skill
 // Uploaded skills win a folder-name collision (a user copy can shadow a built-in).
-export function computeEffectivePaths(builtins, globalToggles, wsToggles, workspaceSkills) {
-  const g = globalToggles ?? {};
+export function computeEffectivePaths(builtins, wsToggles, workspaceSkills) {
   const w = wsToggles ?? {};
   const byName = new Map<string, any>(); // folderName(lower) → { path, source }
   for (const sk of builtins) {
     if (!sk.hasSkillMd) continue;
-    const state = w[sk.folderName] ?? g[sk.folderName]; // ws override wins, else global
-    if (state === 'disabled') continue; // absent ⇒ enabled (default-on)
+    const state = w[sk.folderName]; // workspace toggle; absent ⇒ enabled (default-on)
+    if (state === 'disabled') continue;
     byName.set(sk.folderName.toLowerCase(), { path: sk.path, source: 'builtin' });
   }
   for (const sk of workspaceSkills) {

@@ -19,6 +19,7 @@ import { getProviders, getModels } from '@earendil-works/pi-ai/compat';
 import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from './skillLibrary.js';
 import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { installOpenFileBridge } from './openFileExtension.js';
+import { initOAuth, startConnect as oauthStartConnect, disconnect as oauthDisconnect, getFreshToken, PROVIDER_PRESETS } from './oauth.js';
 import { ensureCliShims, prependPath } from './cliTools.js';
 import {
   verifyPat as syncVerifyPat,
@@ -105,10 +106,6 @@ const DEFAULT_SETTINGS = {
     // System prompt is no longer a setting — it's assembled at session boot from
     // the workspace's SOUL.md (or a built-in default) + the internal Shockwave
     // helper. See src/main/prompt/.
-    // GLOBAL built-in skill on/off (folderName → 'enabled'|'disabled'; absent ⇒
-    // enabled). A workspace can override per-skill in its workspace.json. User
-    // uploads live in `<workspace>/.shockwave/skills/`.
-    builtinSkills: {},
   },
   // Global, user-managed API tokens. Each entry: { name, description, token, createdAt, updatedAt }.
   // `name` is the unique identifier (case-insensitive). `token` is encrypted on disk
@@ -243,7 +240,6 @@ async function readSettings() {
         ...DEFAULT_SETTINGS.codingAgent,
         ...(parsed.codingAgent ?? {}),
         providerKeys: { ...(parsed.codingAgent?.providerKeys ?? {}) },
-        builtinSkills: { ...(parsed.codingAgent?.builtinSkills ?? {}) },
       },
       agentSecrets: Array.isArray(parsed.agentSecrets) ? parsed.agentSecrets : [],
       transcription: {
@@ -274,6 +270,18 @@ async function readSettings() {
     merged.agentSecrets = merged.agentSecrets.map((s) => ({
       ...s,
       token: decryptSecret(s.token ?? ''),
+      // Decrypt the three secret-bearing OAuth fields in place; non-oauth
+      // secrets have no `oauth` object and are left untouched.
+      ...(s.oauth
+        ? {
+            oauth: {
+              ...s.oauth,
+              clientSecret: decryptSecret(s.oauth.clientSecret ?? ''),
+              accessToken: decryptSecret(s.oauth.accessToken ?? ''),
+              refreshToken: decryptSecret(s.oauth.refreshToken ?? ''),
+            },
+          }
+        : {}),
     }));
     merged.transcription.apiKey = decryptSecret(merged.transcription.apiKey);
     merged.sync.pat = decryptSecret(merged.sync.pat);
@@ -327,6 +335,18 @@ async function doWriteSettings(patch) {
     out.agentSecrets = out.agentSecrets.map((s) => ({
       ...s,
       token: encryptSecret(s.token ?? ''),
+      // Encrypt the three secret-bearing OAuth fields. encryptSecret is
+      // idempotent, so values preserved from disk (already enc:v1) pass through.
+      ...(s.oauth
+        ? {
+            oauth: {
+              ...s.oauth,
+              clientSecret: encryptSecret(s.oauth.clientSecret ?? ''),
+              accessToken: encryptSecret(s.oauth.accessToken ?? ''),
+              refreshToken: encryptSecret(s.oauth.refreshToken ?? ''),
+            },
+          }
+        : {}),
     }));
   }
   if (out.transcription) out.transcription.apiKey = encryptSecret(out.transcription.apiKey ?? '');
@@ -1053,6 +1073,33 @@ ipcMain.handle('settings:write', async (_evt, obj) => {
   await writeSettings(obj);
 });
 
+// OAuth for agent secrets. The whole flow (system browser + loopback callback +
+// token exchange/refresh) lives in main; the renderer only kicks it off and
+// reads status back off the persisted secret. `oauth:listPresets` feeds the
+// connect form's provider dropdown.
+ipcMain.handle('oauth:listPresets', async () => {
+  // Strip nothing — presets are static, non-secret metadata.
+  return PROVIDER_PRESETS;
+});
+
+ipcMain.handle('oauth:startConnect', async (_evt, name) => {
+  try {
+    const result = await oauthStartConnect(name);
+    return { ok: true, ...result };
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+});
+
+ipcMain.handle('oauth:disconnect', async (_evt, name) => {
+  try {
+    await oauthDisconnect(name);
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+});
+
 // Mint a short-lived AssemblyAI streaming token. The long-lived API key sits
 // encrypted in settings and never crosses to the renderer — only the 60s temp
 // token does, which is just the WebSocket session credential.
@@ -1389,10 +1436,9 @@ ipcMain.handle('agent:send', async (evt, { sessionId, text, images }) => {
     const settings = await readSettings();
     const ws = (settings.workspaces || []).find((w) => w.id === settings.activeWorkspaceId);
     const workspacePath = ws?.path ?? null;
-    const { provider, model, baseUrl, contextWindow, thinkingLevel, builtinSkills, providerKeys } = settings.codingAgent ?? {};
+    const { provider, model, baseUrl, contextWindow, thinkingLevel, providerKeys } = settings.codingAgent ?? {};
     const apiKey = providerKeys?.[provider] ?? '';
-    // Per-workspace built-in override lives in the workspace file; it wins over
-    // the global default above.
+    // Built-in skill on/off is per-workspace only; it lives in the workspace file.
     const wsData = workspacePath ? await readWorkspaceFileRaw(workspacePath) : null;
 
     await agentSend(
@@ -1409,7 +1455,6 @@ ipcMain.handle('agent:send', async (evt, { sessionId, text, images }) => {
         thinkingLevel,
         userDataDir: app.getPath('userData'),
         builtinDir: builtinSkillsDir(),
-        globalBuiltinSkills: builtinSkills ?? {},
         wsBuiltinSkills: wsData?.builtinSkills ?? {},
       },
       (event) => emit('agent:event', event),
@@ -1899,13 +1944,29 @@ nativeTheme.on('updated', () => {
   }
 });
 
+// Give the OAuth engine access to settings I/O (avoids a circular import back
+// into this entry file). Must run before any oauth:* IPC or getFreshToken call.
+initOAuth({ readSettings, writeSettings });
+
 // Install the bridge the agent-tokens pi extension uses to fetch decrypted
 // secrets. Re-reads on every call so user-side edits to secrets are picked
 // up mid-conversation without restarting the session.
-installAgentTokensBridge(async () => {
-  const settings = await readSettings();
-  return settings.agentSecrets ?? [];
-});
+installAgentTokensBridge(
+  async () => {
+    const settings = await readSettings();
+    return settings.agentSecrets ?? [];
+  },
+  // getToken(name): a usable credential. Static → the stored token; OAuth →
+  // a fresh access token (getFreshToken refreshes if expired). Throws with a
+  // user-facing message for unknown names / connections needing reconnect.
+  async (name) => {
+    const settings = await readSettings();
+    const secret = (settings.agentSecrets ?? []).find((s) => s.name === name);
+    if (!secret) throw new Error(`No secret named "${name}". Call list_agent_secrets to see available names.`);
+    if (secret.oauth) return getFreshToken(name);
+    return secret.token ?? '';
+  },
+);
 
 // Bridge for the open-file pi extension: validate the agent's path against the
 // active workspace, then ask the renderer to open it in a new tab. Confined to

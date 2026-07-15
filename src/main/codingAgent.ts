@@ -112,14 +112,14 @@ async function disposeEntry(sessionId: string) {
 }
 
 async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<Entry> {
-  const { workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, userDataDir, builtinDir, globalBuiltinSkills, wsBuiltinSkills } = opts;
+  const { workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, userDataDir, builtinDir, wsBuiltinSkills } = opts;
   const level = thinkingLevel || 'off';
 
   // Recompute the effective skill list + materialize extensions before boot.
   await ensureDirs(userDataDir);
   const builtins = await listBuiltinSkills(builtinDir);
   const wsSkills = await listWorkspaceSkills(workspacePath);
-  const effectivePaths = computeEffectivePaths(builtins, globalBuiltinSkills, wsBuiltinSkills, wsSkills);
+  const effectivePaths = computeEffectivePaths(builtins, wsBuiltinSkills, wsSkills);
   const agentTokensPath = await ensureAgentTokensExtension(userDataDir);
   const openFilePath = await ensureOpenFileExtension(userDataDir);
   await writePiSettings(userDataDir, { skills: effectivePaths, extensions: [agentTokensPath, openFilePath] });

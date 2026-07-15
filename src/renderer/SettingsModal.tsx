@@ -13,7 +13,6 @@ import WorkspacesSection from './settings/WorkspacesSection.jsx';
 import AppearanceSection from './settings/AppearanceSection.jsx';
 import AgentChatSection from './settings/AgentChatSection.jsx';
 import WorkspaceSkillsSection from './settings/WorkspaceSkillsSection.jsx';
-import BuiltinSkillsSection from './settings/BuiltinSkillsSection.jsx';
 import AgentSecretsSection from './settings/AgentSecretsSection.jsx';
 import DailyNoteSection from './settings/DailyNoteSection.jsx';
 import TemplatesSection from './settings/TemplatesSection.jsx';
@@ -45,7 +44,6 @@ function buildNav(workspaceLabel) {
     { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACE_SKILLS, label: 'Manage Skills' },
     { kind: 'header', label: 'AI Agent' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
-    { kind: 'item', id: SETTINGS_SECTIONS.AGENT_BUILTIN_SKILLS, label: 'Built-in Skills' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
   ];
 }
@@ -82,14 +80,13 @@ export default function SettingsModal({
   templateOptions,
   builtinSkills,
   onBuiltinSkillToggle,
-  globalBuiltinSkills,
-  onGlobalBuiltinSkillToggle,
   tree,
   workspacePath,
   codingAgent,
   onCodingAgentChange,
   agentSecrets,
   onAgentSecretsChange,
+  onReloadSecrets,
   transcription,
   onTranscriptionChange,
   sync,
@@ -211,16 +208,9 @@ export default function SettingsModal({
               <WorkspaceSkillsSection
                 workspacePath={workspacePath}
                 builtinSkills={builtinSkills}
-                globalBuiltinSkills={globalBuiltinSkills}
                 onBuiltinSkillToggle={onBuiltinSkillToggle}
               />
             ) : <NoWorkspaceNote />
-          )}
-          {active === SETTINGS_SECTIONS.AGENT_BUILTIN_SKILLS && (
-            <BuiltinSkillsSection
-              globalBuiltinSkills={globalBuiltinSkills}
-              onGlobalBuiltinSkillToggle={onGlobalBuiltinSkillToggle}
-            />
           )}
           {active === SETTINGS_SECTIONS.SYNC && (
             <SyncSection
@@ -253,6 +243,7 @@ export default function SettingsModal({
             <AgentSecretsSection
               secrets={agentSecrets ?? []}
               onChange={onAgentSecretsChange}
+              onReload={onReloadSecrets}
             />
           )}
         </div>

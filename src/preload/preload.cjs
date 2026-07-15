@@ -230,6 +230,19 @@ contextBridge.exposeInMainWorld('api', {
     write: (obj) => ipcRenderer.invoke('settings:write', obj),
   },
 
+  // ---- OAuth (agent secrets) ----------------------------------------------
+
+  oauth: {
+    /** @returns {Promise<Array<object>>} Static provider presets for the connect form. */
+    listPresets: () => ipcRenderer.invoke('oauth:listPresets'),
+    /** Runs the browser+loopback authorization for a stored oauth secret, persists tokens.
+     *  @param {string} name @returns {Promise<{ ok: boolean, accountEmail?: string, error?: string }>} */
+    startConnect: (name) => ipcRenderer.invoke('oauth:startConnect', name),
+    /** Clears live tokens for a connection (keeps client config for re-connect).
+     *  @param {string} name @returns {Promise<{ ok: boolean, error?: string }>} */
+    disconnect: (name) => ipcRenderer.invoke('oauth:disconnect', name),
+  },
+
   // ---- Theme --------------------------------------------------------------
 
   theme: {

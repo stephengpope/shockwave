@@ -1,7 +1,7 @@
 import React, { createContext, forwardRef, memo, useCallback, useContext, useEffect, useImperativeHandle, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { ChevronDown, ChevronRight, Sparkles, KeyRound } from 'lucide-react';
 import { PaperclipIcon, PlayIcon, StopIcon, XIcon, FileTextIcon, MicIcon, PanelRightCloseIcon, CopyIcon, CheckIcon, SearchIcon, PlusIcon, TrashIcon } from './Icons.jsx';
 import { cn } from '@/lib/utils';
 import { resolveImageUrl } from './imageWidgets.js';
@@ -590,7 +590,7 @@ function HistoryPopover({ currentSessionId, onSelect, onClose, runningIds, onDel
   );
 }
 
-const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath }, ref) {
+const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspacePath, onOpenSecrets }, ref) {
   // All chat state (transcripts, running flags, drafts, counters) lives in
   // chatStore — OUTSIDE this component — so background chats keep streaming
   // and nothing is lost when the sidebar collapses (unmount) or the workspace
@@ -1112,7 +1112,7 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           style={{ display: 'none' }}
           onChange={onFileInputChange}
         />
-        {/* Attach + mic left, square accent send right (spec §6). */}
+        {/* Attach + API keys left, mic + square accent send right (spec §6). */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1">
             <button
@@ -1122,6 +1122,18 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
               title="Attach images or text files"
               aria-label="Attach files"
             ><PaperclipIcon size={15} /></button>
+            <button
+              type="button"
+              className="flex size-[26px] items-center justify-center rounded-[7px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              onClick={onOpenSecrets}
+              title="API secrets"
+              aria-label="API secrets"
+            ><KeyRound size={15} /></button>
+          </div>
+          {/* While running, Stop and Send coexist: Enter/Send steers the
+              message into the running turn (pi queues it and delivers at the
+              next step boundary). */}
+          <div className="flex items-center gap-1.5">
             {voiceAvailable && (
               <button
                 type="button"
@@ -1139,11 +1151,6 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
                   : <MicIcon size={15} />}
               </button>
             )}
-          </div>
-          {/* While running, Stop and Send coexist: Enter/Send steers the
-              message into the running turn (pi queues it and delivers at the
-              next step boundary). */}
-          <div className="flex items-center gap-1.5">
             {running && (
               <button
                 type="button"

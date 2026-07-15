@@ -14,9 +14,9 @@ import {
 import { cn } from '@/lib/utils';
 
 // "Manage Skills" — per-workspace skills for the coding agent (active workspace):
-//   • Built-in (bundled) skills — a per-workspace on/off OVERRIDE of the global
-//     Built-in Skills default (AI Agent → Built-in Skills). Shown state is the
-//     effective one (workspace override if set, else global, else on).
+//   • Built-in (bundled) skills — a per-workspace on/off toggle. Built-ins are
+//     default-on: enabled unless this workspace explicitly disables one. There
+//     is no global tier.
 //   • Uploaded skills — folders the user drops into `<workspace>/.shockwave/skills/`.
 //     Presence ⇒ enabled; remove deletes the folder.
 // (Skills the agent itself writes to `<workspace>/.agents/skills/` are auto-
@@ -33,7 +33,7 @@ function shortDescription(text: string) {
   return text.length > MAX_DESC_CHARS ? `${text.slice(0, MAX_DESC_CHARS).trimEnd()} …` : text;
 }
 
-export default function WorkspaceSkillsSection({ workspacePath, builtinSkills, globalBuiltinSkills, onBuiltinSkillToggle }) {
+export default function WorkspaceSkillsSection({ workspacePath, builtinSkills, onBuiltinSkillToggle }) {
   const [builtin, setBuiltin] = useState<any[]>([]);
   const [uploaded, setUploaded] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,11 +99,10 @@ export default function WorkspaceSkillsSection({ workspacePath, builtinSkills, g
     if (any) await reload();
   }, [workspacePath, reload, safeSetError]);
 
-  // Effective state for a built-in here: workspace override wins, else the global
-  // default, else enabled (default-on).
+  // Built-ins are default-on: an absent key means enabled. Only an explicit
+  // 'disabled' turns one off for this workspace.
   const isBuiltinEnabled = (folderName: string) => {
-    const state = builtinSkills?.[folderName] ?? globalBuiltinSkills?.[folderName];
-    return state !== 'disabled';
+    return builtinSkills?.[folderName] !== 'disabled';
   };
 
   return (

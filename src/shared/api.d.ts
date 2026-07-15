@@ -8,6 +8,28 @@
 import type { FileAction, FolderAction, EditorAction } from './constants';
 import type { Settings, WorkspaceData } from './settings';
 
+/** A curated scope bundle for the connect form's second dropdown. */
+export interface OAuthSetup {
+  id: string;
+  label: string;
+  description?: string;
+  scopes: string[];
+}
+
+/** A provider preset for the OAuth connect form (mirror of oauth.ts's ProviderPreset). */
+export interface OAuthProviderPreset {
+  id: string;
+  label: string;
+  authUrl?: string;
+  tokenUrl?: string;
+  defaultScopes: string[];
+  pkce: boolean;
+  authParams?: Record<string, string>;
+  custom?: boolean;
+  hint?: string;
+  setups?: OAuthSetup[];
+}
+
 /** A node in the workspace file tree. Folders have `children`; files don't. */
 export interface TreeNode {
   /** Absolute path on disk (also the React key). */
@@ -202,6 +224,14 @@ export interface ShockwaveApi {
   settings: {
     read(): Promise<Settings>;
     write(obj: Partial<Settings>): Promise<void>;
+  };
+
+  oauth: {
+    listPresets(): Promise<OAuthProviderPreset[]>;
+    /** Runs browser+loopback authorization for an oauth secret, persists tokens. */
+    startConnect(name: string): Promise<{ ok: boolean; accountEmail?: string; error?: string }>;
+    /** Clears live tokens (keeps client config so the user can re-connect). */
+    disconnect(name: string): Promise<{ ok: boolean; error?: string }>;
   };
 
   theme: {

@@ -15,7 +15,7 @@ const DEFAULT_CANONICAL: Settings = {
   workspaces: [],
   activeWorkspaceId: null,
   appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, dailyNotesInBookmarks: false },
-  codingAgent: { provider: DEFAULT_PROVIDER_SLUG, model: 'claude-sonnet-4-5', providerKeys: {}, baseUrl: '', thinkingLevel: 'medium', builtinSkills: {} },
+  codingAgent: { provider: DEFAULT_PROVIDER_SLUG, model: 'claude-sonnet-4-5', providerKeys: {}, baseUrl: '', thinkingLevel: 'medium' },
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
   sync: { pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] },
@@ -162,8 +162,8 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     setBuiltinSkills(data?.builtinSkills && typeof data.builtinSkills === 'object' ? data.builtinSkills : {});
   }, [dailyNoteRef]);
 
-  // Per-workspace OVERRIDE of a built-in's on/off (wins over the global default).
-  // Writes an explicit value so it sticks regardless of the global setting.
+  // Per-workspace built-in on/off. Built-ins are default-on (absent key ⇒
+  // enabled); this writes an explicit value only when the user changes it.
   const onBuiltinSkillToggle = useCallback(async (folderName: string, enabled: boolean) => {
     setBuiltinSkills((prev) => {
       const next = { ...prev, [folderName]: enabled ? 'enabled' : 'disabled' } as Record<string, 'enabled' | 'disabled'>;
@@ -182,21 +182,22 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     await persistSettings({ codingAgent: next });
   }, [persistSettings]);
 
-  // GLOBAL built-in skill on/off (the master default; a workspace can override).
-  const onGlobalBuiltinSkillToggle = useCallback(async (folderName: string, enabled: boolean) => {
-    const cur = settingsRef.current.codingAgent;
-    const nextBuiltin = { ...(cur.builtinSkills ?? {}) };
-    if (enabled) delete nextBuiltin[folderName]; // absent ⇒ enabled (keep file minimal)
-    else nextBuiltin[folderName] = 'disabled';
-    const next = { ...cur, builtinSkills: nextBuiltin } as CodingAgentSettings;
-    setCodingAgentSettings(next);
-    await persistSettings({ codingAgent: next });
-  }, [persistSettings]);
-
   const onAgentSecretsChange = useCallback(async (next: AgentSecret[]) => {
     setAgentSecrets(next);
     await persistSettings({ agentSecrets: next });
   }, [persistSettings]);
+
+  // Re-seed agentSecrets from disk WITHOUT persisting. The OAuth connect/refresh
+  // flow writes tokens directly from main (tokens never round-trip through a
+  // renderer-initiated save), so after a Connect/Disconnect the in-memory copy
+  // is stale. This pulls the fresh array back in and keeps settingsRef coherent
+  // so a later persist can't clobber the tokens main just wrote.
+  const reloadAgentSecrets = useCallback(async () => {
+    const disk = await window.api.settings.read();
+    const secrets: AgentSecret[] = Array.isArray(disk.agentSecrets) ? disk.agentSecrets : [];
+    setAgentSecrets(secrets);
+    settingsRef.current = { ...settingsRef.current, agentSecrets: secrets };
+  }, []);
 
   const onTranscriptionChange = useCallback(async (next: Transcription) => {
     setTranscription(next);
@@ -279,7 +280,7 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
     onThemeModeChange, onHideLineNumbersChange, onDailyNotesInBookmarksChange,
     onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
-    onCodingAgentChange, onGlobalBuiltinSkillToggle, onAgentSecretsChange, onTranscriptionChange,
+    onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSyncChange, onSyncDisabledChange,
   };
 }

@@ -23,7 +23,6 @@ export const SETTINGS_SECTIONS = Object.freeze({
   TEMPLATES: 'templates',
   WORKSPACE_SKILLS: 'workspace-skills',
   AGENT_LLM: 'agent-llm',
-  AGENT_BUILTIN_SKILLS: 'agent-builtin-skills',
   AGENT_SECRETS: 'agent-secrets',
 });
 
