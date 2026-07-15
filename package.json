@@ -1,6 +1,6 @@
 {
   "name": "shockwave",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Shockwave — markdown-vault editor",
   "type": "module",
   "main": "./out/main/index.js",
@@ -118,7 +118,7 @@
       "icon": "build/icon.icns",
       "artifactName": "Shockwave-mac.${ext}",
       "hardenedRuntime": true,
-      "notarize": true,
+      "notarize": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
