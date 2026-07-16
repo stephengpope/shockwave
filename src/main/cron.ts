@@ -258,25 +258,6 @@ export async function cronSetMaxRunMinutes(n: number): Promise<void> {
   pushState();
 }
 
-// Flip a job's enabled flag in cron.json (read-modify-write, preserving other
-// fields). The watcher self-echo is harmless (reconcile is idempotent), but we
-// reconcile immediately for snappy UI.
-export async function cronSetJobEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }> {
-  if (!activeWs) return { ok: false, error: 'No active workspace.' };
-  let text: string;
-  try { text = await fs.readFile(cronPath(activeWs), 'utf8'); }
-  catch (e: any) { return { ok: false, error: `Could not read cron.json — ${e?.message ?? e}` }; }
-  let arr: any;
-  try { arr = JSON.parse(text); } catch (e: any) { return { ok: false, error: 'cron.json is not valid JSON.' }; }
-  if (!Array.isArray(arr)) return { ok: false, error: 'cron.json must be an array.' };
-  const entry = arr.find((j) => typeof j?.name === 'string' && j.name.trim() === name);
-  if (!entry) return { ok: false, error: `No job named "${name}".` };
-  entry.enabled = !!enabled;
-  await fs.writeFile(cronPath(activeWs), JSON.stringify(arr, null, 2) + '\n', 'utf8');
-  void tick();
-  return { ok: true };
-}
-
 // Manual "Run now": same runJob, out-of-band (never touches nextRunAt), works
 // even when cron/the job is disabled. Sourced from the live file (last-good),
 // so a currently-malformed file doesn't break Run-now for a job you can see.

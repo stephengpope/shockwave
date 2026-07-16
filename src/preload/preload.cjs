@@ -495,7 +495,6 @@ contextBridge.exposeInMainWorld('api', {
   cron: {
     read: () => ipcRenderer.invoke('cron:read'),
     setEnabled: (enabled) => ipcRenderer.invoke('cron:setEnabled', enabled),
-    setJobEnabled: (name, enabled) => ipcRenderer.invoke('cron:setJobEnabled', { name, enabled }),
     runNow: (name) => ipcRenderer.invoke('cron:runNow', { name }),
     setMaxCatchupHours: (n) => ipcRenderer.invoke('cron:setMaxCatchupHours', n),
     setMaxRunMinutes: (n) => ipcRenderer.invoke('cron:setMaxRunMinutes', n),

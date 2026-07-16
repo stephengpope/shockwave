@@ -13,7 +13,7 @@ import { createWatcherDispatch } from './watcherDispatch.js';
 import { agentSend, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions, listThinkingLevels } from './codingAgent.js';
 import {
   initCron, cronActivate, cronDeactivate, cronOnFileChanged, cronRead, cronSetEnabled,
-  cronSetJobEnabled, cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
+  cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
 } from './cron.js';
 import { CRON_FILE } from './cronScheduler.js';
 import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred } from './db/index.js';
@@ -2009,7 +2009,6 @@ initCron({
 
 ipcMain.handle('cron:read', () => cronRead());
 ipcMain.handle('cron:setEnabled', (_e, enabled) => cronSetEnabled(!!enabled));
-ipcMain.handle('cron:setJobEnabled', (_e, { name, enabled }) => cronSetJobEnabled(name, !!enabled));
 ipcMain.handle('cron:runNow', (_e, { name }) => cronRunNow(name));
 ipcMain.handle('cron:setMaxCatchupHours', (_e, n) => cronSetMaxCatchupHours(n));
 ipcMain.handle('cron:setMaxRunMinutes', (_e, n) => cronSetMaxRunMinutes(n));

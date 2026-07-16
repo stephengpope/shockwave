@@ -313,7 +313,6 @@ export interface ShockwaveApi {
   cron: {
     read(): Promise<CronView>;
     setEnabled(enabled: boolean): Promise<void>;
-    setJobEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }>;
     runNow(name: string): Promise<{ ok?: boolean; busy?: boolean; error?: string }>;
     setMaxCatchupHours(n: number): Promise<void>;
     setMaxRunMinutes(n: number): Promise<void>;

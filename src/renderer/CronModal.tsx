@@ -3,13 +3,18 @@ import { Play, AlertTriangle, FileText, Loader2, Settings2 } from 'lucide-react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
-import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import type { CronView, CronJobView } from '../shared/api';
 
 // The in-app cron experience: the live schedule + manual Run-now buttons. The
 // CONFIG (master on/off, catch-up window, max-run) lives in Settings → Cron
 // Settings — this panel is the operational view, not a settings page.
+//
+// One-way by design: cron.json (the file) is the source of truth for the jobs +
+// their enabled flag. This panel DISPLAYS that state (read-only) and can trigger
+// a manual run; it never writes job definitions back to the file. Edit cron.json
+// (or ask the agent) to add / enable / disable jobs.
 
 function fmtRel(ms: number | null): string {
   if (ms == null) return '—';
@@ -23,22 +28,26 @@ function fmtRel(ms: number | null): string {
   return delta > 0 ? `in ${span}` : `${span} ago`;
 }
 
-function JobRow({ job, busy, onToggle, onRun }: {
-  job: CronJobView; busy: boolean;
-  onToggle: (enabled: boolean) => void; onRun: () => void;
-}) {
+function JobRow({ job, busy, onRun }: { job: CronJobView; busy: boolean; onRun: () => void }) {
+  const off = !job.enabled;
   return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
+    <div className={cn(
+      'flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2.5',
+      off && 'opacity-60',
+    )}>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium">{job.name || <span className="italic text-muted-foreground">(unnamed)</span>}</span>
+          {off && !job.invalid && (
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">Off</span>
+          )}
           {job.invalid && (
             <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">{job.invalid}</span>
           )}
         </div>
         <div className="mt-0.5 font-mono text-xs text-muted-foreground">{job.description}</div>
         <div className="mt-1 flex gap-5 text-xs text-muted-foreground">
-          <span><span className="text-muted-2">Next</span>&nbsp; {fmtRel(job.nextRunAt)}</span>
+          <span><span className="text-muted-2">Next</span>&nbsp; {off ? '—' : fmtRel(job.nextRunAt)}</span>
           <span>
             <span className="text-muted-2">Last</span>&nbsp;{' '}
             {job.lastRunAt != null
@@ -48,14 +57,10 @@ function JobRow({ job, busy, onToggle, onRun }: {
         </div>
         {job.lastError && <div className="mt-1 truncate text-xs text-destructive" title={job.lastError}>{job.lastError}</div>}
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <Button size="sm" variant="outline" className="h-7 gap-1 px-2" onClick={onRun}
-          disabled={busy || !job.name} title={busy ? 'A run is in progress' : 'Run now'}>
-          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}Run
-        </Button>
-        <Switch checked={job.enabled} disabled={!job.name || !!job.invalid}
-          onCheckedChange={onToggle} aria-label={`Enable ${job.name}`} />
-      </div>
+      <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1 px-2" onClick={onRun}
+        disabled={busy || !job.name} title={busy ? 'A run is in progress' : 'Run now'}>
+        {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}Run
+      </Button>
     </div>
   );
 }
@@ -80,7 +85,6 @@ export default function CronModal({ open, onClose, onOpenFile, onOpenSettings }:
   const jobs = view?.jobs ?? [];
   const hasWorkspace = !!view?.activeWorkspace;
 
-  const setJobEnabled = useCallback(async (name: string, e: boolean) => { await window.api.cron.setJobEnabled(name, e); void refresh(); }, [refresh]);
   const runNow = useCallback(async (name: string) => { await window.api.cron.runNow(name); void refresh(); }, [refresh]);
 
   return (
@@ -89,8 +93,8 @@ export default function CronModal({ open, onClose, onOpenFile, onOpenSettings }:
         <DialogHeader>
           <DialogTitle>Scheduled Jobs</DialogTitle>
           <DialogDescription>
-            The agent's schedule for the active workspace. Run a task now, or toggle one on/off.
-            Master switch and windows are in{' '}
+            The agent's schedule for the active workspace, read from <span className="font-mono">cron.json</span>.
+            Run a task now; enable, disable, or edit jobs in the file. Master switch and windows are in{' '}
             {onOpenSettings ? (
               <button type="button" onClick={onOpenSettings}
                 className="font-medium text-foreground underline underline-offset-2 hover:opacity-80">
@@ -134,22 +138,21 @@ export default function CronModal({ open, onClose, onOpenFile, onOpenSettings }:
             ) : (
               <div className="flex flex-col gap-2">
                 {jobs.map((job, i) => (
-                  <JobRow key={job.name || `__${i}`} job={job} busy={busy}
-                    onToggle={(v) => setJobEnabled(job.name, v)} onRun={() => runNow(job.name)} />
+                  <JobRow key={job.name || `__${i}`} job={job} busy={busy} onRun={() => runNow(job.name)} />
                 ))}
               </div>
             )}
 
             <div className="flex items-center gap-1">
-              {onOpenSettings && (
-                <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={onOpenSettings}>
-                  <Settings2 className="size-3.5" /> Cron Settings
-                </Button>
-              )}
               {view?.exists && onOpenFile && (
                 <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground"
                   onClick={() => { onClose(); onOpenFile(`${view.activeWorkspace}/cron.json`); }}>
                   <FileText className="size-3.5" /> Open cron.json
+                </Button>
+              )}
+              {onOpenSettings && (
+                <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={onOpenSettings}>
+                  <Settings2 className="size-3.5" /> Cron Settings
                 </Button>
               )}
             </div>
