@@ -15,7 +15,8 @@ import { listSessions, listStarred, searchSessions, getMessages, getSession, del
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
 import { scaffoldNewProject } from './prompt/index.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
-import { getProviders, getModels } from '@earendil-works/pi-ai/compat';
+import { getProviders } from '@earendil-works/pi-ai/compat';
+import { initModelCatalog, getCatalogModels } from './modelCatalog.js';
 import { listBuiltinSkills, listWorkspaceSkills, importSkillToWorkspace, removeWorkspaceSkill, workspaceSkillsDir } from './skillLibrary.js';
 import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { installOpenFileBridge } from './openFileExtension.js';
@@ -1584,11 +1585,14 @@ ipcMain.handle('agent:listProviders', () => {
   return [...new Set([...fromPi, ...INJECTED_PROVIDERS])].sort();
 });
 
-ipcMain.handle('agent:listModels', (_evt, provider) => {
+ipcMain.handle('agent:listModels', async (_evt, provider) => {
   if (!provider) return [];
   // openai-compatible has no static catalog — models come from the Validate
-  // call (GET /v1/models) or are typed free-form. getModels returns [] here.
-  return getModels(provider).map((m) => m.id).sort();
+  // call (GET /v1/models) or are typed free-form. getCatalogModels returns []
+  // here (models.dev doesn't carry it and pi has no such provider). Built-in
+  // providers resolve through the models.dev catalog (live → cache → pi).
+  const models = await getCatalogModels(provider);
+  return models.map((m) => m.id);
 });
 
 // Thinking levels supported by the given (provider, model), for the Settings
@@ -2042,6 +2046,8 @@ app.whenReady().then(async () => {
       // ignore: icon file may not be present in some dev configurations
     }
   }
+  // Point the models.dev catalog cache at userData (its offline fallback file).
+  initModelCatalog(app.getPath('userData'));
   // Provision empty secret slots for enabled built-in skills BEFORE the window
   // opens, so the renderer hydrates with them present (no clobber race).
   await ensureBuiltinSecretSlots();

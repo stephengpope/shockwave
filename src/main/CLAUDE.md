@@ -159,7 +159,13 @@ Pi pushes a user message into `state.messages` before the API call and a failure
 
 ### Provider/model discovery
 
-`agent:listProviders` and `agent:listModels` return pi-ai's provider/model lists filtered against `SUPPORTED_PROVIDER_SLUGS` (the bearer-key providers we support; cloud/OAuth providers like bedrock/vertex/azure/copilot are filtered out because our settings schema only carries a single API key). The list lives in `src/shared/constants.ts`.
+`agent:listProviders` returns pi-ai's provider list filtered against `SUPPORTED_PROVIDER_SLUGS` (the bearer-key providers we support; cloud/OAuth providers like bedrock/vertex/azure/copilot are filtered out because our settings schema only carries a single API key). The list lives in `src/shared/constants.ts`.
+
+`agent:listModels` returns the **models.dev** catalog for the provider, not pi's bundled list — models.dev is fresher and richer. `modelCatalog.ts` owns this: fetch `models.dev/api.json`, cache in memory (10-min TTL) + to `<userData>/model-catalog.json`, with a fallback chain `live → mem → disk → pi getModels()` (per-provider). Nothing to hand-maintain — the disk copy self-writes and pi's list is the bundled offline seed. The one static bit is `DEV_KEY` (our slug → models.dev key: `fireworks→fireworks-ai`, `together→togetherai`, `vercel-ai-gateway→vercel`, `kimi-coding→kimi-for-coding`; identity otherwise). `initModelCatalog(userDataDir)` is called once in `whenReady`.
+
+Because pi *executes* via a `Model` object (not a string), `codingAgent.ts`'s **`resolveModel(provider, model)`** reconciles catalog and runtime at boot: `getModel` (pi's bundled, vetted descriptor) when pi has the model, else **synthesize** one from the models.dev record — the provider's API wiring (`api`/`baseUrl`/`compat`) is a per-provider constant, so it's cloned from any sibling model pi already knows, and the models.dev metadata (name/context/cost/input) is overlaid. `bootSession` uses it and throws if it returns null.
+
+**Reasoning levels** (`listThinkingLevels`, async) come from models.dev's `reasoning_options`, not pi: `['off', …reasoningLevels]` translated to pi's vocabulary via `toPiThinkingLevel` (models.dev's top level is **`max`**, pi's is **`xhigh`** — the same tier) and de-duplicated (models.dev lists both). The same translation runs in `bootSession` before the level is handed to pi, so the level shown in the dropdown is exactly the one that executes — pick `max`/`xhigh` and pi runs its true top tier instead of clamping an unknown `max` down to `off`. The renderer's `THINKING_LABELS` (`AgentChatSection.tsx`) labels pi's vocabulary only.
 
 ## GitHub sync
 

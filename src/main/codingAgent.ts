@@ -34,7 +34,8 @@
 import { join } from 'node:path';
 import { createAgentSession, AuthStorage, ModelRegistry, SessionManager, DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
-import { getModel, completeSimple } from '@earendil-works/pi-ai/compat';
+import { getModel, getModels, completeSimple } from '@earendil-works/pi-ai/compat';
+import { getCatalogModel } from './modelCatalog.js';
 import { agentDirFor, ensureDirs, listBuiltinSkills, listWorkspaceSkills, computeEffectivePaths, writePiSettings } from './skillLibrary.js';
 import { ensureAgentTokensExtension } from './agentTokensExtension.js';
 import { ensureOpenFileExtension } from './openFileExtension.js';
@@ -86,14 +87,54 @@ function textOf(content: any): string {
   return '';
 }
 
-export function listThinkingLevels(provider, model) {
+// Resolve a (provider, model) to a runnable pi Model. Pi's bundled catalog wins
+// when it has the model — it carries the vetted thinkingLevelMap + provider
+// dispatch. When pi doesn't know the model (newer than its bundled list), we
+// SYNTHESIZE one from the models.dev catalog: the provider's API wiring
+// (api/baseUrl/compat) is a per-provider constant, so we clone it from any model
+// pi already knows for that provider, then overlay the models.dev metadata.
+// thinkingLevelMap is deliberately omitted — it's provider-specific and can't be
+// inferred safely — so synthesized reasoning models expose the standard
+// off..high set; their top tier (e.g. xhigh) returns once pi's catalog updates.
+// Returns null only when neither pi nor models.dev knows the model, or pi has no
+// template for the provider at all (can't reach it).
+async function resolveModel(provider, model) {
+  if (!provider || !model) return null;
+  const real = getModel(provider, model);
+  if (real) return real;
+
+  const rec = await getCatalogModel(provider, model);
+  if (!rec) return null;
+  const sibling = getModels(provider)[0]; // per-provider dispatch template
+  if (!sibling) return null;
+  return {
+    id: rec.id,
+    name: rec.name,
+    api: sibling.api,
+    provider,
+    baseUrl: sibling.baseUrl,
+    compat: sibling.compat,
+    reasoning: rec.reasoning,
+    input: rec.input,
+    cost: rec.cost,
+    contextWindow: rec.contextWindow,
+    maxTokens: rec.maxTokens,
+  };
+}
+
+// Reasoning levels for the dropdown: 'off' plus the model's models.dev
+// reasoning_options, translated to pi's names (so the level shown is exactly the
+// one that runs) and de-duplicated (models.dev lists both 'xhigh' and 'max',
+// which are the same tier in pi's language). Non-reasoning models get just
+// ['off'] — the UI hides the control when the list has one entry.
+export async function listThinkingLevels(provider, model) {
   if (!provider) return ['off'];
   if (provider === 'openai-compatible') return ['off', 'minimal', 'low', 'medium', 'high'];
   if (!model) return ['off'];
   try {
-    const m = getModel(provider, model);
-    if (!m) return ['off'];
-    return getSupportedThinkingLevels(m);
+    const rec = await getCatalogModel(provider, model);
+    if (!rec || !rec.reasoning) return ['off'];
+    return [...new Set(['off', ...rec.reasoningLevels.map(toPiThinkingLevel)])];
   } catch {
     return ['off'];
   }
@@ -111,9 +152,16 @@ async function disposeEntry(sessionId: string) {
   try { entry.session.dispose(); } catch { /* best-effort */ }
 }
 
+// models.dev's top reasoning level is named 'max'; pi's is 'xhigh' — same thing,
+// different name. Translate before handing the level to pi, or pi wouldn't
+// recognize 'max' and would clamp it down to 'off' (no reasoning at all).
+function toPiThinkingLevel(level: string): string {
+  return level === 'max' ? 'xhigh' : level;
+}
+
 async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<Entry> {
   const { workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, userDataDir, builtinDir, wsBuiltinSkills } = opts;
-  const level = thinkingLevel || 'off';
+  const level = toPiThinkingLevel(thinkingLevel || 'off');
 
   // Recompute the effective skill list + materialize extensions before boot.
   await ensureDirs(userDataDir);
@@ -149,7 +197,10 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
     modelObj = modelRegistry.find('openai-compatible', model);
   } else {
     authStorage.setRuntimeApiKey(provider, apiKey);
-    modelObj = getModel(provider, model);
+    // Pi's bundled model if it has it, else a descriptor synthesized from the
+    // models.dev catalog (so models newer than pi's list still run).
+    modelObj = await resolveModel(provider, model);
+    if (!modelObj) throw new Error(`Model "${model}" not found for provider "${provider}".`);
   }
 
   // Open-vs-new comes from the DB: a stored row means this chat has a JSONL to
@@ -190,7 +241,9 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
   const entry: Entry = {
     session,
     unsubscribe: null,
-    key: makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel: level }),
+    // Key with the RAW setting (matches the reuse-check at boot), not the
+    // pi-translated level — else a 'max' setting would rebuild every send.
+    key: makeKey({ workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel: thinkingLevel || 'off' }),
     workspacePath,
     jsonlPath: session.sessionFile,
     running: false,

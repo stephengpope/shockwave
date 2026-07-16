@@ -21,7 +21,7 @@ import {
 // Our generic OpenAI-compatible endpoint slug (Ollama, LM Studio, vLLM, gateways).
 const COMPATIBLE_SLUG = 'openai-compatible';
 
-// Human labels for pi's thinking levels (dropdown display).
+// Human labels for the reasoning levels (pi's vocabulary, dropdown display).
 const THINKING_LABELS: Record<string, string> = {
   off: 'Off',
   minimal: 'Minimal',
