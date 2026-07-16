@@ -86,7 +86,7 @@ export default function WorkspacesSection({
       ) : (
         <>
           {activeWorkspace && (
-            <SettingsGroup title="Active">
+            <SettingsGroup title="Active workspace">
               <ul className="m-0 flex list-none flex-col gap-2 p-0">{renderRow(activeWorkspace)}</ul>
             </SettingsGroup>
           )}
