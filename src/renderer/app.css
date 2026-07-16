@@ -385,6 +385,21 @@ html, body, #root {
   tab-size: var(--editor-tab-size) !important;
 }
 
+/* Inputs to the hanging indent for wrapped lines (hangingIndent.ts).
+   --line-pad restates CodeMirror's own baseTheme `padding: 0 2px 0 6px` on
+   .cm-line, whose 6px is load-bearing (gutter 66 + 6 = --text-col-left 72).
+   --hang is the line's indent width, set per line by the plugin; 0 is the
+   unindented default.
+   Only the VALUES live here — the padding-left/text-indent that consume them are
+   in Editor.tsx's EditorView.theme, because CodeMirror's baseTheme selector
+   (`.ͼ1 .cm-line`) outranks a bare `.cm-line` and would win over this file.
+   indentGuides.ts reads --line-pad too; that's what keeps the guides anchored
+   when --hang moves the padding. */
+.cm-line {
+  --line-pad: 6px;
+  --hang: 0px;
+}
+
 /* Indent guides (indentGuides.ts). The guide lines themselves are stacked 1px
    background gradients set as an inline style on each `.cm-iguide` line, placed
    at measured pixel offsets. Here we only darken them on the active line to

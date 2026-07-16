@@ -7,6 +7,7 @@ import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, indentUnit, L
 import { languages } from '@codemirror/language-data';
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { indentGuides } from './indentGuides.js';
+import { hangingIndent } from './hangingIndent.js';
 // Only the SYNTAX colors come from one-dark — editor chrome (backgrounds,
 // gutter, active line) is token-driven via CSS vars so dark mode matches the
 // app's warm palette (polish spec §9) instead of one-dark's cool blue-gray.
@@ -402,6 +403,9 @@ const Editor = forwardRef<any, any>(function Editor(
       indentUnit.of('\t'),
       indentOnInput(),
       indentGuides,
+      // Keeps wrapped lines out at their indent instead of returning to the text
+      // column. Outside the live-preview compartment — raw mode wraps too.
+      hangingIndent,
       languageCompartment.of(isMarkdown ? markdownExtension : []),
       syntaxHighlighting(dark ? oneDarkHighlightStyle : defaultHighlightStyle),
       livePreviewCompartment.of(initialLive),
@@ -458,6 +462,17 @@ const Editor = forwardRef<any, any>(function Editor(
           lineHeight: '27px',
         },
         '.cm-content': { paddingLeft: '0', paddingRight: 'var(--text-col-left)' },
+        // Hanging indent (hangingIndent.ts): the padding holds WRAPPED lines out
+        // at the line's own indent; the negative text-indent returns the FIRST
+        // line to where it has always rendered. Values come from --line-pad and
+        // the plugin's per-line --hang (both in app.css).
+        // This has to live in the theme rather than app.css: CodeMirror's
+        // baseTheme ships `.ͼ1 .cm-line { padding: 0 2px 0 6px }`, which outranks
+        // a bare `.cm-line` rule. A theme beats baseTheme, so this wins.
+        '.cm-line': {
+          paddingLeft: 'calc(var(--line-pad) + var(--hang))',
+          textIndent: 'calc(-1 * var(--hang))',
+        },
         '.cm-activeLine': { backgroundColor: 'var(--bg-active-line)' },
         '.cm-activeLineGutter': { backgroundColor: 'var(--bg-active-line)' },
         '.cm-gutters': { backgroundColor: 'transparent', borderRight: 'none', color: 'var(--text-muted-2)' },

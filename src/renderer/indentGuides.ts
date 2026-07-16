@@ -1,16 +1,15 @@
 import { Decoration, ViewPlugin, EditorView } from '@codemirror/view';
 import { RangeSetBuilder } from '@codemirror/state';
+import { spaceWidth, tabStopPx, nextPx } from './indentMetrics.js';
 
 // Vertical indent guides — the grey lines down the left of indented content.
 // This is the sole guide renderer (no third-party indent-marker plugin).
 //
-// Positions are MEASURED, not placed on a `ch` grid: we measure the font's
-// space-advance once via a canvas (cheap, no editor-layout read — CodeMirror
-// forbids layout reads during an update) and compute each indent level's real
-// pixel x arithmetically (a space advances one space-width, a tab snaps to the
-// next tab stop). That keeps every guide just left of the content at its level,
-// for spaces or tabs, instead of drifting off and cutting through the text the
-// way a fixed `ch` grid does in a proportional font.
+// Positions are MEASURED, not placed on a `ch` grid (the math lives in
+// indentMetrics.ts, shared with hangingIndent.ts so the two can't disagree).
+// That keeps every guide just left of the content at its level, for spaces or
+// tabs, instead of drifting off and cutting through the text the way a fixed
+// `ch` grid does in a proportional font.
 //
 // Behaviour:
 //   • Plain indented text — a guide at every indent level (like a normal
@@ -19,40 +18,20 @@ import { RangeSetBuilder } from '@codemirror/state';
 //     contiguous list block, so the top bullet's line runs straight down through
 //     its sub-bullets and nested bullets add no deeper lines (the bullet glyph
 //     already shows the nesting).
-//   • Blank and non-indented lines — nothing.
+//   • Blank lines — BRIDGED, VS Code-style: a blank line BETWEEN two content
+//     lines borrows the guides of whichever neighbour is indented deeper. A
+//     guide therefore runs unbroken through the blank rows inside a block, and
+//     up through the blanks above it until the first line with content at a
+//     shallower indent. Without this a stray Enter punches a visible hole in it.
+//     A blank with no content on one side (the runs at the very top and bottom
+//     of the file) belongs to no block and gets nothing — which is what stops
+//     the guide after the last content line rather than trailing to EOF.
+//   • Non-indented lines — nothing.
 //
 // The plugin sets each line's guides as stacked 1px background gradients via an
 // inline style; app.css only handles the active-line color swap.
 const LIST_RE = /^(\s*)([-*+]|\d+[.)])(\s|$)/;
 const INDENT_UNIT = 2; // columns between guides
-
-// --- font measurement (canvas; no editor-layout read) ---
-let cachedFont = '';
-let cachedSpace = 0;
-let measureCtx: CanvasRenderingContext2D | null = null;
-function spaceWidth(view: EditorView) {
-  const cs = getComputedStyle(view.contentDOM);
-  const font = cs.font || `${cs.fontSize} ${cs.fontFamily}`;
-  if (font !== cachedFont || !cachedSpace) {
-    if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
-    if (!measureCtx) return 0;
-    measureCtx.font = font;
-    cachedFont = font;
-    cachedSpace = measureCtx.measureText(' ').width;
-  }
-  return cachedSpace;
-}
-function tabStopPx(view: EditorView, sp: number) {
-  // Read the custom property, not the computed tab-size — Chromium reports the
-  // computed length scaled by devicePixelRatio, custom props come back verbatim.
-  const cs = getComputedStyle(view.contentDOM);
-  const own = parseFloat(cs.getPropertyValue('--editor-tab-size'));
-  if (Number.isFinite(own) && own > 0) return own;
-  const ts = cs.tabSize;
-  const n = parseFloat(ts);
-  if (!n) return sp * 4;
-  return ts.includes('px') ? n : n * sp; // unitless = number of space-widths
-}
 
 // Pixel x (from content start) of each indent-unit boundary in a line's leading
 // whitespace, including column 0. A guide for a level is drawn at the LEFT edge
@@ -64,13 +43,8 @@ function guideBoundaries(ws: string, sp: number, tabPx: number) {
   let col = 0;
   let px = 0;
   for (const ch of ws) {
-    if (ch === '\t') {
-      col += 4 - (col % 4);
-      px = (Math.floor(px / tabPx) + 1) * tabPx;
-    } else {
-      col += 1;
-      px += sp;
-    }
+    col += ch === '\t' ? 4 - (col % 4) : 1;
+    px = nextPx(px, ch, sp, tabPx);
     if (col % INDENT_UNIT === 0) out.push({ col, px });
   }
   return out;
@@ -85,13 +59,19 @@ function guideDeco(positions: number[]) {
     const layers = positions
       .map(() => 'linear-gradient(var(--indent-line), var(--indent-line))')
       .join(', ');
-    const pos = positions.map((x) => `${x.toFixed(2)}px 0`).join(', ');
+    // Anchored to the PADDING box, offset by --line-pad — deliberately not the
+    // content box. hangingIndent.ts varies .cm-line's padding-left per line, so
+    // a content-box origin would drag every guide right along with the hang and
+    // straight through the text. The padding box doesn't move.
+    const pos = positions
+      .map((x) => `calc(var(--line-pad) + ${x.toFixed(2)}px) 0`)
+      .join(', ');
     const style =
       `background-image: ${layers};` +
       `background-position: ${pos};` +
       `background-size: 1px 100%;` +
       `background-repeat: no-repeat;` +
-      `background-origin: content-box;`;
+      `background-origin: padding-box;`;
     d = Decoration.line({ attributes: { class: 'cm-iguide', style } });
     decoCache.set(key, d);
   }
@@ -126,31 +106,74 @@ function buildDecorations(view: EditorView) {
     else break;
   }
 
+  // A blank line borrows from its nearest CONTENT neighbours, so the scan has to
+  // reach past the viewport on both sides: one content line above (the walk-up
+  // already consumed any blanks, so start - 1 is content), and below, past a run
+  // of trailing blanks to the content line that ends it.
+  const scanStart = Math.max(1, start - 1);
+  let scanEnd = lastVisible;
+  while (scanEnd < doc.lines && doc.line(scanEnd + 1).text.trim() === '') scanEnd++;
+  if (scanEnd < doc.lines) scanEnd++;
+
+  // Pass 1 — guides + indent depth for every CONTENT line in the scan window.
+  // Only content lines drive the list-block state machine; blanks are resolved in
+  // pass 2. A line present in `guides` is content (its array may be empty).
+  const guides = new Map<number, number[]>();
+  const depth = new Map<number, number>();
   let blockMin = Infinity; // indent (cols) of the shallowest bullet in the current block
-  for (let i = start; i <= lastVisible; i++) {
-    const line = doc.line(i);
-    const text = line.text;
-    if (text.trim() === '') continue; // blank line — no guide, keep block context
+  for (let i = scanStart; i <= scanEnd; i++) {
+    const text = doc.line(i).text;
+    if (text.trim() === '') continue;
     const m = text.match(LIST_RE);
     const ws = m ? m[1] : text.match(/^\s*/)![0];
+    const cols = indentColsOf(ws);
     let cap: number; // draw guides only for indent columns <= cap
     if (m) {
-      const cols = indentColsOf(ws);
       if (cols < blockMin) blockMin = cols;
       cap = blockMin; // bullet: capped to the block's top-level indent
     } else {
       blockMin = Infinity; // non-list line ends the block
-      cap = indentColsOf(ws); // plain text: every level
+      cap = cols; // plain text: every level
     }
-    if (cap > 0 && inView(line.from)) {
-      // A guide sits at the left edge of each level's unit — keep boundaries
-      // strictly shallower than the content/cap so the deepest guide is one
-      // step left of the text.
-      const positions = guideBoundaries(ws, sp, tabPx)
-        .filter((b) => b.col < cap)
-        .map((b) => b.px);
-      if (positions.length) builder.add(line.from, line.from, guideDeco(positions));
+    depth.set(i, cols);
+    // A guide sits at the left edge of each level's unit — keep boundaries
+    // strictly shallower than the content/cap so the deepest guide is one step
+    // left of the text.
+    guides.set(
+      i,
+      cap > 0 ? guideBoundaries(ws, sp, tabPx).filter((b) => b.col < cap).map((b) => b.px) : [],
+    );
+  }
+
+  // Nearest content line above / below each line in the window (0 = none).
+  const above: number[] = [];
+  const below: number[] = [];
+  for (let i = scanStart, seen = 0; i <= scanEnd; i++) {
+    above[i] = seen;
+    if (guides.has(i)) seen = i;
+  }
+  for (let i = scanEnd, seen = 0; i >= scanStart; i--) {
+    below[i] = seen;
+    if (guides.has(i)) seen = i;
+  }
+
+  // Pass 2 — emit for the visible lines, bridging blanks to the deeper neighbour.
+  for (let i = firstVisible; i <= lastVisible; i++) {
+    const line = doc.line(i);
+    if (!inView(line.from)) continue;
+    let src = i;
+    if (!guides.has(i)) {
+      const a = above[i];
+      const b = below[i];
+      // A blank only bridges BETWEEN two content lines. Run off either end of
+      // the file and there's no block to belong to, so draw nothing — this is
+      // what stops the guide at the trailing blank lines after the last content
+      // line (and matches VS Code).
+      if (!a || !b) continue;
+      src = depth.get(a)! >= depth.get(b)! ? a : b;
     }
+    const positions = guides.get(src);
+    if (positions?.length) builder.add(line.from, line.from, guideDeco(positions));
   }
   return builder.finish();
 }
