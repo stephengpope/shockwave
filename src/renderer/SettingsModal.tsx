@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import WorkspacesSection from './settings/WorkspacesSection.jsx';
 import AppearanceSection from './settings/AppearanceSection.jsx';
 import AgentChatSection from './settings/AgentChatSection.jsx';
+import CronSection from './settings/CronSection.jsx';
 import WorkspaceSkillsSection from './settings/WorkspaceSkillsSection.jsx';
 import AgentSecretsSection from './settings/AgentSecretsSection.jsx';
 import DailyNoteSection from './settings/DailyNoteSection.jsx';
@@ -45,6 +46,7 @@ function buildNav(workspaceLabel) {
     { kind: 'header', label: 'AI Agent' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_LLM, label: 'Agent Chat' },
     { kind: 'item', id: SETTINGS_SECTIONS.AGENT_SECRETS, label: 'API Secrets' },
+    { kind: 'item', id: SETTINGS_SECTIONS.CRON, label: 'Cron Settings' },
   ];
 }
 
@@ -95,6 +97,7 @@ export default function SettingsModal({
   onRebuildCache,
   appUpdate,
   saveStatus,
+  onOpenCronPanel,
 }) {
   const [active, setActive] = useState(initialSection || DEFAULT_SECTION);
 
@@ -246,6 +249,7 @@ export default function SettingsModal({
               onReload={onReloadSecrets}
             />
           )}
+          {active === SETTINGS_SECTIONS.CRON && <CronSection onOpenCronPanel={onOpenCronPanel} />}
         </div>
       </DialogContent>
     </Dialog>

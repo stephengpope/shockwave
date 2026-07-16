@@ -26,8 +26,12 @@ export { TOOL_CATALOG, formatToolList } from './tools.js';
 
 // Build the full system prompt for the given workspace. Reads that workspace's
 // SOUL.md (or the built-in default) and joins it above the Shockwave helper.
-export async function assembleSystemPrompt(workspacePath: string | null | undefined): Promise<string> {
+// `unattended` (a cron run) adds the unattended-override section to the helper.
+export async function assembleSystemPrompt(
+  workspacePath: string | null | undefined,
+  opts: { unattended?: boolean } = {},
+): Promise<string> {
   const soul = await readSoul(workspacePath);
-  const helper = buildShockwaveHelper({ tools: TOOL_CATALOG });
+  const helper = buildShockwaveHelper({ tools: TOOL_CATALOG, unattended: opts.unattended });
   return `${soul}\n\n${helper}`;
 }

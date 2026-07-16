@@ -160,7 +160,7 @@ function toPiThinkingLevel(level: string): string {
 }
 
 async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<Entry> {
-  const { workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, userDataDir, builtinDir, wsBuiltinSkills } = opts;
+  const { workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel, userDataDir, builtinDir, wsBuiltinSkills, unattended, source, cronTitle } = opts;
   const level = toPiThinkingLevel(thinkingLevel || 'off');
 
   // Recompute the effective skill list + materialize extensions before boot.
@@ -215,7 +215,9 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
     promptOverride = row.systemPrompt ?? await assembleSystemPrompt(workspacePath);
   } else {
     sessionManager = SessionManager.create(workspacePath, join(agentDir, 'sessions'), { id: sessionId });
-    promptOverride = await assembleSystemPrompt(workspacePath);
+    // `unattended` (a cron run) adds the unattended-override to the prompt. It's
+    // frozen on the row here, so a fresh uuid per cron run always carries it.
+    promptOverride = await assembleSystemPrompt(workspacePath, { unattended: !!unattended });
   }
 
   const resourceLoader = new DefaultResourceLoader({
@@ -277,8 +279,16 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
     jsonlPath: entry.jsonlPath,
     systemPrompt: promptOverride,
     model: model ?? null,
+    source: source ?? null,
     now: Date.now(),
   });
+
+  // Cron runs pre-title their chat with the job name (skipping auto-title —
+  // maybeGenerateTitle no-ops once a title exists). Only on a fresh row.
+  if (cronTitle) {
+    const existing = getSession(sessionId);
+    if (existing && !existing.title) setSessionTitle(sessionId, cronTitle);
+  }
 
   // Tell the renderer this chat's session is live (title + star from the DB).
   const dbRow = getSession(sessionId);

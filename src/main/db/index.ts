@@ -12,8 +12,8 @@ import { app } from 'electron';
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { and, desc, eq, lt } from 'drizzle-orm';
-import { chatSession, message } from './schema.js';
+import { and, desc, eq, lt, notInArray } from 'drizzle-orm';
+import { chatSession, message, cronState } from './schema.js';
 
 let sqlite: Database.Database | null = null;
 let db: BetterSQLite3Database | null = null;
@@ -123,6 +123,8 @@ export function upsertSession(row: {
   systemPrompt: string | null;
   model: string | null;
   now: number;
+  // null (interactive) or 'cron'. Set on insert only; preserved on resume.
+  source?: string | null;
 }) {
   getDb().insert(chatSession).values({
     sessionId: row.sessionId,
@@ -130,6 +132,7 @@ export function upsertSession(row: {
     jsonlPath: row.jsonlPath,
     systemPrompt: row.systemPrompt,
     model: row.model,
+    source: row.source ?? null,
     createdAt: row.now,
     updatedAt: row.now,
   }).onConflictDoUpdate({
@@ -247,6 +250,69 @@ export function searchSessions(workspace: string, query: string, opts: { limit?:
     updatedAt: r.updatedAt,
     snippet: snippetOf(r.matched, cleaned),
   }));
+}
+
+// ---- cron scheduler state -----------------------------------------------------
+// Machine-local timing for cron jobs (see schema.ts). cron.json owns the job
+// DEFINITIONS; this table owns nextRunAt/lastRunAt/lastError/lastSessionId. The
+// stateful controller in cron.ts orchestrates these; the reconcile logic there
+// decides which of ensureCronRow / updateCronState / pruneCronState to call.
+
+function cronId(workspace: string, jobName: string): string {
+  return `${workspace}::${jobName}`;
+}
+
+export function listCronState(workspace: string) {
+  return getDb().select().from(cronState).where(eq(cronState.workspace, workspace)).all();
+}
+
+export function getCronState(workspace: string, jobName: string) {
+  const rows = getDb().select().from(cronState)
+    .where(eq(cronState.id, cronId(workspace, jobName))).all();
+  return rows[0] ?? null;
+}
+
+// Insert a row only if one doesn't exist for this (workspace, job). Existing
+// rows keep their persisted timing (that's how catch-up survives restarts).
+export function ensureCronRow(row: {
+  workspace: string; jobName: string; schedule: string; nextRunAt: number | null; now: number;
+}) {
+  getDb().insert(cronState).values({
+    id: cronId(row.workspace, row.jobName),
+    workspace: row.workspace,
+    jobName: row.jobName,
+    schedule: row.schedule,
+    nextRunAt: row.nextRunAt,
+    lastRunAt: null,
+    lastError: null,
+    lastSessionId: null,
+    createdAt: row.now,
+    updatedAt: row.now,
+  }).onConflictDoNothing().run();
+}
+
+export function updateCronState(
+  workspace: string,
+  jobName: string,
+  patch: Partial<{ schedule: string; nextRunAt: number | null; lastRunAt: number | null; lastError: string | null; lastSessionId: string | null }>,
+  now: number,
+) {
+  getDb().update(cronState)
+    .set({ ...patch, updatedAt: now })
+    .where(eq(cronState.id, cronId(workspace, jobName)))
+    .run();
+}
+
+// Drop rows for jobs no longer present in cron.json. Empty keep list → clear all
+// rows for the workspace.
+export function pruneCronState(workspace: string, keepJobNames: string[]) {
+  const conds = [eq(cronState.workspace, workspace)];
+  if (keepJobNames.length) conds.push(notInArray(cronState.jobName, keepJobNames));
+  getDb().delete(cronState).where(and(...conds)).run();
+}
+
+export function deleteCronStateForWorkspace(workspace: string) {
+  getDb().delete(cronState).where(eq(cronState.workspace, workspace)).run();
 }
 
 // Trim a message body to a ~120-char window around the first query term.

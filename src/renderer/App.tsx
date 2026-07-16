@@ -13,6 +13,7 @@ import EditorNav from './EditorNav.jsx';
 import ThinSidebar from './ThinSidebar.jsx';
 import WorkspaceSelector from './WorkspaceSelector.jsx';
 import SettingsModal from './SettingsModal.jsx';
+import CronModal from './CronModal.jsx';
 import UrlPromptModal from './UrlPromptModal.jsx';
 import ErrorMessage from './ErrorMessage.jsx';
 import EditorStatusBar from './EditorStatusBar.jsx';
@@ -193,6 +194,8 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<any>(null);
   const [titleDraft, setTitleDraft] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [cronOpen, setCronOpen] = useState(false);
+  const [cronBadge, setCronBadge] = useState<'none' | 'on' | 'error'>('none');
   const [settingsInitialSection, setSettingsInitialSection] = useState(SETTINGS_SECTIONS.WORKSPACES);
   // When set, renders <UrlPromptModal>. `resolve` is the awaiting promise's
   // resolver. `initialUrl` / `initialText` (Edit mode) optionally pre-fill the
@@ -237,6 +240,18 @@ export default function App() {
   // toggle); auto-exit once everything's resolved.
   const [conflictFilterActive, setConflictFilterActive] = useState(false);
   useEffect(() => { if (!hasConflicts) setConflictFilterActive(false); }, [hasConflicts]);
+
+  // Cron: keep the rail icon's badge current (amber = malformed cron.json; dot =
+  // enabled with jobs). Mount-once subscription to the main-side push.
+  useEffect(() => {
+    const apply = (v: any) => {
+      if (v?.fileError) setCronBadge('error');
+      else if (v?.enabled && (v?.jobs?.length ?? 0) > 0) setCronBadge('on');
+      else setCronBadge('none');
+    };
+    window.api.cron.read().then(apply).catch(() => {});
+    return window.api.cron.onState(apply);
+  }, []);
 
   const {
     themeMode, hideLineNumbers, dailyNotesInBookmarks, bookmarkFilterActive,
@@ -1603,6 +1618,8 @@ export default function App() {
         graphMode={graphMode}
         templates={templateFiles}
         onPickTemplate={applyTemplate}
+        onOpenCron={() => setCronOpen(true)}
+        cronBadge={cronBadge}
         disabled={!workspacePath}
       />
       <QuickSearch
@@ -2003,6 +2020,13 @@ export default function App() {
         The chat composer already has text. Replace it with the selection, or append to it?
       </Dialog>
 
+      <CronModal
+        open={cronOpen}
+        onClose={() => setCronOpen(false)}
+        onOpenFile={(p) => { if (graphMode) setGraphMode(false); openInActiveTab(p); }}
+        onOpenSettings={() => { setCronOpen(false); openSettings(SETTINGS_SECTIONS.CRON); }}
+      />
+
       {settingsOpen && (
         <SettingsModal
           initialSection={settingsInitialSection}
@@ -2040,6 +2064,7 @@ export default function App() {
           onRebuildCache={rebuildLinkCache}
           appUpdate={appUpdate}
           saveStatus={saveStatus}
+          onOpenCronPanel={() => { setSettingsOpen(false); setCronOpen(true); }}
         />
       )}
     </div>

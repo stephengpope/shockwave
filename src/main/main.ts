@@ -11,6 +11,11 @@ import { parseLinks } from './linkParser.js';
 import { createRenameCorrelator } from './renameCorrelator.js';
 import { createWatcherDispatch } from './watcherDispatch.js';
 import { agentSend, agentAbort, agentDisposeSession, agentDisposeAll, agentRunningSessions, listThinkingLevels } from './codingAgent.js';
+import {
+  initCron, cronActivate, cronDeactivate, cronOnFileChanged, cronRead, cronSetEnabled,
+  cronSetJobEnabled, cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
+} from './cron.js';
+import { CRON_FILE } from './cronScheduler.js';
 import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred } from './db/index.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
 import { scaffoldNewProject } from './prompt/index.js';
@@ -122,6 +127,9 @@ const DEFAULT_SETTINGS = {
   // GIT_ASKPASS helper); never written to .git/config or any other on-disk
   // location. `pullIntervalSeconds` is the tick cadence for the sync loop.
   sync: { pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] },
+  // Scheduled runs (cron). Machine-local + global; opt-in (default off). See the
+  // `cron` type in src/shared/settings.ts. No secrets, so no encrypt/decrypt.
+  cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
   chatSidebarOpen: false,
   chatSidebarWidth: 360,
   // Left sidebar (file tree) width in px, and the editor view mode. Both are
@@ -254,6 +262,7 @@ async function readSettings() {
           ? parsed.sync.disabledWorkspaceIds
           : [],
       },
+      cron: { ...DEFAULT_SETTINGS.cron, ...(parsed.cron ?? {}) },
     };
     // Decrypt secret-bearing fields. Legacy plaintext values pass through
     // unchanged via decryptSecret's no-prefix branch and get re-encrypted on
@@ -323,7 +332,7 @@ async function doWriteSettings(patch) {
   // currently always sends whole sub-objects, but this removes that as a
   // load-bearing convention. Scalars/arrays (workspaces, windowBounds, etc.)
   // stay shallow — a partial array patch is meaningless.
-  for (const key of ['appearance', 'codingAgent', 'transcription', 'sync'] as const) {
+  for (const key of ['appearance', 'codingAgent', 'transcription', 'sync', 'cron'] as const) {
     if ((patch as any)[key] && (existing as any)[key]) {
       (out as any)[key] = { ...(existing as any)[key], ...(patch as any)[key] };
     }
@@ -1848,6 +1857,17 @@ async function onParcelEvents(err, events) {
     console.warn('[watcher] subscribe error', err?.message ?? err);
     return;
   }
+  // Promptness only: tell the cron controller when this workspace's cron.json
+  // changes (the 60s tick would catch it anyway). Reconcile is idempotent, so
+  // our own write to cron.json self-echoing here is harmless.
+  if (watcherRootDir) {
+    for (const e of events) {
+      if (path.basename(e.path) === CRON_FILE && path.dirname(e.path) === watcherRootDir) {
+        cronOnFileChanged();
+        break;
+      }
+    }
+  }
   if (watchDispatch) await watchDispatch.handleBatch(events);
 }
 
@@ -1881,6 +1901,8 @@ async function stopWatcher() {
   watchDispatch = null;
   watcherRootDir = null;
   watcherWindowId = null;
+  // Cron follows the active workspace, whose lifetime is the watcher's lifetime.
+  cronDeactivate();
 }
 
 ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
@@ -1914,6 +1936,10 @@ ipcMain.handle('fs:watchStart', async (evt, dirPath) => {
       if (path.basename(e.path) === 'workspace.json') { w.webContents.send('bookmarks:changed'); return; }
     }
   });
+
+  // Cron is active-workspace-only; its lifetime rides the watcher's. Starting
+  // here (after stopWatcher cleared the previous one) retargets it on switch.
+  cronActivate(dirPath);
 });
 
 ipcMain.handle('fs:watchStop', stopWatcher);
@@ -1951,6 +1977,42 @@ nativeTheme.on('updated', () => {
 // Give the OAuth engine access to settings I/O (avoids a circular import back
 // into this entry file). Must run before any oauth:* IPC or getFreshToken call.
 initOAuth({ readSettings, writeSettings });
+
+// Cron scheduler: fire a run exactly like the `agent:send` handler, but with an
+// EXPLICIT workspace (not the active-workspace lookup) + the cron fields. This
+// is the one place cron builds agentSend opts; the scheduler in cron.ts calls it.
+async function runAgentTurnForCron(
+  { workspacePath, sessionId, text, unattended, source, cronTitle }:
+    { workspacePath: string; sessionId: string; text: string; unattended: boolean; source: string; cronTitle: string },
+  emit: (event: any) => void,
+) {
+  const settings = await readSettings();
+  const { provider, model, baseUrl, contextWindow, thinkingLevel, providerKeys } = settings.codingAgent ?? {};
+  const apiKey = providerKeys?.[provider] ?? '';
+  const wsData = workspacePath ? await readWorkspaceFileRaw(workspacePath) : null;
+  await agentSend(
+    {
+      sessionId, text, workspacePath, provider, model, apiKey, baseUrl, contextWindow, thinkingLevel,
+      userDataDir: app.getPath('userData'), builtinDir: builtinSkillsDir(),
+      wsBuiltinSkills: wsData?.builtinSkills ?? {},
+      unattended, source, cronTitle,
+    },
+    emit,
+  );
+}
+initCron({
+  readSettings,
+  writeSettings,
+  runAgentTurn: runAgentTurnForCron,
+  getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+});
+
+ipcMain.handle('cron:read', () => cronRead());
+ipcMain.handle('cron:setEnabled', (_e, enabled) => cronSetEnabled(!!enabled));
+ipcMain.handle('cron:setJobEnabled', (_e, { name, enabled }) => cronSetJobEnabled(name, !!enabled));
+ipcMain.handle('cron:runNow', (_e, { name }) => cronRunNow(name));
+ipcMain.handle('cron:setMaxCatchupHours', (_e, n) => cronSetMaxCatchupHours(n));
+ipcMain.handle('cron:setMaxRunMinutes', (_e, n) => cronSetMaxRunMinutes(n));
 
 // Install the bridge the agent-tokens pi extension uses to fetch decrypted
 // secrets. Re-reads on every call so user-side edits to secrets are picked

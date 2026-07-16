@@ -15,6 +15,13 @@
       "when": 1783723561790,
       "tag": "0001_add_starred",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1783800000000,
+      "tag": "0002_add_cron",
+      "breakpoints": true
     }
   ]
 }

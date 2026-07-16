@@ -1,4 +1,5 @@
 import React from 'react';
+import { Clock } from 'lucide-react';
 import { PageIcon, FolderIcon, GraphIcon, CalendarIcon, TemplateIcon } from './Icons.jsx';
 import {
   DropdownMenu,
@@ -25,6 +26,8 @@ export default function ThinSidebar({
   graphMode,
   templates = [] as Array<{ name: string; path: string }>,
   onPickTemplate,
+  onOpenCron,
+  cronBadge = 'none' as 'none' | 'on' | 'error',
   disabled,
 }) {
   // Day-of-month is read on render — no timer. The icon refreshes whenever the
@@ -100,6 +103,23 @@ export default function ThinSidebar({
         aria-label="Toggle graph view"
       >
         <GraphIcon />
+      </button>
+      <button
+        className={cn(railBtn, 'relative')}
+        onClick={onOpenCron}
+        disabled={disabled}
+        title="Scheduled Jobs"
+        aria-label="Scheduled Jobs"
+      >
+        <Clock className="size-[18px]" />
+        {cronBadge !== 'none' && (
+          <span
+            className={cn(
+              'absolute right-1.5 top-1.5 size-2 rounded-full ring-2 ring-chrome',
+              cronBadge === 'error' ? 'bg-amber-500' : 'bg-primary',
+            )}
+          />
+        )}
       </button>
     </div>
   );

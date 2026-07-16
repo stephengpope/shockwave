@@ -122,6 +122,14 @@ export interface Settings {
   agentSecrets: AgentSecret[];
   transcription: { provider: string; apiKey: string };
   sync: { pat: string; pullIntervalSeconds: number; disabledWorkspaceIds: string[] };
+  // Scheduled runs (cron). Machine-local and global: `enabled` is the master
+  // on/off (gates FIRING only — watching/validation/UI stay live when off), and
+  // cron follows the active workspace. Job definitions live per-workspace in
+  // `<workspace>/cron.json`; only these knobs are global settings.
+  // `maxCatchupHours`: a missed run fires only if its most-recent occurrence is
+  // within this window (else it rolls forward). `maxRunMinutes`: a run exceeding
+  // this is aborted so a hung provider can't wedge the scheduler.
+  cron: { enabled: boolean; maxCatchupHours: number; maxRunMinutes: number };
   chatSidebarOpen: boolean;
   chatSidebarWidth: number;
   sidebarWidth: number;

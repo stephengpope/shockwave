@@ -17,6 +17,26 @@ const BOUNDARIES = `# Boundaries
 - **Stay inside the workspace (cwd).** Don't read, write, or run commands outside it.
 - **Never delete or move files without explicit permission.** Ask first.`;
 
+// Injected ONLY on scheduled/manual cron runs (unattended === true). It sits
+// after BOUNDARIES and explicitly overrides its "ask first" line, because a
+// scheduled run has no user to answer.
+const UNATTENDED = `# Unattended run
+
+You are running on a schedule with no user present. You will not receive a reply, so do not ask for confirmation or wait for input. Use your judgment, complete the task described, and finish. You may create, edit, and — when the task requires it — move or delete files inside the workspace without asking. This overrides the "ask first" boundary above for this run. Your changes are committed automatically after the run.`;
+
+const SCHEDULED_RUNS = `# Scheduled runs (cron)
+
+You can schedule yourself to run unattended. Schedules live in \`cron.json\` at the workspace root — a JSON array you can read and edit like any other file. Each entry:
+
+    { "name": "nightly-triage", "schedule": "0 2 * * *", "prompt": "…", "enabled": true }
+
+- \`name\` — unique within the file, stable. Each run opens as its own chat titled after the job; renaming a job orphans its run history.
+- \`schedule\` — a standard 5-field cron expression, evaluated in the machine's **local time**.
+- \`prompt\` — sent to a fresh chat each run; make it self-contained (it won't see earlier runs).
+- \`enabled\` — set \`false\` to pause a job without deleting it.
+
+Cron runs only when the user has turned scheduled tasks on, and only for the workspace that's active. A run starts a brand-new chat, so it sees the current workspace and your latest SOUL. Missed runs (app closed, or a different workspace active) collapse into a single catch-up run, bounded by a configurable window.`;
+
 const TOOLS = (tools: ToolDescriptor[]) => `# Available tools
 
 ${formatToolList(tools)}
@@ -155,10 +175,14 @@ A skill is a folder with a \`SKILL.md\` file — YAML frontmatter on top, markdo
 Skills are scanned at session boot. After writing the files, tell the user to click the circular-arrow (counter-clockwise) icon in the **upper-left of the chat window** to start a new session — that's what clears the chat and loads the new skill on the next message.`;
 
 // Compose the full helper. `tools` defaults to the wired catalog; pass a subset
-// if a session ever runs with fewer tools.
-export function buildShockwaveHelper({ tools = TOOL_CATALOG }: { tools?: ToolDescriptor[] } = {}): string {
+// if a session ever runs with fewer tools. `unattended` (a cron run) inserts the
+// UNATTENDED override right after BOUNDARIES.
+export function buildShockwaveHelper(
+  { tools = TOOL_CATALOG, unattended = false }: { tools?: ToolDescriptor[]; unattended?: boolean } = {},
+): string {
   return [
     BOUNDARIES,
+    ...(unattended ? [UNATTENDED] : []),
     TOOLS(tools),
     GUIDELINES,
     WORKSPACE,
@@ -169,5 +193,6 @@ export function buildShockwaveHelper({ tools = TOOL_CATALOG }: { tools?: ToolDes
     EXTENDING_GRAPH,
     MARKDOWN,
     SKILLS,
+    SCHEDULED_RUNS,
   ].join('\n\n');
 }

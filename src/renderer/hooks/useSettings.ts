@@ -19,6 +19,10 @@ const DEFAULT_CANONICAL: Settings = {
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
   sync: { pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] },
+  // Cron is managed in main via window.api.cron.* (main persists the slice); the
+  // renderer never writes it through persistSettings. Present here only to satisfy
+  // the Settings type + hydrate a default before disk load.
+  cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
   chatSidebarOpen: false,
   chatSidebarWidth: 360,
   sidebarWidth: 260,

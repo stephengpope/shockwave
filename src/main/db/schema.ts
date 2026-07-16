@@ -28,6 +28,10 @@ export const chatSession = sqliteTable('chat_session', {
   // continues with the same context (pi would otherwise re-derive today's prompt).
   systemPrompt: text('system_prompt'),
   model: text('model'),
+  // How this chat was started: null (interactive) or 'cron' (a scheduled or
+  // manual cron run). Lets the picker badge cron runs and skips auto-titling in
+  // favor of the job name.
+  source: text('source'),
   createdAt: integer('created_at').notNull(),
   // Bumped on every turn; drives the "recent chats" sort + keyset pagination.
   updatedAt: integer('updated_at').notNull(),
@@ -36,6 +40,32 @@ export const chatSession = sqliteTable('chat_session', {
   starred: integer('starred').notNull().default(0),
 }, (t) => ({
   byWorkspaceUpdated: index('idx_chat_session_ws_updated').on(t.workspace, t.updatedAt),
+}));
+
+// Machine-local scheduler state for cron jobs. cron.json (a file at the
+// workspace root) is the SOURCE OF TRUTH for job definitions (name / schedule /
+// prompt / enabled) so the agent can edit it; this table holds only the timing
+// that must NOT sync between machines: when a job is next due, when it last ran,
+// its last error, and the chat that run created. One row per (workspace, job).
+export const cronState = sqliteTable('cron_state', {
+  // `${workspace}::${jobName}` — stable composite key.
+  id: text('id').primaryKey(),
+  // Absolute workspace path (matches chat_session.workspace).
+  workspace: text('workspace').notNull(),
+  jobName: text('job_name').notNull(),
+  // Last-seen schedule string, so a schedule edit can be detected and reset.
+  schedule: text('schedule').notNull(),
+  // Epoch ms of the next fire; null when disabled/cleared (won't fire).
+  nextRunAt: integer('next_run_at'),
+  lastRunAt: integer('last_run_at'),
+  // Actual error message from the last failed run (start-time or mid-run), else null.
+  lastError: text('last_error'),
+  // chat_session.sessionId of the last run — for the "open last run" link.
+  lastSessionId: text('last_session_id'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+}, (t) => ({
+  byNextRun: index('idx_cron_state_next_run').on(t.nextRunAt),
 }));
 
 export const message = sqliteTable('message', {

@@ -489,4 +489,27 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('sync:status', listener);
     },
   },
+
+  // Scheduled runs (cron). read() returns everything the modal renders; the
+  // setters mutate cron.json / global settings; onState pushes live updates.
+  cron: {
+    read: () => ipcRenderer.invoke('cron:read'),
+    setEnabled: (enabled) => ipcRenderer.invoke('cron:setEnabled', enabled),
+    setJobEnabled: (name, enabled) => ipcRenderer.invoke('cron:setJobEnabled', { name, enabled }),
+    runNow: (name) => ipcRenderer.invoke('cron:runNow', { name }),
+    setMaxCatchupHours: (n) => ipcRenderer.invoke('cron:setMaxCatchupHours', n),
+    setMaxRunMinutes: (n) => ipcRenderer.invoke('cron:setMaxRunMinutes', n),
+    /** Live cron state (jobs + timing + knobs). @returns {Unsubscribe} */
+    onState: (cb) => {
+      const listener = (_evt, payload) => cb(payload);
+      ipcRenderer.on('cron:state', listener);
+      return () => ipcRenderer.removeListener('cron:state', listener);
+    },
+    /** A cron run created/updated a chat — refetch the recent list. @returns {Unsubscribe} */
+    onChatsChanged: (cb) => {
+      const listener = () => cb();
+      ipcRenderer.on('cron:chatsChanged', listener);
+      return () => ipcRenderer.removeListener('cron:chatsChanged', listener);
+    },
+  },
 });

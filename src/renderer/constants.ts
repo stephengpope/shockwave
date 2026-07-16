@@ -24,6 +24,7 @@ export const SETTINGS_SECTIONS = Object.freeze({
   WORKSPACE_SKILLS: 'workspace-skills',
   AGENT_LLM: 'agent-llm',
   AGENT_SECRETS: 'agent-secrets',
+  CRON: 'cron',
 });
 
 export const THEME_MODES = Object.freeze({

@@ -310,6 +310,40 @@ export interface ShockwaveApi {
     onFlushRequest(cb: (token: number) => void): Unsubscribe;
     onStatus(cb: (status: SyncStatus) => void): Unsubscribe;
   };
+  cron: {
+    read(): Promise<CronView>;
+    setEnabled(enabled: boolean): Promise<void>;
+    setJobEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; error?: string }>;
+    runNow(name: string): Promise<{ ok?: boolean; busy?: boolean; error?: string }>;
+    setMaxCatchupHours(n: number): Promise<void>;
+    setMaxRunMinutes(n: number): Promise<void>;
+    onState(cb: (view: CronView) => void): Unsubscribe;
+    onChatsChanged(cb: () => void): Unsubscribe;
+  };
+}
+
+export interface CronJobView {
+  name: string;
+  schedule: string;
+  description: string;
+  enabled: boolean;
+  invalid: string | null;
+  nextRunAt: number | null;
+  lastRunAt: number | null;
+  lastError: string | null;
+  lastSessionId: string | null;
+}
+
+export interface CronView {
+  activeWorkspace: string | null;
+  exists?: boolean;
+  fileError: string | null;
+  enabled: boolean;
+  maxCatchupHours: number;
+  maxRunMinutes: number;
+  jobs: CronJobView[];
+  inFlight: boolean;
+  runningJobName: string | null;
 }
 
 declare global {
