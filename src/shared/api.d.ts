@@ -192,6 +192,7 @@ export interface ShockwaveApi {
   ensureDir(dirPath: string): Promise<void>;
   renameFolder(fromPath: string, toName: string): Promise<string>;
   moveItem(srcPath: string, destDir: string): Promise<string>;
+  importFiles(destDir: string | null, paths: string[]): Promise<{ imported: string[]; errors: string[] }>;
 
   // Shell
   revealInFolder(filePath: string): Promise<void>;

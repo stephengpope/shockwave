@@ -150,6 +150,12 @@ contextBridge.exposeInMainWorld('api', {
   renameFolder: (fromPath, toName) => ipcRenderer.invoke('fs:renameFolder', { fromPath, toName }),
   /** @param {string} srcPath @param {string} destDir @returns {Promise<string>} New absolute path after move. */
   moveItem: (srcPath, destDir) => ipcRenderer.invoke('fs:moveItem', { srcPath, destDir }),
+  /** Copy OS files/folders (Finder drag-drop) into a workspace folder. Sources
+   *  are never touched; folders copy recursively; name collisions get " 1", " 2".
+   *  @param {string|null} destDir Target folder (null = workspace root).
+   *  @param {string[]} paths Absolute source paths (from skills.pathForFile).
+   *  @returns {Promise<{ imported: string[], errors: string[] }>} */
+  importFiles: (destDir, paths) => ipcRenderer.invoke('fs:importFiles', { destDir, paths }),
 
   // ---- Shell --------------------------------------------------------------
 

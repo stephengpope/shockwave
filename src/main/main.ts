@@ -96,7 +96,7 @@ function popupContextMenu(win, template) {
 const DEFAULT_SETTINGS = {
   workspaces: [],
   activeWorkspaceId: null,
-  appearance: { themeMode: 'system', hideLineNumbers: false, dailyNotesInBookmarks: false },
+  appearance: { themeMode: 'system', hideLineNumbers: false, treePanel: { content: 'off', count: 10 } },
   // Daily-note + template config moved to per-workspace `.shockwave/workspace.json`.
   codingAgent: {
     provider: 'anthropic',
@@ -1024,6 +1024,39 @@ ipcMain.handle('fs:moveItem', async (_evt, { srcPath, destDir }) => {
   if (target === srcPath) return target;
   await fs.rename(srcPath, target);
   return target;
+});
+
+// Import files/folders dragged in from the OS (Finder → file tree). COPY
+// semantics — sources are never modified or removed. Folders copy recursively.
+// Same-dir uniqueness via " 1", " 2" suffixes (no workspace-wide .md check:
+// duplicate basenames across folders are allowed). Per-source failures are
+// collected rather than aborting the batch.
+ipcMain.handle('fs:importFiles', async (_evt, { destDir, paths }) => {
+  if (!watcherRootDir) throw new Error('No workspace open.');
+  const root = path.resolve(watcherRootDir);
+  const dest = path.resolve(destDir || root);
+  if (dest !== root && !dest.startsWith(root + path.sep)) {
+    throw new Error('Destination is outside the workspace.');
+  }
+  const imported: string[] = [];
+  const errors: string[] = [];
+  for (const src of Array.isArray(paths) ? paths : []) {
+    try {
+      const srcAbs = path.resolve(src);
+      const stat = await fs.stat(srcAbs);
+      if (stat.isDirectory() && (dest === srcAbs || dest.startsWith(srcAbs + path.sep))) {
+        throw new Error('Cannot copy a folder into itself.');
+      }
+      const name = path.basename(srcAbs);
+      const ext = stat.isDirectory() ? '' : path.extname(name);
+      const target = await uniquePath(dest, ext ? name.slice(0, -ext.length) : name, ext);
+      await fs.cp(srcAbs, target, { recursive: true, errorOnExist: true, force: false });
+      imported.push(target);
+    } catch (e: any) {
+      errors.push(`${path.basename(src)}: ${e.message}`);
+    }
+  }
+  return { imported, errors };
 });
 
 ipcMain.handle('fs:renameFolder', async (_evt, { fromPath, toName }) => {

@@ -5,6 +5,11 @@
 // any .ts consumer (e.g. a future useSettings) is checked against it.
 
 export type ThemeMode = 'system' | 'light' | 'dark';
+// What the quick-access panel pinned below the file tree shows (Explorer and
+// Bookmarks views alike). 'both' lists Recent Files and Daily Notes as two
+// sections, with daily notes excluded from Recent Files. Lists are always
+// sorted last-modified desc and capped to `count` items each.
+export type TreePanelContent = 'off' | 'recent' | 'daily' | 'both';
 export type ViewMode = 'live' | 'raw';
 export type TreeSortOrder =
   | 'name-asc'
@@ -114,7 +119,9 @@ export interface WorkspaceData {
 export interface Settings {
   workspaces: WorkspaceEntry[];
   activeWorkspaceId: string | null;
-  appearance: { themeMode: ThemeMode; hideLineNumbers: boolean; dailyNotesInBookmarks: boolean };
+  // `treePanel` replaced the boolean `dailyNotesInBookmarks` (old true migrates
+  // to content 'daily' in useSettings.hydrateSettings).
+  appearance: { themeMode: ThemeMode; hideLineNumbers: boolean; treePanel: { content: TreePanelContent; count: number } };
   // NOTE: `dailyNote` and `templates` are no longer global — they're per-
   // workspace, stored in `<workspace>/.shockwave/workspace.json` (see
   // `WorkspaceData` below), loaded on workspace switch.

@@ -23,9 +23,10 @@ import ConfirmDialog from './ConfirmDialog.jsx';
 import JournalDatePicker from './JournalDatePicker.jsx';
 import QuickSearch from './QuickSearch.jsx';
 import { basenameOf, dirOf, toRelPath } from './pathUtils';
+import { cn } from '@/lib/utils';
 import { SETTINGS_SECTIONS, THEME_MODES, APP_NAME, FOLDER_ACTIONS, VIEW_MODES, SAVE_STATES, TREE_SORT_ORDERS, FILE_ACTIONS } from './constants.js';
 import SortBar from './SortBar.jsx';
-import DailyNotesPanel from './DailyNotesPanel.jsx';
+import TreePanel from './TreePanel.jsx';
 import { parseDailyNoteDate } from './dailyNote.js';
 import { collectTemplateFiles } from './templates.js';
 import { useLinkIndex } from './hooks/useLinkIndex.js';
@@ -254,11 +255,11 @@ export default function App() {
   }, []);
 
   const {
-    themeMode, hideLineNumbers, dailyNotesInBookmarks, bookmarkFilterActive,
+    themeMode, hideLineNumbers, treePanel, bookmarkFilterActive,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, sync, syncRef,
     saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
-    onThemeModeChange, onHideLineNumbersChange, onDailyNotesInBookmarksChange,
+    onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSyncChange, onSyncDisabledChange,
@@ -408,26 +409,37 @@ export default function App() {
     return sortTreeNodes(base, treeSortOrder);
   }, [tree, treeSortOrder, bookmarkFilterActive, bookmarks, conflictFilterActive, conflictPaths, workspacePath]);
 
-  // Daily-note files for the panel below the bookmarks list. Only computed when
-  // the panel is actually shown (bookmark mode + Appearance toggle on). Matches
-  // every `.md` under the configured daily-note folder whose path (relative to
-  // that folder, minus `.md`) strict-parses against the daily-note format.
-  // Sorted by the active tree sort order, same as the bookmarks list above it,
-  // then capped to the 10 most recent so the panel stays a short quick-access
-  // list rather than a full journal dump.
-  const DAILY_NOTES_LIMIT = 10;
-  const dailyNoteFiles = useMemo(() => {
-    if (!bookmarkFilterActive || !dailyNotesInBookmarks || !workspacePath) return [];
+  // Sections for the quick-access panel pinned below the file tree (shown in
+  // both Explorer and Bookmarks views, per Appearance → treePanel). A daily
+  // note is any `.md` under the configured daily-note folder whose path
+  // (relative to that folder, minus `.md`) strict-parses against the daily-note
+  // format. In 'both' mode daily notes are excluded from Recent Files — they
+  // have their own section. Always sorted last-modified desc (independent of
+  // the tree sort order) and capped to `count` items per section.
+  const treePanelData = useMemo(() => {
+    const none = { recent: [] as any[], daily: [] as any[] };
+    if (!workspacePath || treePanel.content === 'off') return none;
+    const wantDaily = treePanel.content === 'daily' || treePanel.content === 'both';
+    const wantRecent = treePanel.content === 'recent' || treePanel.content === 'both';
     const cleanFolder = (dailyNote.folder ?? '').replace(/^\/+|\/+$/g, '');
     const prefix = cleanFolder ? `${workspacePath}/${cleanFolder}/` : `${workspacePath}/`;
-    const out: any[] = [];
+    const isDailyNote = (n) => {
+      if (!/\.md$/i.test(n.id) || !n.id.startsWith(prefix)) return false;
+      return !!parseDailyNoteDate(n.id.slice(prefix.length).replace(/\.md$/i, ''), dailyNote.format);
+    };
+    const recent: any[] = [];
+    const daily: any[] = [];
     for (const n of flattenAll(tree)) {
-      if (n.children || !/\.md$/i.test(n.id) || !n.id.startsWith(prefix)) continue;
-      const relNoExt = n.id.slice(prefix.length).replace(/\.md$/i, '');
-      if (parseDailyNoteDate(relNoExt, dailyNote.format)) out.push(n);
+      if (n.children) continue;
+      const isDaily = isDailyNote(n);
+      if (isDaily && wantDaily) daily.push(n);
+      if (wantRecent && !(isDaily && treePanel.content === 'both')) recent.push(n);
     }
-    return sortTreeNodes(out, treeSortOrder).slice(0, DAILY_NOTES_LIMIT);
-  }, [bookmarkFilterActive, dailyNotesInBookmarks, workspacePath, tree, dailyNote.format, dailyNote.folder, treeSortOrder]);
+    const cap = (arr) => sortTreeNodes(arr, TREE_SORT_ORDERS.MODIFIED_DESC).slice(0, treePanel.count);
+    return { recent: cap(recent), daily: cap(daily) };
+  }, [treePanel, workspacePath, tree, dailyNote.format, dailyNote.folder]);
+  const treePanelShown = !conflictFilterActive
+    && (treePanelData.recent.length > 0 || treePanelData.daily.length > 0);
 
   // Template files (direct `.md` children of the configured templates folder),
   // alphabetical. Drives both the left-rail picker and the Daily Note default-
@@ -686,6 +698,33 @@ export default function App() {
     if (graphMode) setGraphMode(false);
     await openInActiveTab(node.id);
   }, [openInActiveTab, graphMode, conflictFilterActive]);
+
+  // Open a file row from the quick-access panel below the tree.
+  const onTreePanelOpen = useCallback(async (path) => {
+    if (graphMode) setGraphMode(false);
+    await openInActiveTab(path);
+  }, [openInActiveTab, graphMode]);
+
+  // Finder → file tree import (copy). Row drops (NativeTypes.FILE targets in
+  // FileTree) pass the target folder; drops on tree-wrap empty space pass null
+  // (workspace root). Paths resolve via webUtils.getPathForFile in preload;
+  // the watcher picks up the new files, so no manual refresh here.
+  const importFilesEnabled = !!workspacePath && !bookmarkFilterActive && !conflictFilterActive;
+  const [rootImportOver, setRootImportOver] = useState(false);
+  const onImportFiles = useCallback(async (destDir, files) => {
+    const paths: string[] = [];
+    for (const f of files ?? []) {
+      try { const p = window.api.skills.pathForFile(f); if (p) paths.push(p); }
+      catch { /* File not backed by disk (e.g. browser drag) — skip */ }
+    }
+    if (paths.length === 0) return;
+    try {
+      const { errors } = await window.api.importFiles(destDir, paths);
+      if (errors.length > 0) showError(`Some items couldn't be imported: ${errors.join('; ')}`);
+    } catch (e: any) {
+      showError(e.message || 'Import failed.');
+    }
+  }, [showError]);
 
   // ---- workspace operations ----
 
@@ -1664,10 +1703,38 @@ export default function App() {
           onConflictCloudMenu={onConflictCloudMenu}
           disabled={!workspacePath}
         />
-        {/* Horizontal inset so row fills don't touch the sidebar edges (spec §4). */}
-        <div className="tree-wrap min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1">
+        {/* Horizontal inset so row fills don't touch the sidebar edges (spec §4).
+            Also the root drop zone for Finder file imports: drops on empty space
+            (outside .tree-fill, whose rows are react-dnd NativeTypes.FILE
+            targets) copy into the workspace root. */}
+        <div
+          className={cn('tree-wrap min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1', rootImportOver && 'bg-selected')}
+          onDragOver={(e) => {
+            if (!importFilesEnabled || !e.dataTransfer.types.includes('Files')) return;
+            if ((e.target as Element).closest?.('.tree-fill')) {
+              if (rootImportOver) setRootImportOver(false);
+              return; // rows own drops inside the tree
+            }
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            if (!rootImportOver) setRootImportOver(true);
+          }}
+          onDragLeave={(e) => {
+            if (!(e.currentTarget as Element).contains(e.relatedTarget as Element)) setRootImportOver(false);
+          }}
+          onDrop={(e) => {
+            setRootImportOver(false);
+            if (!importFilesEnabled || !e.dataTransfer.types.includes('Files')) return;
+            if ((e.target as Element).closest?.('.tree-fill')) return;
+            e.preventDefault();
+            onImportFiles(null, [...e.dataTransfer.files]);
+          }}
+        >
           {bookmarkFilterActive && sortedTree.length > 0 && (
             <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Bookmarks</div>
+          )}
+          {!bookmarkFilterActive && !conflictFilterActive && sortedTree.length > 0 && (
+            <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.09em] text-muted-2">Explorer</div>
           )}
           {sortedTree.length > 0 ? (
             <FileTree
@@ -1683,10 +1750,11 @@ export default function App() {
               checkRenameConflict={(name, id) => findTreeRenameConflict({ tree, currentPath: id, newName: name })}
               getIsBookmarked={isBookmarked}
               onRootContextMenu={onRootContextMenu}
-              // In bookmark mode the list is flat; size the tree to its content
-              // (rowHeight=24, matching FileTree) so the daily-notes list can sit
-              // directly beneath it and tree-wrap scrolls them as one.
-              fixedHeight={bookmarkFilterActive ? sortedTree.length * 24 : undefined}
+              // Content-sized (tree-wrap owns the scroll) in bookmark mode and
+              // whenever the quick-access panel is shown, so the panel sits
+              // directly under the last row and scrolls with the tree.
+              contentSized={bookmarkFilterActive || treePanelShown}
+              onImportFiles={importFilesEnabled ? onImportFiles : null}
             />
           ) : (
             <div
@@ -1706,15 +1774,23 @@ export default function App() {
                     : 'Empty workspace'}
             </div>
           )}
-          {bookmarkFilterActive && dailyNotesInBookmarks && (
-            <DailyNotesPanel
-              items={dailyNoteFiles}
-              activePath={activeFile}
-              onOpen={async (path) => {
-                if (graphMode) setGraphMode(false);
-                await openInActiveTab(path);
-              }}
-            />
+          {/* Quick-access panel (Appearance → treePanel), in-flow directly
+              under the tree so it scrolls with it. */}
+          {treePanelShown && (
+            <>
+              <TreePanel
+                title="Recent Files"
+                items={treePanelData.recent}
+                activePath={activeFile}
+                onOpen={onTreePanelOpen}
+              />
+              <TreePanel
+                title="Daily Notes"
+                items={treePanelData.daily}
+                activePath={activeFile}
+                onOpen={onTreePanelOpen}
+              />
+            </>
           )}
         </div>
         <WorkspaceSelector
@@ -2040,8 +2116,8 @@ export default function App() {
           onThemeModeChange={onThemeModeChange}
           hideLineNumbers={hideLineNumbers}
           onHideLineNumbersChange={onHideLineNumbersChange}
-          dailyNotesInBookmarks={dailyNotesInBookmarks}
-          onDailyNotesInBookmarksChange={onDailyNotesInBookmarksChange}
+          treePanel={treePanel}
+          onTreePanelChange={onTreePanelChange}
           dailyNote={dailyNote}
           onDailyNoteChange={onDailyNoteChange}
           templates={templates}

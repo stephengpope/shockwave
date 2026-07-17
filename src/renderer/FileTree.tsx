@@ -1,12 +1,14 @@
-import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Tree } from 'react-arborist';
+import { useDrop } from 'react-dnd';
+import { NativeTypes } from 'react-dnd-html5-backend';
 import { ChevronDown, ChevronRight, FileText, Folder } from 'lucide-react';
 import { FILE_ACTIONS } from './constants.js';
 import { SIDEBAR_IMAGE_MIME } from './imagePaste.js';
 import { isOpenable } from './MediaView.js';
 import { cn } from '@/lib/utils';
 
-// Row visuals shared with DailyNotesPanel (same look as the file browser).
+// Row visuals shared with TreePanel (same look as the file browser).
 export const treeRowClass = (selected: boolean) => cn(
   // Extra left padding so the row fill / selection ring extends a few px past
   // the caret instead of hugging it.
@@ -24,12 +26,18 @@ export function TreeFolderIcon() {
 }
 
 const FileTree = forwardRef<any, any>(function FileTree(
-  { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, conflictMode, checkRenameConflict, onRootContextMenu, fixedHeight },
+  { data, onSelect, onRename, onFileAction, onFolderAction, onMoveItems, disableDrop, getIsBookmarked, conflictMode, checkRenameConflict, onRootContextMenu, contentSized, onImportFiles },
   ref,
 ) {
   const wrapRef = useRef<any>(null);
   const treeRef = useRef<any>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  // Visible row count for contentSized mode (folders closed ⇒ only their row
+  // counts). Synced from react-arborist's visibleNodes after mount/data/toggle.
+  const [visibleCount, setVisibleCount] = useState(() => data?.length ?? 0);
+  const syncVisibleCount = useCallback(() => {
+    setVisibleCount(treeRef.current?.visibleNodes?.length ?? 0);
+  }, []);
 
   useEffect(() => {
     if (!wrapRef.current) return;
@@ -40,6 +48,10 @@ const FileTree = forwardRef<any, any>(function FileTree(
     ro.observe(wrapRef.current);
     return () => ro.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (contentSized) syncVisibleCount();
+  }, [contentSized, data, size.width, syncVisibleCount]);
 
   useImperativeHandle(ref, () => ({
     // Put a node into rename-edit mode. Retries briefly because the node may not be
@@ -65,11 +77,12 @@ const FileTree = forwardRef<any, any>(function FileTree(
     <div
       ref={wrapRef}
       className="tree-fill h-full w-full"
-      // In bookmark mode the parent sizes the tree to its content (fixedHeight)
-      // and owns the scroll, so the daily-notes list can sit directly beneath it
-      // and scroll as one. Otherwise the tree fills its container and scrolls
-      // internally (ResizeObserver-driven height).
-      style={fixedHeight != null ? { height: fixedHeight, flex: '0 0 auto' } : undefined}
+      // contentSized: the tree is as tall as its visible rows and the parent
+      // (tree-wrap) owns the scroll, so anything below it (the quick-access
+      // panel) sits directly beneath the last row and scrolls as one. Used in
+      // bookmark mode and whenever the panel is shown. Otherwise the tree fills
+      // its container and scrolls internally (ResizeObserver-driven height).
+      style={contentSized ? { height: visibleCount * 24, flex: '0 0 auto' } : undefined}
       onContextMenu={(e) => {
         // Row Nodes stopPropagation on their own onContextMenu, so this only
         // fires on empty space below/around the tree rows.
@@ -89,11 +102,12 @@ const FileTree = forwardRef<any, any>(function FileTree(
           // Tree in, so it's non-null here.
           dndRootElement={wrapRef.current}
           width={size.width}
-          height={fixedHeight != null ? fixedHeight : size.height}
+          height={contentSized ? visibleCount * 24 : size.height}
           indent={16}
           rowHeight={24}
           onSelect={onSelect}
           onRename={onRename}
+          onToggle={() => { if (contentSized) setTimeout(syncVisibleCount, 0); }}
           onMove={({ dragIds, parentId }) => {
             if (onMoveItems) onMoveItems(dragIds, parentId);
           }}
@@ -104,6 +118,7 @@ const FileTree = forwardRef<any, any>(function FileTree(
               {...props}
               onFileAction={onFileAction}
               onFolderAction={onFolderAction}
+              onImportFiles={onImportFiles}
               getIsBookmarked={getIsBookmarked}
               isBookmarked={getIsBookmarked ? getIsBookmarked(props.node.id) : false}
               conflictMode={conflictMode}
@@ -147,10 +162,22 @@ function RenameInput({ node, isFolder, checkRenameConflict }: any) {
   );
 }
 
-function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, getIsBookmarked, isBookmarked, conflictMode, checkRenameConflict }: any) {
+function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, onImportFiles, getIsBookmarked, isBookmarked, conflictMode, checkRenameConflict }: any) {
   const isFolder = node.isInternal;
   const isImage = !isFolder && IMAGE_EXT_RE.test(node.data.name);
   const willReceiveDrop = isFolder && node.willReceiveDrop;
+
+  // Accept OS file drags (Finder etc.) via react-dnd's NativeTypes.FILE —
+  // rows render inside react-arborist's DndProvider, so this shares its
+  // HTML5 backend. Folder rows import into the folder; file rows into their
+  // parent folder. Copy semantics; App owns the actual import.
+  const importDir = isFolder ? node.id : node.id.slice(0, node.id.lastIndexOf('/'));
+  const [{ isFileOver }, fileDropRef] = useDrop(() => ({
+    accept: [NativeTypes.FILE],
+    canDrop: () => !!onImportFiles,
+    drop: (item: any) => { onImportFiles?.(importDir, item.files); },
+    collect: (m) => ({ isFileOver: m.isOver() && m.canDrop() }),
+  }), [onImportFiles, importDir]);
 
   const handleDragStart = (e) => {
     if (!isImage) return;
@@ -234,14 +261,14 @@ function Node({ node, tree, style, dragHandle, onFileAction, onFolderAction, get
 
   return (
     <div
-      ref={dragHandle}
+      ref={(el) => { dragHandle?.(el); fileDropRef(el); }}
       // react-arborist supplies the nesting indent as an inline paddingLeft,
       // which beats the class padding — fold the row's own 12px inset into it.
       style={{ ...style, paddingLeft: `${(parseFloat(style?.paddingLeft) || 0) + 12}px` }}
       className={cn(
         // Selected folders and files share the same quiet gray fill.
         treeRowClass(node.isSelected),
-        willReceiveDrop && 'bg-selected',
+        (willReceiveDrop || isFileOver) && 'bg-selected',
       )}
       onClick={(e) => {
         // react-arborist's default Row wrapper around this Node also binds

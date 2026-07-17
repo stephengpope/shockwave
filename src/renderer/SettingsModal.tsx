@@ -73,8 +73,8 @@ export default function SettingsModal({
   onThemeModeChange,
   hideLineNumbers,
   onHideLineNumbersChange,
-  dailyNotesInBookmarks,
-  onDailyNotesInBookmarksChange,
+  treePanel,
+  onTreePanelChange,
   dailyNote,
   onDailyNoteChange,
   templates,
@@ -166,8 +166,8 @@ export default function SettingsModal({
               onThemeModeChange={onThemeModeChange}
               hideLineNumbers={hideLineNumbers}
               onHideLineNumbersChange={onHideLineNumbersChange}
-              dailyNotesInBookmarks={dailyNotesInBookmarks}
-              onDailyNotesInBookmarksChange={onDailyNotesInBookmarksChange}
+              treePanel={treePanel}
+              onTreePanelChange={onTreePanelChange}
             />
           )}
           {active === SETTINGS_SECTIONS.WORKSPACES && (

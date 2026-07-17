@@ -5,6 +5,7 @@ import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, Codin
 
 // dailyNote + templates moved to the per-workspace WorkspaceData.
 type DailyNote = WorkspaceData['dailyNote'];
+type TreePanel = Settings['appearance']['treePanel'];
 type Templates = WorkspaceData['templates'];
 type Transcription = Settings['transcription'];
 type SyncSettings = Settings['sync'];
@@ -14,7 +15,7 @@ type SyncSettings = Settings['sync'];
 const DEFAULT_CANONICAL: Settings = {
   workspaces: [],
   activeWorkspaceId: null,
-  appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, dailyNotesInBookmarks: false },
+  appearance: { themeMode: THEME_MODES.SYSTEM, hideLineNumbers: false, treePanel: { content: 'off', count: 10 } },
   codingAgent: { provider: DEFAULT_PROVIDER_SLUG, model: 'claude-sonnet-4-5', providerKeys: {}, baseUrl: '', thinkingLevel: 'medium' },
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
@@ -46,7 +47,7 @@ interface UseSettingsOpts {
 export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
   const [themeMode, setThemeMode] = useState<ThemeMode>(THEME_MODES.SYSTEM);
   const [hideLineNumbers, setHideLineNumbers] = useState(false);
-  const [dailyNotesInBookmarks, setDailyNotesInBookmarks] = useState(false);
+  const [treePanel, setTreePanel] = useState<TreePanel>({ content: 'off', count: 10 });
   // Live + persisted bookmark-filter mode (single source of truth; useBookmarks
   // no longer owns this so the view can survive restarts / workspace switches).
   const [bookmarkFilterActive, setBookmarkFilterActiveState] = useState(false);
@@ -85,7 +86,7 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
       await window.api.settings.write({
         workspaces: s.workspaces,
         activeWorkspaceId: s.activeWorkspaceId,
-        appearance: { themeMode: s.appearance.themeMode, hideLineNumbers: s.appearance.hideLineNumbers, dailyNotesInBookmarks: s.appearance.dailyNotesInBookmarks },
+        appearance: { themeMode: s.appearance.themeMode, hideLineNumbers: s.appearance.hideLineNumbers, treePanel: s.appearance.treePanel },
         treeSortOrder: s.treeSortOrder,
         bookmarkFilterActive: s.bookmarkFilterActive,
         codingAgent: s.codingAgent,
@@ -124,9 +125,9 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     await persistSettings({ appearance: { ...settingsRef.current.appearance, hideLineNumbers: next } });
   }, [persistSettings]);
 
-  const onDailyNotesInBookmarksChange = useCallback(async (next: boolean) => {
-    setDailyNotesInBookmarks(next);
-    await persistSettings({ appearance: { ...settingsRef.current.appearance, dailyNotesInBookmarks: next } });
+  const onTreePanelChange = useCallback(async (next: TreePanel) => {
+    setTreePanel(next);
+    await persistSettings({ appearance: { ...settingsRef.current.appearance, treePanel: next } });
   }, [persistSettings]);
 
   // Toggle/persist the bookmark-filter view. Sets React state synchronously so
@@ -244,7 +245,14 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     };
     const tm: ThemeMode = disk.appearance?.themeMode || THEME_MODES.SYSTEM;
     const hln = !!disk.appearance?.hideLineNumbers;
-    const dnb = !!disk.appearance?.dailyNotesInBookmarks;
+    // Migrate the retired `dailyNotesInBookmarks` checkbox: on ⇒ daily notes panel.
+    const rawTp = disk.appearance?.treePanel;
+    const tp: TreePanel = {
+      content: ['off', 'recent', 'daily', 'both'].includes(rawTp?.content)
+        ? rawTp.content
+        : (disk.appearance?.dailyNotesInBookmarks ? 'daily' : 'off'),
+      count: typeof rawTp?.count === 'number' && rawTp.count >= 1 ? Math.min(50, Math.round(rawTp.count)) : 10,
+    };
     const bfa = !!disk.bookmarkFilterActive;
     const tso: TreeSortOrder = typeof disk.treeSortOrder === 'string' ? disk.treeSortOrder : TREE_SORT_ORDERS.NAME_ASC;
     const ca: CodingAgentSettings = disk.codingAgent ?? settingsRef.current.codingAgent;
@@ -253,7 +261,7 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     settingsRef.current = {
       workspaces: disk.workspaces || [],
       activeWorkspaceId: disk.activeWorkspaceId ?? null,
-      appearance: { themeMode: tm, hideLineNumbers: hln, dailyNotesInBookmarks: dnb },
+      appearance: { themeMode: tm, hideLineNumbers: hln, treePanel: tp },
       codingAgent: ca,
       agentSecrets: secrets,
       transcription: tr,
@@ -268,7 +276,7 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     };
     setThemeMode(tm);
     setHideLineNumbers(hln);
-    setDailyNotesInBookmarks(dnb);
+    setTreePanel(tp);
     setBookmarkFilterActiveState(bfa);
     setTreeSortOrder(tso);
     if (disk.codingAgent) setCodingAgentSettings(ca);
@@ -278,11 +286,11 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
   }, [dailyNoteRef, syncRef]);
 
   return {
-    themeMode, hideLineNumbers, dailyNotesInBookmarks, bookmarkFilterActive,
+    themeMode, hideLineNumbers, treePanel, bookmarkFilterActive,
     dailyNote, dailyNoteRef, templates, builtinSkills, treeSortOrder,
     codingAgentSettings, agentSecrets, transcription, sync, syncRef,
     settingsRef, saveStatus, persistSettings, hydrateSettings, loadWorkspaceData,
-    onThemeModeChange, onHideLineNumbersChange, onDailyNotesInBookmarksChange,
+    onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
     onSyncChange, onSyncDisabledChange,
