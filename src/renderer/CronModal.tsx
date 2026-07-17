@@ -28,7 +28,7 @@ function fmtRel(ms: number | null): string {
   return delta > 0 ? `in ${span}` : `${span} ago`;
 }
 
-function JobRow({ job, busy, onRun }: { job: CronJobView; busy: boolean; onRun: () => void }) {
+function JobRow({ job, busy, running, onRun }: { job: CronJobView; busy: boolean; running: boolean; onRun: () => void }) {
   const off = !job.enabled;
   return (
     <div className={cn(
@@ -59,7 +59,7 @@ function JobRow({ job, busy, onRun }: { job: CronJobView; busy: boolean; onRun: 
       </div>
       <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1 px-2" onClick={onRun}
         disabled={busy || !job.name} title={busy ? 'A run is in progress' : 'Run now'}>
-        {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}Run
+        {running ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}Run
       </Button>
     </div>
   );
@@ -114,7 +114,7 @@ export default function CronModal({ open, onClose, onOpenFile, onOpenSettings }:
               <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs">
                 <span className="text-muted-foreground">
                   Scheduling is <span className="font-medium text-foreground">off</span> — jobs won't fire
-                  automatically. You can still Run now.
+                  automatically.
                 </span>
                 {onOpenSettings && (
                   <Button variant="outline" size="sm" className="h-6 shrink-0 px-2 text-xs" onClick={onOpenSettings}>
@@ -138,7 +138,8 @@ export default function CronModal({ open, onClose, onOpenFile, onOpenSettings }:
             ) : (
               <div className="flex flex-col gap-2">
                 {jobs.map((job, i) => (
-                  <JobRow key={job.name || `__${i}`} job={job} busy={busy} onRun={() => runNow(job.name)} />
+                  <JobRow key={job.name || `__${i}`} job={job} busy={busy}
+                    running={busy && view?.runningJobName === job.name} onRun={() => runNow(job.name)} />
                 ))}
               </div>
             )}

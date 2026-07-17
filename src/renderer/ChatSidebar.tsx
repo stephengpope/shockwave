@@ -973,8 +973,9 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           <div className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground">Drop to attach</div>
         </div>
       )}
-      {/* 44px hairline-bottom header: history left, avatar+title centered, collapse right (spec §6). */}
-      <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-3">
+      {/* 44px header: history left, avatar+title centered, collapse right (spec §6).
+          No hairline — the gradient shim below softens the scroll joint instead. */}
+      <div className="flex h-11 shrink-0 items-center gap-1 px-3">
         <button
           type="button"
           className={headerBtn}
@@ -1051,6 +1052,8 @@ const ChatSidebar = forwardRef<any, any>(function ChatSidebar({ onClose, workspa
           aria-label="Collapse coding agent"
         ><PanelRightCloseIcon size={14} /></button>
       </div>
+      {/* Soft fade over the transcript's top edge so scrolled text slides under the header. */}
+      <div className="pointer-events-none absolute inset-x-0 top-11 z-10 h-5 bg-gradient-to-b from-chat to-transparent" aria-hidden="true" />
       {showHistory && (
         <HistoryPopover
           currentSessionId={currentSessionId}
