@@ -119,8 +119,8 @@
       "category": "public.app-category.productivity",
       "icon": "build/icon.icns",
       "artifactName": "Shockwave-mac.${ext}",
-      "hardenedRuntime": false,
-      "notarize": false,
+      "hardenedRuntime": true,
+      "notarize": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {

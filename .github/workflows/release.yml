@@ -39,14 +39,21 @@ jobs:
       # platform's installer (and the latest*.yml auto-update feed) to the
       # public GitHub Release for this tag.
       #
-      # macOS builds UNSIGNED for now (no signing secrets set up; mac.notarize
-      # is false in package.json). To re-enable signing later: set the CSC_LINK /
-      # CSC_KEY_PASSWORD / APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
-      # secrets, add them back as env here, and flip mac.notarize back to true.
+      # The macOS step is separate because CSC_LINK / CSC_KEY_PASSWORD are
+      # electron-builder's CROSS-PLATFORM signing vars — exposed on the Windows
+      # runner they'd make it try (and fail) to sign the NSIS installer with
+      # the Apple cert. Signing + notarization needs all five Apple secrets;
+      # electron-builder notarizes (mac.notarize: true) using APPLE_ID /
+      # APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID.
       - if: runner.os == 'macOS'
         run: npm run dist -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - if: runner.os != 'macOS'
         run: npm run dist -- --publish always
