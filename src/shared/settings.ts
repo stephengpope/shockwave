@@ -1,8 +1,14 @@
 // The persisted settings schema — the single typed source of truth shared by
-// main (DEFAULT_SETTINGS / readSettings) and the renderer (settingsRef). Until
-// those files are TypeScript this type isn't enforced against them at build
-// time, but it's the contract: keep DEFAULT_SETTINGS in main.js in sync, and
-// any .ts consumer (e.g. a future useSettings) is checked against it.
+// main (readSettings/writeSettings) and the renderer (settingsRef).
+//
+// This is the shape the renderer sees. On disk it spans four sqlite tables —
+// `setting` (scalar prefs), `workspace`, `agent_secret`, `secret_value` (all
+// encrypted values) — but readSettings/writeSettings hide that entirely.
+// `DEFAULT_SETTINGS` lives beside the store in src/main/settingsStore.ts, and a
+// key with no row falls back to it. Keep the two in sync when adding a field —
+// and if the field holds a credential, add its key pattern to
+// SETTINGS_SECRET_PATTERNS in src/main/settingsKeys.js, or it lands in the
+// `setting` table in plaintext.
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 // What the quick-access panel pinned below the file tree shows (Explorer and
@@ -37,7 +43,7 @@ export interface CodingAgentSettings {
   provider: string;
   model: string;
   // Per-provider API keys, keyed by provider slug, each encrypted at rest
-  // (enc:v1). Replaces the former single `apiKey` so switching providers keeps
+  // (AES-256-GCM). Replaces the former single `apiKey` so switching providers keeps
   // each key. openai-compatible's key lives here too (under 'openai-compatible');
   // its baseUrl/contextWindow stay in the active fields below.
   providerKeys: Record<string, string>;
@@ -56,8 +62,13 @@ export interface CodingAgentSettings {
 
 // OAuth connection state carried by an `oauth`-kind AgentSecret. The three
 // secret-bearing fields (clientSecret, accessToken, refreshToken) are encrypted
-// at rest with the same enc:v1 wrapping as `token` — see the encrypt/decrypt
-// loops in main.ts. `expiresAt` is an absolute epoch-ms deadline for the access
+// at rest like `token` — they live in `secret_value`, keyed by this entry's
+// name; see AGENT_SECRET_FIELDS in src/main/settingsKeys.js. The token lifecycle
+// fields (accessToken/refreshToken/expiresAt/status/accountEmail) are written
+// ONLY by oauth.ts via patchAgentSecretOAuth; a bulk settings save cannot author
+// them (OAUTH_OWNED_FIELDS / OAUTH_OWNED_COLUMNS), which is what stops a stale
+// renderer copy from clobbering a token main just refreshed.
+// `expiresAt` is an absolute epoch-ms deadline for the access
 // token; the refresh-on-demand getter (oauth.ts) refreshes before it lapses.
 export interface AgentSecretOAuth {
   provider: string;              // preset id (e.g. 'google') or 'custom'

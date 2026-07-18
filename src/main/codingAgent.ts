@@ -279,7 +279,10 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
     jsonlPath: entry.jsonlPath,
     systemPrompt: promptOverride,
     model: model ?? null,
-    source: source ?? null,
+    source: source ?? 'desktop',
+    // Identity within the source. Cron's is the job name (already threaded here
+    // as cronTitle); an interactive desktop chat has no external id.
+    sourceId: cronTitle ?? null,
     now: Date.now(),
   });
 

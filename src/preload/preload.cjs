@@ -231,9 +231,20 @@ contextBridge.exposeInMainWorld('api', {
   settings: {
     /** @returns {Promise<object>} Full merged settings; secrets decrypted. */
     read: () => ipcRenderer.invoke('settings:read'),
-    /** Shallow-merges patch onto the on-disk settings; secrets are encrypted before write.
+    /** Writes only the keys present in `patch`; secrets are encrypted before write.
      *  @param {object} obj @returns {Promise<void>} */
     write: (obj) => ipcRenderer.invoke('settings:write', obj),
+    /** Fires when MAIN writes settings on its own (OAuth tokens, window bounds,
+     *  cron, auto-provisioned secret slots) so the renderer's copy can't go
+     *  stale. Never fires for the renderer's own writes. Payload:
+     *  `{ keys: string[], settings: object }` — apply only `keys`.
+     *  @param {(payload: {keys: string[], settings: object}) => void} cb
+     *  @returns {() => void} unsubscribe */
+    onChanged: (cb) => {
+      const listener = (_evt, payload) => cb(payload);
+      ipcRenderer.on('settings:changed', listener);
+      return () => ipcRenderer.removeListener('settings:changed', listener);
+    },
   },
 
   // ---- OAuth (agent secrets) ----------------------------------------------

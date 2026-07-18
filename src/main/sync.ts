@@ -15,6 +15,7 @@ import { app } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { scaffoldNewProject } from './prompt/index.js';
+import { cacheWorkspaceOrigin } from './db/index.js';
 
 const GITHUB_API = 'https://api.github.com';
 const API_HEADERS = (pat) => ({
@@ -335,8 +336,26 @@ export async function workspaceStatus(workspacePath) {
     return { hasGit: false, hasOrigin: false, originUrl: null };
   }
   const remote = await gitSpawn(workspacePath, ['remote', 'get-url', 'origin'], { timeoutMs: 5000 });
-  if (!remote.ok) return { hasGit: true, hasOrigin: false, originUrl: null };
-  return { hasGit: true, hasOrigin: true, originUrl: remote.stdout.trim() };
+  if (!remote.ok) {
+    cacheOrigin(workspacePath, null);
+    return { hasGit: true, hasOrigin: false, originUrl: null };
+  }
+  const originUrl = remote.stdout.trim();
+  cacheOrigin(workspacePath, originUrl);
+  return { hasGit: true, hasOrigin: true, originUrl };
+}
+
+// Write-through cache of what git just told us, so UI that wants to show a repo
+// for every workspace doesn't have to spawn a git per workspace. Display only —
+// the live value above is what every caller actually acts on, so an out-of-app
+// `git remote set-url` can never route a push using a stale cache. Best-effort:
+// a failure here must not break the status read.
+function cacheOrigin(workspacePath: string, originUrl: string | null) {
+  try {
+    cacheWorkspaceOrigin(workspacePath, originUrl, Date.now());
+  } catch (err: any) {
+    console.warn('[sync] could not cache origin url:', err?.message ?? err);
+  }
 }
 
 // ─── Setup flows ───────────────────────────────────────────────────────────

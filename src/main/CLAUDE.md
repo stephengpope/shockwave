@@ -4,7 +4,12 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 
 ## Files
 
-- `main.ts` — entry point. Window lifecycle, every IPC handler, watcher orchestration, settings I/O, `app://` protocol, secret encryption.
+- `main.ts` — entry point. Window lifecycle, every IPC handler, watcher orchestration, `app://` protocol.
+
+**Chat provenance.** `chat_session` carries three columns describing where a chat came from: `source` (`'desktop'` — interactive, the default — or `'cron'`; open-ended so a future channel like telegram needs no migration), `source_id` (identity *within* that source — the cron job name, or a chat/thread id; null for desktop, where a person at this app has no external id), and `machine` (`os.hostname()` at creation — chats travel with the workspace, but a cron run is machine-local, so the transcript alone can't say which box executed it). All three are set by `upsertSession`. Note `source` is nullable in SQL despite always being written: adding `NOT NULL` would require rebuilding `chat_session`, and `message` cascades from it — see the comment in `drizzle/0006_chat_source.sql`.
+- `settingsStore.ts` — settings + secrets in the `setting` DB table: `readSettings`/`writeSettings`, `patchAgentSecretOAuth`, `DEFAULT_SETTINGS`, and the one-time `settings.json` import. See "Settings persistence + secrets encryption" below.
+- `settingsKeys.js` — PURE key policy + shape mapping for the above (plain `.js`, unit-tested under `node --test`): `SETTINGS_SECRET_PATTERNS` / `AGENT_SECRET_FIELDS` (what goes to `secret_value`), `OAUTH_OWNED_FIELDS` / `OAUTH_OWNED_COLUMNS`, `LEAF_KEYS`, the flatten helpers, and `splitAgentSecret`/`joinAgentSecret` (the AgentSecret ⇄ two-table mapping).
+- `masterKey.ts` — the `safeStorage`-wrapped master key at `<userData>/masterkey.enc`, plus `seal`/`unseal` (AES-256-GCM) for secret setting values.
 - `pathResolver.ts` — `isMdFile`, `uniquePath` (same-dir uniqueness), `uniqueInWorkspace` (workspace-wide basename uniqueness for `.md` files), `walkMarkdownPaths`, `collectMarkdownBasenamesLower`. The link index is keyed by basename, so two `.md` files sharing one breaks it; `uniqueInWorkspace` is what `fs:renameFile`, `fs:moveItem`, and `fs:createFile` call to auto-disambiguate. Folder renames stay same-folder-unique because folders aren't part of the link index.
 - `linkParser.js` — ESM mirror of the wiki-link parser in `src/renderer/linkIndex.js` (intentionally kept as `.js` so both processes load the exact same module bytes — see parser-parity rule in root).
 - `renameCorrelator.js` — pairs unlink+add events into rename events. See below.
@@ -95,13 +100,62 @@ The correlator buffers unlinks and pairs them with subsequent adds:
 
 ## Settings persistence + secrets encryption
 
-`settings.json` lives at `app.getPath('userData')/settings.json`. `DEFAULT_SETTINGS` + the `Settings` type live in `src/shared/settings.ts` (single source of truth). Top-level keys: `workspaces`, `activeWorkspaceId`, `appearance` (`themeMode`, `hideLineNumbers`), `dailyNote` (`format`, `folder`), `codingAgent` (`provider`, `model`, `providerKeys` (per-provider API keys), `thinkingLevel`, `builtinSkills`), `agentSecrets[]`, `transcription` (`provider`, `apiKey`), `sync` (`pat`, `pullIntervalSeconds`), `chatSidebarOpen`, `chatSidebarWidth`, `treeSortOrder`, `windowBounds`.
+Settings live in `<userData>/shockwave.db` across **four tables**, split by what the data *is*. `settingsStore.ts` owns `readSettings`/`writeSettings` and `DEFAULT_SETTINGS`; the `Settings` type stays in `src/shared/settings.ts`.
 
-Adding a persisted field means: extend the `Settings` type + `DEFAULT_SETTINGS` in `src/shared/settings.ts`, extend `readSettings`'s deep merge in `main.ts`, and add a slice + setter in the renderer's `useSettings` hook (which owns the canonical in-memory copy and is the only `persistSettings` caller).
+| Table | Holds | Why not key-value |
+|---|---|---|
+| `setting` | scalar preferences, one row per dotted leaf key | — this is what KV is good at |
+| `workspace` | workspace entities + main-authored `origin_url` cache | an entity needs atomicity; N key rows can leave a half-record |
+| `agent_secret` | agent-secret entities (no crypto columns) | same |
+| `secret_value` | **every** encrypted value, crypto columns `NOT NULL` | makes a plaintext credential unrepresentable |
 
-`writeSettings` is serialized through `settingsWriteQueue` so concurrent writers (renderer-side `persistSettings` vs. main-side `persistWindowBounds`) can't race a partial overwrite. Writes go through tmp+rename for atomicity.
+`readSettings()` / `writeSettings(patch)` keep the signatures they had as file operations and still return/accept one flat `Settings` object, so every call site in `main.ts`, `oauth.ts`, `cron.ts` — and the whole renderer — is unchanged. The four-way split is invisible above this file.
 
-Anywhere settings hold a secret (every `codingAgent.providerKeys[*]`, every `agentSecrets[].token`, plus the three nested OAuth fields `agentSecrets[].oauth.{clientSecret,accessToken,refreshToken}`, `transcription.apiKey`, `sync.pat`) the on-disk value is wrapped with `enc:v1:<base64>` via Electron `safeStorage` (macOS Keychain / Windows DPAPI / libsecret on Linux). The encrypt/decrypt loops in `main.ts` are **field-name-driven** (they enumerate specific fields, not a deep walk) — a new secret-bearing field means adding an explicit line to both the `readSettings` decrypt map and the `doWriteSettings` encrypt map. `encryptSecret` is idempotent — a value already wrapped passes through unchanged — so `writeSettings` can accept a merged object that mixes plaintext (from renderer) and ciphertext (preserved from disk) without double-encrypting. Decryption happens in `readSettings`; legacy plaintext values from before encryption was wired in pass through and are auto-upgraded on the next write. On Linux without a keyring, safeStorage falls back to hardcoded-password mode and we warn once.
+### The store is the source of truth
+
+Two rules make that true rather than aspirational:
+
+1. **`writeSettings` writes only the keys in the patch.** The renderer's `persistSettings` sends just what changed (it used to merge into an in-memory canonical object and write all 14 subtrees — correct for a JSON file, but with per-key rows it put every unrelated setting, credentials included, in the blast radius of a stale copy). A key absent from a patch keeps whatever the store holds.
+2. **`settings:changed` pushes main's own writes to the renderer.** Main writes settings in places the renderer can't observe — OAuth token refresh, window bounds, cron toggles, `ensureBuiltinSecretSlots` — and its copy would silently drift. `emitChanged(keys)` broadcasts `{ keys, settings }` (changed top-level keys + a fresh full read) and the renderer applies **only those keys**, so an unrelated main write can't stomp a field the user is editing.
+
+The event fires for main-initiated writes only: the `settings:write` IPC passes `notify: false`, because the renderer already has what it just wrote and an echo could overwrite a newer local edit still in flight. The legacy import passes `notify: false` too — it runs before any window exists.
+
+The renderer keeps a copy (`settingsRef` in `useSettings`) purely to render from and to build whole sub-objects for per-field setters. It is a cache, not the truth.
+
+### Why these shapes
+
+The old `<userData>/settings.json` was read-modify-written in full on every save, so two writers touching unrelated settings raced over one blob and last-write-won. Per-key rows make those writes disjoint. Consequences worth knowing:
+
+- **No deep-merge to maintain.** A key with no row falls back to `DEFAULT_SETTINGS`. The old hand-written per-key merge in `readSettings` is gone.
+- **No write queue.** better-sqlite3 writes are synchronous and committed by the time `writeSettings` resolves, so `will-quit` no longer drains anything for settings — only the sync engine.
+- **Nested objects flatten** (`appearance.treePanel.content`); `windowBounds` is in `LEAF_KEYS` and stored whole as one JSON row.
+- **Collections get tables, not key rows.** `workspaces` and `agentSecrets` are intercepted in `writeSettings` *before* flattening and routed to their tables, so no stray settings row can reappear and shadow one. `sync.disabledWorkspaceIds` became `workspace.sync_disabled` — as an array it was a foreign key by another name, and ids outlived the workspaces they named. It is **derived on read** (`listSyncDisabledIds`) and **ignored on write**, authored only by the `sync:setWorkspaceDisabled` IPC via `setWorkspaceSyncDisabled(id, disabled)` — one boolean on one row. The renderer echoes the array back inside its `sync` object because it arrives on read; dropping it makes that echo a no-op instead of a rewrite of every workspace row. Same treatment as `workspace.origin_url`.
+- **Agent-secret order is derived**, `createdAt` then name, rather than stored — a shared ordering row would reintroduce the cross-writer collision the design removes. Workspaces do store `sort_order` (REAL), because their order is user-visible and arbitrary.
+
+The pure half — key classification, the flatten mapping, and the entity split/join — lives in **`settingsKeys.js`** (plain `.js`, no electron import) so `node --test` exercises it directly; same split as `cronScheduler.js` vs `cron.ts`. See `tests/settingsKeys.test.js`.
+
+Adding a persisted field means: extend the `Settings` type in `src/shared/settings.ts` + `DEFAULT_SETTINGS` in `settingsStore.ts`, add a slice + setter in the renderer's `useSettings` hook (the canonical in-memory copy and only `persistSettings` caller), and — **if it holds a credential** — add its key pattern to `SETTINGS_SECRET_PATTERNS` in `settingsKeys.js`.
+
+### Secret encryption
+
+Envelope encryption, one level deep:
+
+```
+safeStorage (OS keychain) ──wraps──> master key (32 bytes) ──AES-256-GCM──> each secret value
+```
+
+- **Master key** (`masterKey.ts`): 32 random bytes generated on first run, wrapped with `safeStorage` and written to `<userData>/masterkey.enc` (mode 0600, tmp+rename). It lives in a **file, not the DB**, because it is machine-bound while the DB is portable — a copied/backed-up DB shouldn't carry bytes that only one keychain can unwrap. Cached in main's memory; never crosses IPC. If the key file exists but can't be unwrapped (restored machine, changed login keychain) `getMasterKey` **throws rather than regenerating** — silently minting a new key would leave every existing secret row undecryptable while looking healthy.
+- **Per value**: AES-256-GCM with a **fresh 12-byte IV per write**, one row in `secret_value` keyed by `(owner, field)`. `ciphertext`/`iv`/`tag`/`key_version` are all `NOT NULL` — that is the structural guarantee: a plaintext credential cannot be stored in that table. A row that fails to decrypt yields `''` and warns, so one bad row doesn't take down the whole settings read.
+- **`owner`** is `'settings'` for standalone credentials (the field is then the settings key: `sync.pat`, `transcription.apiKey`, `codingAgent.providerKeys.<slug>`), or an `agent_secret.name` for that entry's `token` / `oauth.{clientSecret,accessToken,refreshToken}`.
+- **Absent means unset.** An empty value deletes its row rather than encrypting `''`, so "is this configured" is a row-existence check. A built-in-skill slot with no key pasted yet has an `agent_secret` row and no `secret_value` row.
+- **Where a value goes** is decided by `SETTINGS_SECRET_PATTERNS` + `AGENT_SECRET_FIELDS` in `settingsKeys.js`. Two earlier designs failed silently here and are worth remembering: hand-maintained encrypt/decrypt field lists in `main.ts` (miss one, it persists in the clear), then a `secret` flag column on `setting` (set it wrong, same result). Routing to a table whose crypto columns are `NOT NULL` is what removed that failure mode.
+- Only `secret_value` is encrypted. Everything else — settings, workspaces, agent-secret metadata, chat messages, cron state — is plaintext.
+- **Key rotation** is a single `SELECT`/`UPDATE` over one table; `key_version` marks which master key sealed each row so a rotation can proceed incrementally.
+- On Linux without a keyring `safeStorage` falls back to a hardcoded password, so wrapping buys nothing; the key is stored marked `plain` and we warn once, rather than pretending. Same posture the old path had (it wrote plaintext secrets in that situation).
+
+### Legacy import
+
+`importLegacySettingsIfNeeded()` runs once in `whenReady`, before anything reads settings. It no-ops unless the `setting` and `agent_secret` tables are both empty **and** a `<userData>/settings.json` exists. It unwraps the old `enc:v1:<base64>` safeStorage values, drops retired keys (`ai`, `dailyNote`, `templates`, `codingAgent.systemPrompt`, `codingAgent.skills`, `appearance.dailyNotesInBookmarks`), writes everything through `writeSettings` (re-encrypting under the master key), then **renames** `settings.json` → `settings.json.migrated` — never deletes it. It can't be a standalone script: `safeStorage` only exists inside a running Electron process. It ships permanently, since every install from v1.0.12 and earlier upgrades from a `settings.json`.
 
 ### OAuth for agent secrets
 
@@ -111,7 +165,7 @@ An `agentSecrets[]` entry is either `kind: 'static'` (a pasted token, in `.token
 - **arctic** (`arctic@^3.7.0`, ESM — externalized, resolved by the ESM main at runtime) is used **only for the pure authorize-URL + PKCE building** (`createAuthorizationURLWithPKCE`, `CodeChallengeMethod.S256`, `generateState`, `generateCodeVerifier`). The **token exchange + refresh are our own `fetch`** (`postToken`), NOT arctic's `validateAuthorizationCode`/`refreshAccessToken`: arctic 3.7.0 manually sets a `Content-Length` header on its token request, which Electron's undici rejects with `UND_ERR_INVALID_ARG` "invalid content-length header" — the request never leaves the app. Our `postToken` sends a `URLSearchParams` string body with only `Content-Type`/`Accept` (undici computes Content-Length) and puts `client_id`+`client_secret` in the body. `PROVIDER_PRESETS` bakes in endpoints/scopes/quirks (Google's `access_type=offline` + `prompt=consent` guarantees a refresh token).
 - **State/verifier live in-memory** for the flow's lifetime (a webapp would use httpOnly cookies; we have neither). `state` is checked on the callback (CSRF). 5-min timeout.
 - **`getFreshToken(name)`** is what the agent-tokens bridge calls for an oauth secret: returns the stored access token, or refreshes (arctic `refreshAccessToken`) if within `EXPIRY_SKEW_MS` of expiry, re-persists, and returns the new one. Concurrent callers for one name share a single in-flight refresh (Google rotates refresh tokens). No refresh token / refresh failure ⇒ status flips to `expired` and it throws a "reconnect in Settings" message.
-- **Settings I/O is injected** via `initOAuth({ readSettings, writeSettings })` (called once at startup, before any `oauth:*` IPC) to avoid a circular import back into `main.ts`. Token writes go straight to disk from main — they never round-trip through a renderer-initiated save. The renderer calls `reloadAgentSecrets` (in `useSettings`) after Connect/Disconnect to pull fresh status without re-persisting (a re-persist would clobber the tokens main just wrote).
+- **Settings reads are injected** via `initOAuth({ readSettings })` (called once at startup, before any `oauth:*` IPC) to avoid a circular import back into `main.ts`. Writes don't need injecting — `patchSecret` calls `patchAgentSecretOAuth` in `settingsStore.ts` directly, touching **only** this connection's token rows in `secret_value` plus its OAuth status columns on `agent_secret`, in one transaction. It used to read-modify-write the entire `agentSecrets` array, which raced the renderer's own array write: the renderer's copy was built from pre-refresh state, so it could overwrite a token main had just rotated, and Google rotates refresh tokens on every refresh — a lost write killed the connection permanently. Two guards now: the writes are disjoint, and `OAUTH_OWNED_FIELDS` (`oauth.accessToken`, `oauth.refreshToken`) + `OAUTH_OWNED_COLUMNS` (`oauthExpiresAt`, `oauthStatus`, `oauthAccountEmail`) bar any bulk `writeSettings` from authoring them at all, so a stale echo can't win even in principle. `clientId`/`clientSecret` are deliberately NOT owned — the user enters those in Settings. `patchAgentSecretOAuth` also emits `settings:changed(['agentSecrets'])`, so the renderer picks up fresh status on its own; the explicit `reloadAgentSecrets` call after Connect/Disconnect is now a belt rather than the mechanism.
 - IPC: `oauth:listPresets`, `oauth:startConnect`, `oauth:disconnect`.
 
 ## `app://media/...` protocol
@@ -120,7 +174,7 @@ Registered before `app.ready` via `registerSchemesAsPrivileged({scheme: 'app', p
 
 ## Window bounds persistence
 
-`attachWindowBoundsPersistence` tracks the last-known unmaximized bounds and persists `{ x, y, width, height, maximized }` to `settings.windowBounds` on a 400ms debounce, with a final flush on `close`. The `will-quit` handler `event.preventDefault`s once, drains the `settingsWriteQueue`, then calls `app.exit()` so a fast Cmd+Q doesn't lose the last write. On restore, `boundsAreVisible` checks the saved rect against currently-attached displays and falls back to the default 1200×800 if it no longer intersects any display.
+`attachWindowBoundsPersistence` tracks the last-known unmaximized bounds and persists `{ x, y, width, height, maximized }` to `settings.windowBounds` on a 400ms debounce, with a final flush on `close`. The `will-quit` handler `event.preventDefault`s once, drains the **sync engine**, then calls `app.exit()`. It no longer drains a settings queue: the bounds write is a synchronous sqlite transaction that has already committed when `writeSettings` resolves, so a fast Cmd+Q can't lose it the way it could with the old async tmp+rename. On restore, `boundsAreVisible` checks the saved rect against currently-attached displays and falls back to the default 1200×800 if it no longer intersects any display.
 
 ## Coding agent (main side)
 
@@ -155,7 +209,7 @@ On-disk library at `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` (on
 
 Exposes `list_agent_secrets` + `get_agent_secret` tools so the agent can look up user-managed API tokens. The on-disk extension file is plain JS with no imports — it talks back to main through a process-global bridge (`global.__SHOCKWAVE_AGENT_TOKENS`) installed by `installAgentTokensBridge` at startup. The bridge re-reads settings on every call so user-side edits to secrets are picked up mid-conversation.
 
-The extension source string is materialized fresh on every session boot via `ensureAgentTokensExtension`, so editing the source in this repo and restarting the app picks up the change without any user-side install step. The reason for the bridge pattern: the extension file lives under `<userData>/pi-agent/extensions/` (outside this project), and node's resolver can't find `electron` from there; writing decrypted secrets to disk would defeat the `safeStorage` encryption; pi runs in the same V8 isolate as main so a `global` function is the cleanest bridge.
+The extension source string is materialized fresh on every session boot via `ensureAgentTokensExtension`, so editing the source in this repo and restarting the app picks up the change without any user-side install step. The reason for the bridge pattern: the extension file lives under `<userData>/pi-agent/extensions/` (outside this project), and node's resolver can't find `electron` from there; writing decrypted secrets to disk would defeat the at-rest encryption; pi runs in the same V8 isolate as main so a `global` function is the cleanest bridge.
 
 ### Failed-image guard
 
@@ -189,7 +243,7 @@ Per-workspace background sync to GitHub. Two files: `sync.ts` (one-shot helpers 
 
 ### Auth model
 
-PAT is stored encrypted in `settings.sync.pat` (`enc:v1:` via `safeStorage`). For shell git, the decrypted PAT is set on the child process's `GITHUB_PAT` env, and `GIT_ASKPASS` points at `<userData>/sync/askpass.sh` — a tiny posix helper that echoes `x-access-token` for `Username` prompts and `$GITHUB_PAT` for everything else. The PAT lives in process memory only for the lifetime of that one git child. **Never written to `.git/config`**; remote URLs stay plain `https://github.com/owner/repo.git`. REST calls use a `Bearer` header with the same memory-only lifetime.
+PAT is stored encrypted in the `sync.pat` setting row (AES-256-GCM under the master key — see "Secret encryption" above). For shell git, the decrypted PAT is set on the child process's `GITHUB_PAT` env, and `GIT_ASKPASS` points at `<userData>/sync/askpass.sh` — a tiny posix helper that echoes `x-access-token` for `Username` prompts and `$GITHUB_PAT` for everything else. The PAT lives in process memory only for the lifetime of that one git child. **Never written to `.git/config`**; remote URLs stay plain `https://github.com/owner/repo.git`. REST calls use a `Bearer` header with the same memory-only lifetime.
 
 ### Tick (sequential, never overlapping)
 
@@ -251,7 +305,7 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 | FS | `fs:readTree`, `fs:readAllMarkdown`, `fs:readFile`, `fs:writeFile`, `fs:createFile`, `fs:renameFile`, `fs:duplicateFile`, `fs:trashFolder`, `fs:trashFile`, `fs:createFolder`, `fs:ensureDir`, `fs:moveItem`, `fs:renameFolder`, `fs:writeImage`, `fs:pathExists`, `fs:watchStart`, `fs:watchStop` |
 | Shell | `shell:revealInFolder`, `shell:openExternal` |
 | Context menus | `context:fileMenu` (`conflictMode` → Conflict resolved / Keep our file / Reset to remote), `context:conflictCloudMenu` (whole-tree keep/reset), `context:folderMenu`, `context:editorMenu` |
-| Settings | `settings:read`, `settings:write` |
+| Settings | `settings:read`, `settings:write` (writes only the keys present); plus push event `settings:changed` (`{keys, settings}`, main-initiated writes only) |
 | OAuth | `oauth:listPresets`, `oauth:startConnect`, `oauth:disconnect` |
 | Bookmarks | `bookmarks:read`, `bookmarks:write` |
 | Theme | `theme:getInitial`; plus `theme:systemChanged` push event |

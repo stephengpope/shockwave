@@ -224,7 +224,12 @@ export interface ShockwaveApi {
 
   settings: {
     read(): Promise<Settings>;
+    /** Writes only the keys present in `obj`. Absent keys keep their stored value. */
     write(obj: Partial<Settings>): Promise<void>;
+    /** Fires when MAIN writes settings on its own (OAuth tokens, window bounds,
+     *  cron, auto-provisioned secret slots). Never fires for the renderer's own
+     *  writes. Apply only the reported `keys`. Returns an unsubscribe fn. */
+    onChanged(cb: (payload: { keys: string[]; settings: Settings }) => void): () => void;
   };
 
   oauth: {

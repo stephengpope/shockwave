@@ -8,12 +8,13 @@
 // (idempotent — drizzle records applied migrations in __drizzle_migrations).
 
 import path from 'node:path';
+import { hostname } from 'node:os';
 import { app } from 'electron';
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { and, desc, eq, lt, notInArray } from 'drizzle-orm';
-import { chatSession, message, cronState } from './schema.js';
+import { and, desc, eq, inArray, lt, notInArray } from 'drizzle-orm';
+import { chatSession, message, cronState, workspace } from './schema.js';
 
 let sqlite: Database.Database | null = null;
 let db: BetterSQLite3Database | null = null;
@@ -123,8 +124,12 @@ export function upsertSession(row: {
   systemPrompt: string | null;
   model: string | null;
   now: number;
-  // null (interactive) or 'cron'. Set on insert only; preserved on resume.
+  // Where the chat came from: 'desktop' (default) or 'cron' today; open-ended so
+  // a future channel needs no migration. Set on insert only; preserved on resume.
   source?: string | null;
+  // Identity within that source — the cron job name, a chat/thread id, etc.
+  // Null for desktop: a person at this app has no external id to point at.
+  sourceId?: string | null;
 }) {
   getDb().insert(chatSession).values({
     sessionId: row.sessionId,
@@ -132,7 +137,11 @@ export function upsertSession(row: {
     jsonlPath: row.jsonlPath,
     systemPrompt: row.systemPrompt,
     model: row.model,
-    source: row.source ?? null,
+    source: row.source ?? 'desktop',
+    sourceId: row.sourceId ?? null,
+    // Which box actually ran it. Chats travel with the workspace, but a cron run
+    // is machine-local, so the transcript alone can't tell you where it executed.
+    machine: hostname(),
     createdAt: row.now,
     updatedAt: row.now,
   }).onConflictDoUpdate({
@@ -313,6 +322,78 @@ export function pruneCronState(workspace: string, keepJobNames: string[]) {
 
 export function deleteCronStateForWorkspace(workspace: string) {
   getDb().delete(cronState).where(eq(cronState.workspace, workspace)).run();
+}
+
+// ---- workspaces ---------------------------------------------------------------
+// A workspace is an entity, not a setting, so it gets a real table (see
+// schema.ts). settingsStore's readSettings/writeSettings route `workspaces`
+// here, which is why the renderer still sees it as a plain field on Settings.
+
+export function listWorkspaces() {
+  return getDb().select().from(workspace).orderBy(workspace.sortOrder).all();
+}
+
+// Reconciles the table against the full list the renderer sent: drops workspaces
+// no longer present, upserts the rest, and renumbers sort_order from array
+// position.
+//
+// Deliberately does NOT touch origin_url / checked_at — those are main-authored
+// (workspaceStatus fills them) and the renderer never sends them. Listing them
+// in the upsert's `set` would wipe the cache on every settings save, the same
+// clobber that OAUTH_OWNED_RE prevents for tokens.
+export function replaceWorkspaces(list: Array<{ id: string; name: string; path: string }>) {
+  const db = getDb();
+  db.transaction((tx: any) => {
+    const keep = list.filter((w) => w?.id).map((w) => w.id);
+    if (keep.length) tx.delete(workspace).where(notInArray(workspace.id, keep)).run();
+    else tx.delete(workspace).run();
+
+    list.forEach((w, i) => {
+      if (!w?.id) return;
+      const row = { id: w.id, name: w.name ?? '', path: w.path ?? '', sortOrder: i + 1 };
+      tx.insert(workspace).values(row).onConflictDoUpdate({
+        target: workspace.id,
+        set: { name: row.name, path: row.path, sortOrder: row.sortOrder },
+      }).run();
+    });
+  });
+}
+
+// Sync on/off for ONE workspace — the shape of the actual user action ("disable
+// sync for this workspace"), and the only writer of this column.
+//
+// It was briefly a set-replacement taking the whole id array, which rewrote
+// every workspace row to flip one flag — the same all-at-once write this schema
+// exists to avoid. `sync.disabledWorkspaceIds` is an array only because a JSON
+// blob had no better option; it's now derived on read (listSyncDisabledIds) and
+// ignored on write, like workspace.origin_url.
+export function setWorkspaceSyncDisabled(workspaceId: string, disabled: boolean) {
+  getDb().update(workspace)
+    .set({ syncDisabled: disabled ? 1 : 0 })
+    .where(eq(workspace.id, workspaceId))
+    .run();
+}
+
+export function listSyncDisabledIds(): string[] {
+  return getDb().select({ id: workspace.id }).from(workspace)
+    .where(eq(workspace.syncDisabled, 1)).all().map((r: any) => r.id);
+}
+
+export function findWorkspaceIdByPath(workspacePath: string): string | null {
+  const rows = getDb().select({ id: workspace.id }).from(workspace)
+    .where(eq(workspace.path, workspacePath)).all() as any[];
+  return rows[0]?.id ?? null;
+}
+
+// Write-through cache for `git remote get-url origin`, called by workspaceStatus
+// as it shells out. Matches on path (unique per workspace) and no-ops when the
+// folder isn't a known workspace — the sync setup flows call workspaceStatus for
+// folders that aren't in the list yet.
+export function cacheWorkspaceOrigin(workspacePath: string, originUrl: string | null, now: number) {
+  getDb().update(workspace)
+    .set({ originUrl, checkedAt: now })
+    .where(eq(workspace.path, workspacePath))
+    .run();
 }
 
 // Trim a message body to a ~120-char window around the first query term.

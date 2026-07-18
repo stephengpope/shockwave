@@ -16,7 +16,7 @@ import {
   cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
 } from './cron.js';
 import { CRON_FILE } from './cronScheduler.js';
-import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred } from './db/index.js';
+import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred, findWorkspaceIdByPath, setWorkspaceSyncDisabled } from './db/index.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
 import { scaffoldNewProject } from './prompt/index.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
@@ -27,6 +27,11 @@ import { installAgentTokensBridge } from './agentTokensExtension.js';
 import { installOpenFileBridge } from './openFileExtension.js';
 import { initOAuth, startConnect as oauthStartConnect, disconnect as oauthDisconnect, getFreshToken, PROVIDER_PRESETS } from './oauth.js';
 import { ensureCliShims, prependPath } from './cliTools.js';
+// Settings + secrets live in the `setting` table (see settingsStore.ts). The old
+// `<userData>/settings.json` reader/writer and its per-field safeStorage
+// encryption were replaced wholesale; the signatures here are unchanged, so
+// every call site below (and in oauth.ts / cron.ts) is untouched.
+import { DEFAULT_SETTINGS, readSettings, writeSettings, importLegacySettingsIfNeeded } from './settingsStore.js';
 import {
   verifyPat as syncVerifyPat,
   checkGit as syncCheckGit,
@@ -93,105 +98,6 @@ function popupContextMenu(win, template) {
   });
 }
 
-const DEFAULT_SETTINGS = {
-  workspaces: [],
-  activeWorkspaceId: null,
-  appearance: { themeMode: 'system', hideLineNumbers: false, treePanel: { content: 'off', count: 10 } },
-  // Daily-note + template config moved to per-workspace `.shockwave/workspace.json`.
-  codingAgent: {
-    provider: 'anthropic',
-    model: 'claude-sonnet-4-5',
-    providerKeys: {},
-    // OpenAI-compatible endpoint URL; only set when provider is 'openai-compatible'.
-    baseUrl: '',
-    // Extended-thinking level. 'medium' preserves pi's implicit default for
-    // reasoning-capable hosted models (no behavior change); openai-compatible
-    // endpoints stay effectively off because their model is registered
-    // reasoning:false unless a level > off is chosen.
-    thinkingLevel: 'medium',
-    // System prompt is no longer a setting — it's assembled at session boot from
-    // the workspace's SOUL.md (or a built-in default) + the internal Shockwave
-    // helper. See src/main/prompt/.
-  },
-  // Global, user-managed API tokens. Each entry: { name, description, token, createdAt, updatedAt }.
-  // `name` is the unique identifier (case-insensitive). `token` is encrypted on disk
-  // via safeStorage (see encryptSecret).
-  agentSecrets: [],
-  // Voice transcription. `apiKey` is the AssemblyAI key, encrypted on disk via
-  // safeStorage. The renderer never sees the key — it requests short-lived (60s)
-  // streaming tokens via the `voice:getToken` IPC, which is what the WebSocket
-  // to AssemblyAI authenticates with.
-  transcription: { provider: 'assemblyai', apiKey: '' },
-  // GitHub sync. `pat` is a GitHub Personal Access Token, encrypted on disk
-  // via safeStorage. Decrypted only into the env of git child processes (via
-  // GIT_ASKPASS helper); never written to .git/config or any other on-disk
-  // location. `pullIntervalSeconds` is the tick cadence for the sync loop.
-  sync: { pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] },
-  // Scheduled runs (cron). Machine-local + global; opt-in (default off). See the
-  // `cron` type in src/shared/settings.ts. No secrets, so no encrypt/decrypt.
-  cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
-  chatSidebarOpen: false,
-  chatSidebarWidth: 360,
-  // Left sidebar (file tree) width in px, and the editor view mode. Both are
-  // persisted by the renderer; they must be declared here so a fresh install
-  // has a default and readSettings can surface them. (See src/shared/settings.ts.)
-  sidebarWidth: 260,
-  viewMode: 'live',
-  // File-tree sort order. One of: 'name-asc' | 'name-desc' | 'modified-desc' |
-  // 'modified-asc' | 'created-desc' | 'created-asc'. Folders are always pinned
-  // to the top in A→Z order; this setting only re-orders files.
-  treeSortOrder: 'name-asc',
-  // Whether the file-tree is filtered to bookmarks only. Persisted globally so
-  // the view survives restarts and workspace switches.
-  bookmarkFilterActive: false,
-  // Window bounds. `null` until the user resizes/moves at least once. Stored
-  // as `{ x, y, width, height, maximized }`. On restore we validate against
-  // currently-attached displays and fall back to a centered 1200×800 if the
-  // saved rect no longer intersects any display.
-  windowBounds: null,
-};
-
-// ─── Secret encryption ───────────────────────────────────────────────────────
-// safeStorage uses the OS keychain (macOS Keychain / Windows DPAPI / libsecret
-// on Linux). Encrypted values are tagged with ENC_PREFIX so legacy plaintext
-// values (from before encryption was wired in) still load and auto-migrate on
-// the next write. On Linux without a keyring, safeStorage falls back to a
-// hardcoded-password mode; warn once so the user knows.
-const ENC_PREFIX = 'enc:v1:';
-let warnedNoEncryption = false;
-
-function encryptSecret(plain) {
-  if (!plain) return '';
-  // Idempotent: a value already wrapped with our prefix is treated as
-  // already-encrypted and passed through unchanged. Lets writeSettings
-  // accept a merged object that mixes plaintext (from renderer) and
-  // ciphertext (preserved from disk) without double-encrypting.
-  if (typeof plain === 'string' && plain.startsWith(ENC_PREFIX)) return plain;
-  if (!safeStorage.isEncryptionAvailable()) {
-    if (!warnedNoEncryption) {
-      console.warn('[secrets] safeStorage encryption unavailable — secrets stored in plaintext');
-      warnedNoEncryption = true;
-    }
-    return plain;
-  }
-  return ENC_PREFIX + safeStorage.encryptString(plain).toString('base64');
-}
-
-function decryptSecret(stored) {
-  if (!stored) return '';
-  if (!stored.startsWith(ENC_PREFIX)) return stored;
-  try {
-    return safeStorage.decryptString(Buffer.from(stored.slice(ENC_PREFIX.length), 'base64'));
-  } catch (err: any) {
-    console.warn('[secrets] failed to decrypt:', err.message);
-    return '';
-  }
-}
-
-function settingsPath() {
-  return path.join(app.getPath('userData'), 'settings.json');
-}
-
 // Bundled built-in skills. Shipped via electron-builder `extraResources` →
 // process.resourcesPath/built-in-skills in production; read from the repo in dev.
 function builtinSkillsDir() {
@@ -235,135 +141,6 @@ async function ensureBuiltinSecretSlots() {
   } catch (err: any) {
     console.warn('[secrets] built-in slot provisioning failed:', err?.message ?? err);
   }
-}
-
-async function readSettings() {
-  try {
-    const raw = await fs.readFile(settingsPath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    const merged = {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      appearance: { ...DEFAULT_SETTINGS.appearance, ...(parsed.appearance ?? {}) },
-      codingAgent: {
-        ...DEFAULT_SETTINGS.codingAgent,
-        ...(parsed.codingAgent ?? {}),
-        providerKeys: { ...(parsed.codingAgent?.providerKeys ?? {}) },
-      },
-      agentSecrets: Array.isArray(parsed.agentSecrets) ? parsed.agentSecrets : [],
-      transcription: {
-        ...DEFAULT_SETTINGS.transcription,
-        ...(parsed.transcription ?? {}),
-      },
-      sync: {
-        ...DEFAULT_SETTINGS.sync,
-        ...(parsed.sync ?? {}),
-        disabledWorkspaceIds: Array.isArray(parsed.sync?.disabledWorkspaceIds)
-          ? parsed.sync.disabledWorkspaceIds
-          : [],
-      },
-      cron: { ...DEFAULT_SETTINGS.cron, ...(parsed.cron ?? {}) },
-    };
-    // Decrypt secret-bearing fields. Legacy plaintext values pass through
-    // unchanged via decryptSecret's no-prefix branch and get re-encrypted on
-    // the next write.
-    // Migrate the legacy single apiKey → providerKeys[provider] (one-time). The
-    // on-disk value is still enc:v1-wrapped; move as-is, then decrypt below.
-    const ca = merged.codingAgent as any;
-    if (parsed.codingAgent?.apiKey && ca.providerKeys[ca.provider] == null) {
-      ca.providerKeys[ca.provider] = parsed.codingAgent.apiKey;
-    }
-    delete ca.apiKey;
-    for (const slug of Object.keys(ca.providerKeys)) {
-      ca.providerKeys[slug] = decryptSecret(ca.providerKeys[slug]);
-    }
-    merged.agentSecrets = merged.agentSecrets.map((s) => ({
-      ...s,
-      token: decryptSecret(s.token ?? ''),
-      // Decrypt the three secret-bearing OAuth fields in place; non-oauth
-      // secrets have no `oauth` object and are left untouched.
-      ...(s.oauth
-        ? {
-            oauth: {
-              ...s.oauth,
-              clientSecret: decryptSecret(s.oauth.clientSecret ?? ''),
-              accessToken: decryptSecret(s.oauth.accessToken ?? ''),
-              refreshToken: decryptSecret(s.oauth.refreshToken ?? ''),
-            },
-          }
-        : {}),
-    }));
-    merged.transcription.apiKey = decryptSecret(merged.transcription.apiKey);
-    merged.sync.pat = decryptSecret(merged.sync.pat);
-    return merged;
-  } catch {
-    return { ...DEFAULT_SETTINGS, agentSecrets: [] };
-  }
-}
-
-// Serialize all settings writes through this promise chain so concurrent
-// callers (renderer-side persistSettings vs main-side persistWindowBounds)
-// can't race a partial overwrite of the file.
-let settingsWriteQueue = Promise.resolve();
-
-// Shallow-merges `patch` over the on-disk file, then atomically writes back.
-// This is what lets main write only `{ windowBounds }` without clobbering the
-// renderer's other fields, and vice versa.
-async function writeSettings(patch) {
-  const task = settingsWriteQueue.then(() => doWriteSettings(patch));
-  settingsWriteQueue = task.catch(() => {});
-  return task;
-}
-
-async function doWriteSettings(patch) {
-  const file = settingsPath();
-  const tmp = `${file}.tmp`;
-  let existing = {};
-  try {
-    const raw = await fs.readFile(file, 'utf8');
-    existing = JSON.parse(raw);
-  } catch {
-    // No file yet — first write creates it.
-  }
-  const out = { ...existing, ...patch };
-  // Defensive one-level deep-merge for every nested-object setting: a caller
-  // that builds a partial sub-object (e.g. { sync: { pat } }) would otherwise
-  // wipe sibling fields on disk via the shallow spread above. The renderer
-  // currently always sends whole sub-objects, but this removes that as a
-  // load-bearing convention. Scalars/arrays (workspaces, windowBounds, etc.)
-  // stay shallow — a partial array patch is meaningless.
-  for (const key of ['appearance', 'codingAgent', 'transcription', 'sync', 'cron'] as const) {
-    if ((patch as any)[key] && (existing as any)[key]) {
-      (out as any)[key] = { ...(existing as any)[key], ...(patch as any)[key] };
-    }
-  }
-  // Encrypt secret-bearing fields. encryptSecret is idempotent so values that
-  // came from the on-disk file (already encrypted) pass through unchanged.
-  const pk = (out as any).codingAgent?.providerKeys;
-  if (pk) for (const slug of Object.keys(pk)) pk[slug] = encryptSecret(pk[slug] ?? '');
-  if (Array.isArray(out.agentSecrets)) {
-    out.agentSecrets = out.agentSecrets.map((s) => ({
-      ...s,
-      token: encryptSecret(s.token ?? ''),
-      // Encrypt the three secret-bearing OAuth fields. encryptSecret is
-      // idempotent, so values preserved from disk (already enc:v1) pass through.
-      ...(s.oauth
-        ? {
-            oauth: {
-              ...s.oauth,
-              clientSecret: encryptSecret(s.oauth.clientSecret ?? ''),
-              accessToken: encryptSecret(s.oauth.accessToken ?? ''),
-              refreshToken: encryptSecret(s.oauth.refreshToken ?? ''),
-            },
-          }
-        : {}),
-    }));
-  }
-  if (out.transcription) out.transcription.apiKey = encryptSecret(out.transcription.apiKey ?? '');
-  if (out.sync) out.sync.pat = encryptSecret(out.sync.pat ?? '');
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8');
-  await fs.rename(tmp, file);
 }
 
 // electron-vite sets ELECTRON_RENDERER_URL in dev. In production the renderer
@@ -1113,7 +890,10 @@ ipcMain.handle('settings:read', async () => {
 });
 
 ipcMain.handle('settings:write', async (_evt, obj) => {
-  await writeSettings(obj);
+  // notify:false — the renderer authored this write and already has the values.
+  // Echoing them back could overwrite a newer local edit made while this was
+  // in flight. `settings:changed` is for MAIN-initiated writes only.
+  await writeSettings(obj, { notify: false });
 });
 
 // OAuth for agent secrets. The whole flow (system browser + loopback callback +
@@ -1378,14 +1158,14 @@ ipcMain.handle('sync:engineStart', async (evt, { workspacePath, intervalSeconds 
 // workspace, reconciles by stopping or starting the engine. Origin is left
 // in .git/config either way so re-enable is a no-touch resume.
 ipcMain.handle('sync:setWorkspaceDisabled', async (evt, { workspacePath, disabled }) => {
-  const settings = await readSettings();
-  const wsId = (settings.workspaces || []).find((w) => w.path === workspacePath)?.id ?? null;
+  // One boolean on one row. This used to rebuild the whole disabledWorkspaceIds
+  // array and write it back inside the sync object, which rewrote every
+  // workspace row AND re-encrypted the GitHub PAT to flip one flag.
+  const wsId = findWorkspaceIdByPath(workspacePath);
   if (!wsId) return { ok: false, error: 'Workspace not found in settings' };
-  const cur = new Set(settings.sync?.disabledWorkspaceIds || []);
-  if (disabled) cur.add(wsId);
-  else cur.delete(wsId);
-  const nextSync = { ...settings.sync, disabledWorkspaceIds: [...cur] };
-  await writeSettings({ sync: nextSync });
+  setWorkspaceSyncDisabled(wsId, disabled);
+  const settings = await readSettings();
+  const nextSync = settings.sync;
 
   // Reconcile only if this is the active workspace. The engine is bound to
   // one workspace at a time; touching engine state for a non-active one
@@ -1981,18 +1761,19 @@ ipcMain.handle('fs:watchStop', stopWatcher);
 
 app.on('before-quit', () => { stopWatcher(); agentDisposeAll().catch(() => {}); });
 
-// Drain any pending settings writes (notably the window-bounds save fired
-// from each window's `close` handler) before the process exits. Without this
-// step a fast Cmd+Q can race the async tmp+rename and lose the last bounds.
-// Also drain the sync engine — let any in-flight git push/pull finish so we
-// don't leave a partial commit on the remote.
+// Drain the sync engine before the process exits — let any in-flight git
+// push/pull finish so we don't leave a partial commit on the remote.
+//
+// Settings writes no longer need draining: they're synchronous better-sqlite3
+// transactions that have already committed by the time writeSettings resolves,
+// so the window-bounds save fired from `close` can't be lost to a fast Cmd+Q
+// the way the old async tmp+rename could.
 let cleanQuitting = false;
 app.on('will-quit', (event) => {
   if (cleanQuitting) return;
   event.preventDefault();
   cleanQuitting = true;
   Promise.allSettled([
-    settingsWriteQueue,
     engineDrainBeforeQuit(),
   ]).finally(() => app.exit());
 });
@@ -2011,7 +1792,9 @@ nativeTheme.on('updated', () => {
 
 // Give the OAuth engine access to settings I/O (avoids a circular import back
 // into this entry file). Must run before any oauth:* IPC or getFreshToken call.
-initOAuth({ readSettings, writeSettings });
+// Token writes go straight to their own rows via settingsStore, so oauth.ts no
+// longer needs a writeSettings dep.
+initOAuth({ readSettings });
 
 // Cron scheduler: fire a run exactly like the `agent:send` handler, but with an
 // EXPLICIT workspace (not the active-workspace lookup) + the cron fields. This
@@ -2150,6 +1933,14 @@ app.whenReady().then(async () => {
   }
   // Point the models.dev catalog cache at userData (its offline fallback file).
   initModelCatalog(app.getPath('userData'));
+  // One-time carry-over of a pre-sqlite `settings.json` into the `setting`
+  // table. No-op once the table has rows. Must precede every settings read
+  // below, or the app would boot on defaults and then persist over the import.
+  try {
+    await importLegacySettingsIfNeeded();
+  } catch (err: any) {
+    console.error('[settings] legacy import failed:', err?.message ?? err);
+  }
   // Provision empty secret slots for enabled built-in skills BEFORE the window
   // opens, so the renderer hydrates with them present (no clobber race).
   await ensureBuiltinSecretSlots();

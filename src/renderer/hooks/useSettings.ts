@@ -1,5 +1,6 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useSyncRef } from './useSyncRef';
+import { buildPatch } from '../settingsDiff.js';
 import { THEME_MODES, VIEW_MODES, TREE_SORT_ORDERS, DEFAULT_PROVIDER_SLUG } from '../constants';
 import type { Settings, WorkspaceData, ThemeMode, ViewMode, TreeSortOrder, CodingAgentSettings, AgentSecret } from '../../shared/settings';
 
@@ -44,6 +45,7 @@ interface UseSettingsOpts {
 // changed), the per-field change handlers, and hydrate() to seed from disk on
 // boot. Non-settings persisted fields (workspaces, viewMode, sidebar widths)
 // flow through persistSettings too; their UI state lives in App.
+
 export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
   const [themeMode, setThemeMode] = useState<ThemeMode>(THEME_MODES.SYSTEM);
   const [hideLineNumbers, setHideLineNumbers] = useState(false);
@@ -64,18 +66,29 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
   const [sync, setSync] = useState<SyncSettings>({ pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] });
   const syncRef = useSyncRef(sync);
 
-  // The single canonical copy of everything persisted. A save merges the caller's
-  // patch into this and writes the WHOLE object, so no field can be dropped by a
-  // stale per-field value.
+  // Local cache of everything persisted, for rendering and for building whole
+  // sub-objects in per-field setters. NOT the source of truth — the store is.
   const settingsRef = useRef<Settings>(DEFAULT_CANONICAL);
 
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const inFlightSavesRef = useRef(0);
   const savedFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Writes ONLY the individual leaves the caller actually changed.
+  //
+  // This used to merge the patch into settingsRef and write the whole settings
+  // object — correct when settings were one JSON file, where a partial write
+  // meant a read-modify-write in main and sending everything was the safe play.
+  // With one row per key that inverted: writing every subtree to change a
+  // sidebar width put every unrelated setting, credentials included, in the
+  // blast radius of a stale in-memory copy.
+  //
+  // A key absent from the patch keeps whatever the store already holds.
   const persistSettings = useCallback(async (next: Partial<Settings>) => {
-    const s = { ...settingsRef.current, ...next };
-    settingsRef.current = s;
+    const prev = settingsRef.current;
+    settingsRef.current = { ...prev, ...next };
+    const patch = buildPatch(next, prev);
+    if (!Object.keys(patch).length) return;
     inFlightSavesRef.current += 1;
     if (savedFadeTimerRef.current) {
       clearTimeout(savedFadeTimerRef.current);
@@ -83,21 +96,7 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     }
     setSaveStatus('saving');
     try {
-      await window.api.settings.write({
-        workspaces: s.workspaces,
-        activeWorkspaceId: s.activeWorkspaceId,
-        appearance: { themeMode: s.appearance.themeMode, hideLineNumbers: s.appearance.hideLineNumbers, treePanel: s.appearance.treePanel },
-        treeSortOrder: s.treeSortOrder,
-        bookmarkFilterActive: s.bookmarkFilterActive,
-        codingAgent: s.codingAgent,
-        agentSecrets: s.agentSecrets,
-        transcription: s.transcription,
-        sync: s.sync,
-        sidebarWidth: s.sidebarWidth,
-        viewMode: s.viewMode,
-        chatSidebarOpen: s.chatSidebarOpen,
-        chatSidebarWidth: s.chatSidebarWidth,
-      });
+      await window.api.settings.write(patch);
       inFlightSavesRef.current -= 1;
       if (inFlightSavesRef.current === 0) {
         setSaveStatus('saved');
@@ -107,6 +106,15 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
         }, 1500);
       }
     } catch {
+      // Roll the cache back for the keys this save owned. Without this, the
+      // optimistic update above survives a failed write, so re-applying the same
+      // change diffs as "unchanged", sends nothing, and the setting can never be
+      // persisted again — the cache would permanently disagree with the store.
+      // Only the failed keys are reverted, so a concurrent successful save isn't
+      // clobbered.
+      const rolled: any = { ...settingsRef.current };
+      for (const k of Object.keys(next)) rolled[k] = (prev as any)[k];
+      settingsRef.current = rolled;
       inFlightSavesRef.current -= 1;
       setSaveStatus('error');
     }
@@ -192,17 +200,57 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     await persistSettings({ agentSecrets: next });
   }, [persistSettings]);
 
-  // Re-seed agentSecrets from disk WITHOUT persisting. The OAuth connect/refresh
-  // flow writes tokens directly from main (tokens never round-trip through a
-  // renderer-initiated save), so after a Connect/Disconnect the in-memory copy
-  // is stale. This pulls the fresh array back in and keeps settingsRef coherent
-  // so a later persist can't clobber the tokens main just wrote.
+  // Re-seed agentSecrets from the store WITHOUT persisting. Mostly redundant now
+  // that main pushes `settings:changed` after an OAuth write (see the listener
+  // below), but kept as an explicit belt for callers that want to force a pull.
   const reloadAgentSecrets = useCallback(async () => {
     const disk = await window.api.settings.read();
     const secrets: AgentSecret[] = Array.isArray(disk.agentSecrets) ? disk.agentSecrets : [];
     setAgentSecrets(secrets);
     settingsRef.current = { ...settingsRef.current, agentSecrets: secrets };
   }, []);
+
+  // Main writes settings on its own — OAuth token refresh, window bounds, cron
+  // toggles, ensureBuiltinSecretSlots — and without this the local copy would
+  // silently drift from the store. The event fires ONLY for main-initiated
+  // writes, so this can never echo the renderer's own save back at it.
+  //
+  // Applies only the keys main reports as changed, so an unrelated write can't
+  // stomp a field the user is editing right now. Updates state + settingsRef but
+  // never calls persistSettings — the store is already correct; this is the
+  // renderer catching up, not a change to write back.
+  useEffect(() => {
+    const off = window.api.settings.onChanged(({ keys, settings }: { keys: string[]; settings: any }) => {
+      const changed = new Set(keys);
+      if (changed.has('agentSecrets')) {
+        const secrets: AgentSecret[] = Array.isArray(settings.agentSecrets) ? settings.agentSecrets : [];
+        setAgentSecrets(secrets);
+        settingsRef.current = { ...settingsRef.current, agentSecrets: secrets };
+      }
+      if (changed.has('sync') && settings.sync) {
+        setSync(settings.sync);
+        syncRef.current = settings.sync;
+        settingsRef.current = { ...settingsRef.current, sync: settings.sync };
+      }
+      if (changed.has('transcription') && settings.transcription) {
+        setTranscription(settings.transcription);
+        settingsRef.current = { ...settingsRef.current, transcription: settings.transcription };
+      }
+      if (changed.has('codingAgent') && settings.codingAgent) {
+        setCodingAgentSettings(settings.codingAgent);
+        settingsRef.current = { ...settingsRef.current, codingAgent: settings.codingAgent };
+      }
+      if (changed.has('appearance') && settings.appearance) {
+        setThemeMode(settings.appearance.themeMode);
+        setHideLineNumbers(!!settings.appearance.hideLineNumbers);
+        if (settings.appearance.treePanel) setTreePanel(settings.appearance.treePanel);
+        settingsRef.current = { ...settingsRef.current, appearance: settings.appearance };
+      }
+      // `cron` and `windowBounds` are main-owned and have no renderer state to
+      // update; they're in MAIN_OWNED_KEYS so they're never written back either.
+    });
+    return off;
+  }, [syncRef]);
 
   const onTranscriptionChange = useCallback(async (next: Transcription) => {
     setTranscription(next);
@@ -266,6 +314,9 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
       agentSecrets: secrets,
       transcription: tr,
       sync: sy,
+      // Main-owned (MAIN_OWNED_KEYS) — mirrored here only so settingsRef matches
+      // the Settings type; the renderer never writes it back.
+      cron: disk.cron ?? { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
       chatSidebarOpen: typeof disk.chatSidebarOpen === 'boolean' ? disk.chatSidebarOpen : false,
       chatSidebarWidth: typeof disk.chatSidebarWidth === 'number' ? disk.chatSidebarWidth : 360,
       sidebarWidth: typeof disk.sidebarWidth === 'number' ? disk.sidebarWidth : 260,

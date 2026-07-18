@@ -12,7 +12,100 @@
 // message's tool CALLS ride on the assistant row (`tool_calls` JSON), each tool
 // RESULT is its own `role='tool'` row paired by `tool_call_id`.
 
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, blob, index, primaryKey } from 'drizzle-orm/sqlite-core';
+
+// The workspaces the user has opened. A real table rather than rows in
+// `setting`, because a workspace is an ENTITY, not a scalar preference: it has a
+// fixed shape, and it must be atomic (one row = one workspace, so a delete can't
+// leave a half-workspace behind the way N key rows could).
+//
+// `originUrl`/`checkedAt` are a main-authored CACHE of `git remote get-url
+// origin`, filled in by workspaceStatus() as it shells out. Display only —
+// `.git/config` remains the source of truth, and every sync decision still reads
+// it live, so an out-of-app `git remote set-url` can't route a push wrongly.
+export const workspace = sqliteTable('workspace', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  path: text('path').notNull(),
+  // REAL, not INTEGER, so a future drag-to-reorder can insert between two
+  // neighbours (2.0, 3.0 → 2.5) in ONE write instead of renumbering the list.
+  sortOrder: real('sort_order').notNull(),
+  originUrl: text('origin_url'),
+  checkedAt: integer('checked_at'),
+  // Was `sync.disabledWorkspaceIds` — an array of ids in the settings blob,
+  // i.e. a foreign key by another name. As a column it can't outlive its
+  // workspace; the array could (and did) keep ids for workspaces long deleted.
+  syncDisabled: integer('sync_disabled').notNull().default(0),
+}, (t) => ({
+  bySort: index('idx_workspace_sort').on(t.sortOrder),
+}));
+
+// Scalar app preferences, one row per leaf key (dotted path, e.g.
+// `appearance.treePanel.content`). Replaces the old `<userData>/settings.json`.
+//
+// Holds ONLY non-secret scalars. Credentials are in `secretValue`; collections
+// (workspaces, agent secrets) are entity tables. What's left is what key-value
+// is genuinely good at — heterogeneous, sparse, unrelated scalars.
+//
+// One row per key rather than a JSON blob means writes never collide, and a key
+// with no row falls back to DEFAULT_SETTINGS — so there is no deep-merge to
+// hand-maintain when a nested setting is added.
+export const setting = sqliteTable('setting', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  // 'string' | 'number' | 'boolean' | 'json' — tells the reader how to parse.
+  type: text('type').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+// User-managed credentials the coding agent can use. The ENTITY half only —
+// every secret-bearing field lives in `secretValue`, which is why this table has
+// no crypto columns at all.
+export const agentSecret = sqliteTable('agent_secret', {
+  // Unique identifier (case-insensitive by convention). Also the `owner` of this
+  // entry's rows in `secretValue`.
+  name: text('name').primaryKey(),
+  description: text('description'),
+  kind: text('kind'), // 'static' | 'oauth'; null ⇒ static (pre-OAuth entries)
+  oauthProvider: text('oauth_provider'),
+  oauthClientId: text('oauth_client_id'),
+  oauthAuthUrl: text('oauth_auth_url'),
+  oauthTokenUrl: text('oauth_token_url'),
+  oauthScopes: text('oauth_scopes'), // JSON array
+  // These three are written by the OAuth flow only (oauth.ts), never by a bulk
+  // settings save — see OAUTH_OWNED_COLUMNS in settingsKeys.js.
+  oauthExpiresAt: integer('oauth_expires_at'),
+  oauthStatus: text('oauth_status'), // 'disconnected' | 'connected' | 'expired'
+  oauthAccountEmail: text('oauth_account_email'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+// EVERY encrypted value in the app, in one table.
+//
+// The crypto columns are NOT NULL, and that is the whole point: a plaintext
+// credential is unrepresentable here. The previous shape carried a `secret` flag
+// on `setting`, so a key that should have been secret but wasn't flagged
+// persisted in the clear and nothing complained — the same silent-failure mode
+// as the hand-maintained encrypt/decrypt field lists that flag had replaced.
+//
+// `owner` is 'settings' for standalone credentials (`sync.pat`,
+// `transcription.apiKey`, `codingAgent.providerKeys.*`) or an agent_secret.name
+// for that entry's token / OAuth tokens. One table also means key rotation is a
+// single SELECT + UPDATE rather than a walk over the settings tree.
+export const secretValue = sqliteTable('secret_value', {
+  owner: text('owner').notNull(),
+  field: text('field').notNull(),
+  ciphertext: text('ciphertext').notNull(), // base64, AES-256-GCM
+  iv: blob('iv').notNull(),
+  tag: blob('tag').notNull(),
+  // Which master key sealed this row. Single key today; present so a future
+  // rotation can re-encrypt incrementally instead of all at once.
+  keyVersion: integer('key_version').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.owner, t.field] }),
+}));
 
 export const chatSession = sqliteTable('chat_session', {
   // pi session id (SessionManager.getSessionId()). Stable key for the chat.
@@ -28,10 +121,23 @@ export const chatSession = sqliteTable('chat_session', {
   // continues with the same context (pi would otherwise re-derive today's prompt).
   systemPrompt: text('system_prompt'),
   model: text('model'),
-  // How this chat was started: null (interactive) or 'cron' (a scheduled or
-  // manual cron run). Lets the picker badge cron runs and skips auto-titling in
-  // favor of the job name.
+  // Where this chat came from. 'desktop' (interactive, the default) or 'cron'
+  // today; the column is open-ended so a future channel (telegram, api, …) needs
+  // no migration. Lets the picker badge non-interactive runs and skip
+  // auto-titling in favor of the job name.
+  // Nullable in SQL on purpose — see drizzle/0006_chat_source.sql for why the
+  // table isn't rebuilt to add NOT NULL. `upsertSession` always writes a value,
+  // so it's effectively non-null going forward.
   source: text('source'),
+  // Identity of the thing that started it, WITHIN that source. Null for desktop
+  // (a person at this app — there's no external id to point at). For cron it's
+  // the job name; a chat channel would put its chat/thread id here. Paired with
+  // `source` it's the answer to "which specific X started this".
+  sourceId: text('source_id'),
+  // Hostname of the machine that created the chat (os.hostname()). Chats sync
+  // between machines via the workspace, but a cron run is machine-local — this
+  // is what tells you which box actually executed it.
+  machine: text('machine'),
   createdAt: integer('created_at').notNull(),
   // Bumped on every turn; drives the "recent chats" sort + keyset pagination.
   updatedAt: integer('updated_at').notNull(),

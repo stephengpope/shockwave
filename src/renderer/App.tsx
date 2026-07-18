@@ -1577,9 +1577,18 @@ export default function App() {
     document.addEventListener('mouseup', onUp);
   }, [persistSidebarWidth]);
 
+  // Persist the chat sidebar's own state. This used to send
+  // `{ workspaces, activeWorkspaceId }` and rely on persistSettings writing the
+  // whole settings object to carry the sidebar fields along — but nothing ever
+  // updated those fields in settingsRef, so every save wrote back the value
+  // hydrated at boot and a resize/toggle never actually persisted. Reads from
+  // the refs, which both callers update before invoking this.
   const persistChatSidebar = useCallback(async () => {
-    await persistSettings({ workspaces, activeWorkspaceId });
-  }, [persistSettings, workspaces, activeWorkspaceId, themeMode]);
+    await persistSettings({
+      chatSidebarOpen: chatSidebarOpenRef.current,
+      chatSidebarWidth: chatSidebarWidthRef.current,
+    });
+  }, [persistSettings]);
 
   const toggleChatSidebar = useCallback(() => {
     setChatSidebarOpen((prev) => {

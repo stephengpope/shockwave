@@ -16,6 +16,7 @@
 
 import http from 'node:http';
 import { shell } from 'electron';
+import { patchAgentSecretOAuth } from './settingsStore.js';
 import {
   OAuth2Client,
   CodeChallengeMethod,
@@ -230,13 +231,10 @@ function resolveProviderConfig(o: any): ProviderConfig {
 
 // ── Settings injection (avoids a circular import into main.ts) ───────────────
 type ReadSettings = () => Promise<any>;
-type WriteSettings = (patch: any) => Promise<void>;
 let _read: ReadSettings | null = null;
-let _write: WriteSettings | null = null;
 
-export function initOAuth(deps: { readSettings: ReadSettings; writeSettings: WriteSettings }) {
+export function initOAuth(deps: { readSettings: ReadSettings }) {
   _read = deps.readSettings;
-  _write = deps.writeSettings;
 }
 
 async function loadSecret(name: string): Promise<any | undefined> {
@@ -244,17 +242,19 @@ async function loadSecret(name: string): Promise<any | undefined> {
   return (settings.agentSecrets ?? []).find((s: any) => s.name === name);
 }
 
-// Read-modify-write the whole agentSecrets array (arrays are shallow-replaced by
-// writeSettings, so we must send the full list). Values are decrypted plaintext
-// here; writeSettings re-encrypts the secret fields idempotently. Serialized
-// through the settings write queue in main, so writes don't tear — but the
-// read→write gap is not transactional. OAuth writes are user-paced and rare, so
-// a lost update is acceptable (matches the renderer's own array-write pattern).
+// Writes ONLY this connection's oauth fields, each to its own row
+// (`agentSecrets.<name>.oauth.*`) inside one transaction.
+//
+// This used to read-modify-write the entire agentSecrets array, which meant a
+// token refresh here and a settings save in the renderer raced over one blob:
+// the renderer's copy was built from pre-refresh state, so it could overwrite a
+// token main had just rotated. Google rotates refresh tokens on every refresh,
+// so that lost write killed the connection for good. Now the two touch disjoint
+// rows, and settingsStore's OAUTH_OWNED_RE additionally bars any bulk write from
+// authoring these keys at all — so a stale echo can't win even in principle.
 async function patchSecret(name: string, mut: (o: any) => any): Promise<void> {
-  const settings = await _read!();
-  const list = settings.agentSecrets ?? [];
-  const next = list.map((s: any) => (s.name === name ? { ...s, oauth: mut(s.oauth ?? {}), updatedAt: nowMs() } : s));
-  await _write!({ agentSecrets: next });
+  const secret = await loadSecret(name);
+  await patchAgentSecretOAuth(name, mut(secret?.oauth ?? {}));
 }
 
 // Injected clock — the app already avoids Date.now() in watcher/mtime paths, but
