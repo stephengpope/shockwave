@@ -51,7 +51,7 @@ In-app file operations call `fileOps.treeAndIndexChanged()` directly AND get ech
 - `autoLinks.js` / `headingStyles.js` / `hideMarkdownMarkers.js` / `bulletPoints.js` — live-preview decorations that style markdown syntax in place.
 - `markdownLinks.js` — renders `[text](url)` as a clickable link showing just `text`; reveals raw syntax when the cursor touches it. Also exports `findLinkAtPos` so the editor context menu can offer Edit / Remove for the link under the cursor (handles both plain text links and image-wrapping links like `[![alt](src)](url)`).
 - `imageWidgets.js` — replaces `![alt](url)` ranges with an `<img>`. URLs resolve relative to the active file's folder (or absolute, or `http(s)://`) and are served via the `app://media/<rel>` protocol — see "Image pipeline" below.
-- `diffFlash.js` — green-flash decoration applied when the watcher reloads the active file and the renderer wants to highlight what changed (word-level diff via the `diff` npm package).
+- `diffFlash.js` — accent-color (indigo) flash decoration applied when the watcher reloads the active file and the renderer wants to highlight what changed (word-level diff via the `diff` npm package).
 
 ## View mode + editor status bar
 

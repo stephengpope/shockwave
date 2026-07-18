@@ -3,7 +3,7 @@ import FileTree from './FileTree.jsx';
 import Editor from './Editor.jsx';
 import BacklinksPanel from './BacklinksPanel.jsx';
 import GraphView from './GraphView.jsx';
-import MediaView, { mediaKind, isOpenable, isDrawing, isMarkdown } from './MediaView';
+import MediaView, { mediaKind, isOpenable, isDrawing, isMarkdown, isTextFile } from './MediaView';
 import DrawingView from './DrawingView';
 import type { DrawingViewHandle } from './DrawingView';
 import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from './renameOps.js';
@@ -467,6 +467,10 @@ export default function App() {
   // createFile and leave an orphan disambiguated file behind.
   const dirtyTabIdRef = useRef<any>(null);
   const saveTimerRef = useRef<any>(null);
+  // Per-path mtime of our own last write to a non-.md text file — the self-echo
+  // guard for the watcher's text-reload branch (drawings have drawingMtimesRef;
+  // .md files use the link index). Declared here so writeNow can populate it.
+  const textMtimesRef = useRef<Map<string, number>>(new Map());
   const writeInFlightRef = useRef(new Map());
   // Forward refs filled below by useSyncRef once useTabs/newFileDir exist.
   const tabsRef = useRef<any[]>([]);
@@ -544,8 +548,11 @@ export default function App() {
         // Pass the file's real mtime (returned by main) so the self-echo guard
         // can compare against the watcher's stat.mtimeMs without losing the
         // fractional ms that Date.now() would drop. Only .md files participate
-        // in the (basename-keyed) link index; other text files don't.
+        // in the (basename-keyed) link index; other text files record their
+        // write-mtime in textMtimesRef so the watcher can skip our own echo (same
+        // role the link index plays for .md — see useFsWatcher's text branch).
         if (isMdName(path)) linkIndex.updateFile(path, text, mtime);
+        else if (isTextFile(path)) textMtimesRef.current.set(path, mtime);
         if (dirtyTabIdRef.current === null) setSaveState(SAVE_STATES.SAVED);
         return path;
       } catch (err: any) {
@@ -1319,7 +1326,8 @@ export default function App() {
   //   - {type:'add'|'change', path, mtime, outgoingLinks}             — .md file appeared or modified
   //   - {type:'unlink', path}                                          — .md file removed
   //   - {type:'rename', oldPath, newPath, mtime, outgoingLinks}        — paired by the correlator (inode+hash)
-  //   - {type:'tree'}                                                  — folder change / non-.md (tree refresh only)
+  //   - {type:'add'|'change', path, mtime} (no outgoingLinks)          — drawing or non-.md reloadable text file
+  //   - {type:'tree'}                                                  — folder change / non-reloadable change (tree refresh only)
   //
   // The 'rename' event lets external renames (Finder, `mv`, agents, git checkout)
   // rewrite references the same way in-app renames do — without it, refs in
@@ -1351,6 +1359,7 @@ export default function App() {
     persistBookmarks,
     drawingViewRef,
     drawingMtimesRef,
+    textMtimesRef,
   });
 
   // Re-read the whole workspace file when it changes on disk out from under us

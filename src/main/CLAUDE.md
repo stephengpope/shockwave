@@ -28,9 +28,10 @@ parcel-specific handling (all in `watcherDispatch.js`): events are `{type: 'crea
 Events shipped to the renderer (via `fs:changed`):
 
 - `{type:'add'|'change', path, mtime, outgoingLinks}` — `.md` file appeared or modified
-- `{type:'unlink', path}` — `.md` file removed (grace window already elapsed without a paired add)
-- `{type:'rename', oldPath, newPath, mtime, outgoingLinks}` — paired by the correlator (inode primary, hash fallback)
-- `{type:'tree'}` — folder change or non-`.md` change (tree refresh only)
+- `{type:'add'|'change', path, mtime}` (no `outgoingLinks`) — a `.excalidraw` drawing or a non-`.md` **reloadable text/code file** (`isReloadableText` — everything in `OPENABLE_RE` except the `.md` family, images, video, drawings) changed. Bypasses the rename correlator (link-index machinery); the renderer re-reads the file to reload an open canvas/buffer, keyed by its own mtime store (`drawingMtimesRef` / `textMtimesRef`) for the self-echo guard.
+- `{type:'unlink', path}` — `.md`/drawing/reloadable-text file removed (grace window already elapsed without a paired add)
+- `{type:'rename', oldPath, newPath, mtime, outgoingLinks}` — paired by the correlator (inode primary, hash fallback); `.md` only (drawings/text surface as unlink+add)
+- `{type:'tree'}` — folder change or a non-reloadable change (binaries, etc.) — tree refresh only
 
 The watcher only sees inside the active workspace, and `isIgnoredWatchPath` skips any path with a dotfile segment (`.git`, `.obsidian`, `.shockwave`, etc.) — mirrors `buildTree`. The `.shockwave/` segment is how we store our own per-workspace data (bookmarks) without echoing back through the main watcher (a separate subscription watches it for `workspace.json`).
 
@@ -45,7 +46,8 @@ The watcher is a state machine spread across `main.ts` (orchestration), `watcher
    ▼
 onParcelEvents → watchDispatch.handleBatch(events)   (deletes first, then creates/updates)
    │
-   ├─ non-.md path? → markTreeOnly() → pendingTreeOnly = true; scheduleFlush() (150ms debounce)
+   ├─ drawing / reloadable-text path? → pend as add/change (mtime-only event; bypasses correlator)
+   ├─ other non-.md path? → markTreeOnly() → pendingTreeOnly = true; scheduleFlush() (150ms debounce)
    ├─ directory? → create: walk .md inside and upsert each; delete: unlink every known .md under it
    └─ .md file? → stat ino + hash file, hand to correlator:
                     create (unknown path) → correlator.onPathAppeared(p, ino, hash)

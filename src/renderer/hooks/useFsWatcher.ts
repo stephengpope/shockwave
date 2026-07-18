@@ -5,7 +5,7 @@ import { useSyncRef } from './useSyncRef';
 import { rangesAddedFromDiff } from '../diffFlash.js';
 import { rewriteReferences, rewriteReferencesForMove, captureRewriteContext } from '../renameOps.js';
 import { bookmarkKey } from './useBookmarks';
-import { isDrawing } from '../MediaView';
+import { isDrawing, isTextFile, isMarkdown } from '../MediaView';
 import type { DrawingViewHandle } from '../DrawingView';
 import type { FsChangedEvent } from '../../shared/api';
 
@@ -45,6 +45,9 @@ interface UseFsWatcherOpts {
   // the link index, so they need their own store — same role as li.getMtime).
   drawingViewRef: MutableRefObject<DrawingViewHandle | null>;
   drawingMtimesRef: MutableRefObject<Map<string, number>>;
+  // Non-.md text files aren't in the link index, so they need their own
+  // write-mtime store for the self-echo guard (same role as drawingMtimesRef).
+  textMtimesRef: MutableRefObject<Map<string, number>>;
 }
 
 // Subscribes to main's `fs:changed` push events and reconciles the renderer's
@@ -68,6 +71,7 @@ export function useFsWatcher({
   persistBookmarks,
   drawingViewRef,
   drawingMtimesRef,
+  textMtimesRef,
 }: UseFsWatcherOpts) {
   const linkIndexRefForWatcher = useSyncRef(linkIndex);
   const refreshTreeRef = useSyncRef(refreshTree);
@@ -176,13 +180,48 @@ export function useFsWatcher({
         if (evt.type === 'add') scheduleRefresh();
         return;
       }
+      // Non-.md text/code files (json, yaml, txt, source…): not in the link
+      // index, so the self-echo guard uses textMtimesRef. Reload + flash the
+      // open buffer on a fresh external change, exactly like the .md path below.
+      if (isTextFile(evt.path) && !isMarkdown(evt.path)) {
+        const store = textMtimesRef.current;
+        const prior = store.get(evt.path);
+        const fresh = prior == null || evt.mtime > prior;
+        store.set(evt.path, Math.max(prior ?? 0, evt.mtime));
+        if (
+          evt.type === 'change' &&
+          fresh &&
+          evt.path === activeFileRef.current &&
+          !activeIsDraftRef.current
+        ) {
+          (async () => {
+            try {
+              const editor = editorRef.current;
+              if (!editor) return;
+              const oldText = editor.getText();
+              const newText = await window.api.readFile(evt.path);
+              if (oldText === newText) return;
+              const viewState = editor.getViewState();
+              editor.setContent(newText, viewState);
+              const changes = diffWordsWithSpace(oldText, newText);
+              const ranges = rangesAddedFromDiff(changes);
+              if (ranges.length > 0) editor.flashRanges(ranges);
+            } catch {
+              // File may have been deleted or moved before we could read it.
+            }
+          })();
+        }
+        if (evt.type === 'change') patchNodeMtimeRef.current(evt.path, evt.mtime);
+        if (evt.type === 'add') scheduleRefresh();
+        return;
+      }
       const stored = li.getMtime(evt.path);
       const isFresh = stored == null || evt.mtime > stored;
       if (isFresh) {
         li.applyParsedLinks(evt.path, evt.outgoingLinks, evt.mtime);
       }
       // If the changed file is the open tab, reload the buffer from disk and
-      // flash the added text green. Skipping the freshness check here means a
+      // flash the added text (indigo accent pulse). Skipping the freshness check here means a
       // self-echo (renderer just wrote) is ignored — the stored mtime gate
       // above already filtered for that.
       if (

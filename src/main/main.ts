@@ -1795,9 +1795,10 @@ async function flushWatcher() {
       continue;
     }
     try {
-      // Drawings carry no wiki-links — stat for the mtime only; the renderer
-      // re-reads the JSON itself when it needs to reload an open canvas.
-      if (isDrawingFile(p)) {
+      // Drawings and non-.md text files carry no wiki-links — stat for the
+      // mtime only; the renderer re-reads the file itself when it reloads an
+      // open canvas (drawing) or editor buffer (text).
+      if (isDrawingFile(p) || isReloadableText(p)) {
         const stat = await fs.stat(p);
         win.webContents.send('fs:changed', { type, path: p, mtime: stat.mtimeMs });
         continue;
@@ -1854,6 +1855,7 @@ function setupCorrelator() {
     correlator,
     isMdFile,
     isDrawingFile,
+    isReloadableText,
     statPath: (p) => fs.stat(p, { bigint: true }).catch(() => null),
     hashFile: hashFileOf,
     walkMarkdown: walkMarkdownPaths,
@@ -2071,6 +2073,12 @@ installAgentTokensBridge(
 // the workspace (the agent's cwd); only display-able types open. The extension
 // (cwd) ext list must stay in sync with the renderer's isOpenable (MediaView).
 const OPENABLE_RE = /\.(md|markdown|mdx|txt|text|log|org|rst|tex|bib|csv|tsv|json|jsonc|json5|ya?ml|toml|ini|cfg|conf|env|properties|xml|html?|css|scss|sass|less|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|kt|kts|c|h|cpp|hpp|cc|hh|cs|php|swift|m|mm|sh|bash|zsh|fish|ps1|bat|sql|graphql|gql|lua|pl|pm|r|dart|vue|svelte|astro|clj|cljs|ex|exs|erl|hs|ml|scala|groovy|gradle|proto|diff|patch|png|jpe?g|gif|webp|bmp|ico|avif|mp4|webm|mov|m4v|ogv|ogg|excalidraw)$/i;
+// Openable files that are NOT reloadable-as-text: the .md family (link-index /
+// correlator path), images, video, and .excalidraw drawings. Everything else in
+// OPENABLE_RE is a text/code file the editor reloads on external change (mirrors
+// the renderer's isTextFile in MediaView).
+const NON_TEXT_OPENABLE_RE = /\.(md|markdown|mdx|png|jpe?g|gif|webp|bmp|ico|avif|mp4|webm|mov|m4v|ogv|ogg|excalidraw)$/i;
+function isReloadableText(p: string) { return OPENABLE_RE.test(p) && !NON_TEXT_OPENABLE_RE.test(p); }
 installOpenFileBridge(async (relPath) => {
   if (!watcherRootDir) return { ok: false, error: 'No workspace is open.' };
   if (typeof relPath !== 'string' || !relPath.trim()) return { ok: false, error: 'No path provided.' };

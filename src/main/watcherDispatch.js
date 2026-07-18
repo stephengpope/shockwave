@@ -27,6 +27,7 @@ export function createWatcherDispatch({
   correlator,
   isMdFile,
   isDrawingFile,
+  isReloadableText,  // (p) => boolean — non-.md text/code file the editor can reload
   statPath,      // async (p) => Stats({bigint:true}) | null
   hashFile,      // async (p) => hex hash | null
   walkMarkdown,  // async (dir) => [absolute .md paths under dir]
@@ -41,7 +42,10 @@ export function createWatcherDispatch({
   }
 
   async function upsert(kind, p) {
-    if (isDrawingFile(p)) { pendDrawingUpsert(kind, p); return; }
+    // Drawings and non-.md text files both bypass the correlator (that's
+    // .md-only, link-index machinery) and surface as mtime-only content events
+    // so an open editor can reload them. Same pending logic for both.
+    if (isDrawingFile(p) || isReloadableText(p)) { pendDrawingUpsert(kind, p); return; }
     const st = await statPath(p);
     if (st && st.isDirectory()) {
       // A folder appeared (mkdir / move / rename destination). parcel emits no
@@ -70,7 +74,7 @@ export function createWatcherDispatch({
   }
 
   function del(p) {
-    if (isDrawingFile(p)) { setPending(p, 'unlink'); return; }
+    if (isDrawingFile(p) || isReloadableText(p)) { setPending(p, 'unlink'); return; }
     if (isMdFile(p)) { correlator.onPathGone(p); return; }
     // Non-.md file, OR a deleted directory (parcel can't tell them apart and a
     // dir path has no .md extension). If we know .md files under it, it was a

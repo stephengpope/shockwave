@@ -1,4 +1,4 @@
-// Multi-range green flash. Used when the editor's active file is reloaded
+// Multi-range accent-color (indigo) flash. Used when the editor's active file is reloaded
 // from disk (e.g. an external editor or the coding agent edits it) so the
 // user can see which lines were just added. Reuses the same .cm-ai-stream-done
 // style + 1s pulse as the inline-AI completion flourish.

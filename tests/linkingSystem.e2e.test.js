@@ -179,6 +179,7 @@ async function setupWorkspace(initialFiles) {
     correlator,
     isMdFile: (p) => p.toLowerCase().endsWith('.md'),
     isDrawingFile: (p) => /\.excalidraw$/i.test(p),
+    isReloadableText: (p) => /\.(txt|text|json|jsonc|ya?ml|toml|ini|cfg|conf|xml|html?|css|js|mjs|cjs|ts|tsx|jsx|py|sh|sql|csv|tsv|log)$/i.test(p),
     statPath: (p) => fs.stat(p, { bigint: true }).catch(() => null),
     hashFile: hashOf,
     walkMarkdown: listMd,

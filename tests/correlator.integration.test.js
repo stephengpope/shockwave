@@ -69,6 +69,7 @@ async function setupHarness() {
     correlator: corr,
     isMdFile,
     isDrawingFile: (p) => /\.excalidraw$/i.test(p),
+    isReloadableText: (p) => /\.(txt|text|json|jsonc|ya?ml|toml|ini|cfg|conf|xml|html?|css|js|mjs|cjs|ts|tsx|jsx|py|sh|sql|csv|tsv|log)$/i.test(p),
     statPath: (p) => fs.stat(p, { bigint: true }).catch(() => null),
     hashFile,
     walkMarkdown: walkMarkdownPaths,
