@@ -102,8 +102,7 @@ Wiki-links resolve through `src/renderer/linkResolver.js` (`resolveLinkTarget`):
 Backlinks are basename-keyed but each entry carries `targetParsed`; `getBacklinksForFile`
 resolve-filters the bucket so a link attributes to the correct duplicate. Rename
 reference-rewrite (`renameOps.js`) is resolution-aware (rewrites only links resolving
-to the renamed file; handles path-qualified links). See `docs/second-brain-revamp.md`
-for the full design and the deferred items (eager move-rewrite, offset-based cache).
+to the renamed file; handles path-qualified links).
 
 ## Tests
 

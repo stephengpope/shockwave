@@ -171,7 +171,7 @@ Because pi *executes* via a `Model` object (not a string), `codingAgent.ts`'s **
 
 ## Scheduled runs (cron)
 
-In-app scheduler that runs the coding agent on a schedule, per **active workspace**, exactly like an interactive chat. Design doc: `docs/cron-plan.md`.
+In-app scheduler that runs the coding agent on a schedule, per **active workspace**, exactly like an interactive chat.
 
 - **Source of truth is `cron.json`** at the workspace root (agent- and hand-editable): `[{ name, schedule (5-field, LOCAL time), prompt, enabled }]`. Machine-local timing (`nextRunAt`/`lastRunAt`/`lastError`/`lastSessionId`) lives in the `cron_state` DB table — it must NOT sync between machines.
 - **Next-run / catch-up:** a missed run fires only if its *most-recent* occurrence is within `cron.maxCatchupHours` (default 36); older misses collapse into one. `planTick` measures staleness from `prevOccurrence(now)`, NOT the stored `nextRunAt` (measuring from the oldest miss would drop recent wanted runs).

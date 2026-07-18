@@ -53,17 +53,23 @@ const WORKSPACE = `# The workspace
 
 The user's workspace is a single folder on disk (your cwd). It contains \`.md\` files alongside images and other assets. Subfolders are allowed; the user organizes however they want. Files connect to each other through **wiki-links**.`;
 
-const WIKILINKS = `# Wiki-links — basename only
+const WIKILINKS = `# Wiki-links
 
-A file's **basename** is its name with no folder path and no \`.md\` extension. For \`notes/projects/Foo.md\`, the basename is \`Foo\`. Wiki-links use basenames only.
+A file's **basename** is its name with no folder path and no \`.md\` extension. For \`notes/projects/Foo.md\`, the basename is \`Foo\`. Wiki-links reference a file by its basename, optionally prefixed with just enough folder path to disambiguate.
 
 Inside any \`.md\` file you may see:
 
-- \`[[Some File]]\`            → a link to the file whose basename is \`Some File\` (\`Some File.md\`), **anywhere** in the workspace.
+- \`[[Some File]]\`            → the file whose basename is \`Some File\`, resolved workspace-wide.
 - \`[[Some File#Heading]]\`    → same target, scrolled to that heading.
 - \`[[Some File|Display]]\`    → same target, but rendered as "Display" to the reader.
+- \`[[projects/Some File]]\`   → a path-qualified link: the \`Some File\` located under \`projects/\`.
 
-Resolution is by **lowercased basename without extension**. \`[[Some File]]\` and \`[[some file]]\` resolve to the same file. The path inside the workspace is irrelevant; never put a folder in a wiki-link.`;
+Resolution is case-insensitive on the basename (\`[[Some File]]\` and \`[[some file]]\` are the same target):
+
+- **Bare \`[[Foo]]\`** → if exactly one file has that basename, it resolves there. If several files share the basename (this is allowed — see the next section), it prefers the one in the *same folder* as the linking file, otherwise the one with the shortest path.
+- **Path-qualified \`[[projects/Foo]]\`** → the \`Foo\` whose folder path ends with \`projects/\`. Use only as much leading path as you need to disambiguate — not the full path, and never a leading slash. If that path is stale (the file moved), resolution falls back to the bare basename so the link still resolves.
+
+Prefer a bare link when the basename is unique; add a folder prefix only to disambiguate duplicates.`;
 
 const ASSOCIATION = `# Associating content with a link (indentation rule)
 
@@ -99,15 +105,16 @@ When you want supporting content to actually belong to a link, indent it. As a b
 
 This rule applies to files you write from any tool — the index is rebuilt from disk on every change.`;
 
-const BASENAME_UNIQUENESS = `# Workspace-wide basename uniqueness (hard invariant)
+const DUPLICATE_BASENAMES = `# Duplicate basenames are allowed
 
-The link index is keyed by basename, so two files with the same basename (in any folders) **break wiki-link resolution** for both. Before you create a new \`.md\` file:
+Two files may share a basename as long as they live in **different folders** (\`clients/acme/Meeting.md\` and \`clients/globex/Meeting.md\` coexist fine). Only a *same-folder* collision is a hard error — the filesystem itself forbids two \`Meeting.md\` in one directory. There is no workspace-wide uniqueness requirement.
 
-1. Decide the basename.
-2. Run \`find . -iname '<basename>.md'\` (or equivalent) to confirm no collision.
-3. If a collision exists, pick a different, descriptive basename (\`Foo\` → \`Foo Onboarding\`, not \`Foo 1\`). The in-app create UI auto-appends " 1", " 2", … — you can do the same as a fallback, but a meaningful name is better.
+When a basename is duplicated:
 
-If you need to rename a file, just \`mv\` it. Shockwave detects the rename via inode and rewrites \`[[OldName]]\` references in every other file automatically. Don't hand-edit references on rename.`;
+- To **link** to a specific one, path-qualify it: \`[[acme/Meeting]]\` vs \`[[globex/Meeting]]\`. A bare \`[[Meeting]]\` resolves to the copy in the linking file's own folder, else the shortest path — which may not be the one you meant.
+- To **create** a new file, a duplicate basename in another folder is fine. Only avoid a name already taken *in the same folder* (the in-app create UI auto-appends " 1", " 2", … for that case). A descriptive name is still better than a numbered one.
+
+If you need to rename a file, just \`mv\` it. Shockwave detects the rename via inode and rewrites the \`[[…]]\` references that resolve to it in every other file automatically (path-qualified links included). Don't hand-edit references on rename.`;
 
 const LINK_GRAPH = `# Using the link graph to research
 
@@ -115,12 +122,12 @@ Wiki-links are bidirectional in effect (Shockwave maintains a backlink index). W
 
 1. Open the central file (find by basename).
 2. Follow every \`[[…]]\` it points to (outgoing).
-3. Find files that point at it: \`grep -rln '\\[\\[<Name>' .\` against the workspace.
+3. Find files that point at it: \`grep -rEln '\\[\\[([^]]*/)?<Name>' .\` against the workspace (the \`([^]]*/)?\` matches both bare \`[[<Name>]]\` and path-qualified \`[[folder/<Name>]]\` links).
 4. Two hops is usually enough surrounding context.`;
 
 const EXTENDING_GRAPH = `# Extending the graph
 
-When you write or update content, add wiki-links wherever there's an obvious connection. You may reference a file that doesn't exist yet — \`[[New Topic]]\` is valid as an unresolved link in the editor. If the conversation calls for that file to actually exist, **create it** (basename-unique check first), give it a short opening paragraph, and link it.`;
+When you write or update content, add wiki-links wherever there's an obvious connection. You may reference a file that doesn't exist yet — \`[[New Topic]]\` is valid as an unresolved link in the editor. If the conversation calls for that file to actually exist, **create it** (only avoid a name already used in the same folder), give it a short opening paragraph, and link it.`;
 
 const MARKDOWN = `# Markdown supported
 
@@ -188,7 +195,7 @@ export function buildShockwaveHelper(
     WORKSPACE,
     WIKILINKS,
     ASSOCIATION,
-    BASENAME_UNIQUENESS,
+    DUPLICATE_BASENAMES,
     LINK_GRAPH,
     EXTENDING_GRAPH,
     MARKDOWN,

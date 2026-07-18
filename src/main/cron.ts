@@ -3,7 +3,7 @@
 // cron.json, reconciling the cron_state table, ticking, and firing runs through
 // the coding agent exactly like an interactive chat.
 //
-// Model (see docs/cron-plan.md): ACTIVE workspace only; next-run/catch-up;
+// Model: ACTIVE workspace only; next-run/catch-up;
 // LOCAL machine time; one run at a time (defers to ANY agent running in the
 // workspace, including the user's own chat); the scheduler is the SOLE writer of
 // nextRunAt (manual "Run now" never touches it); a run exceeding maxRunMinutes
