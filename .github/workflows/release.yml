@@ -59,3 +59,26 @@ jobs:
         run: npm run dist -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Flip the draft to public ONLY after all three platforms have uploaded.
+  #
+  # Why: package.json build.publish.releaseType is "draft", so electron-builder
+  # uploads every artifact into a draft release. electron-updater only reads
+  # PUBLISHED releases, so clients cannot see the release until this job runs —
+  # which makes publishing atomic. Previously releaseType was "release", so the
+  # release went public the moment the first platform finished while
+  # `latest-mac.yml` (written last, after ~10min of macOS notarization) was
+  # still missing; Mac clients polling in that window got a 404 for the update
+  # feed.
+  #
+  # `needs: release` requires EVERY matrix job to succeed, so a failed platform
+  # leaves an unpublished draft to inspect/delete rather than a half-published
+  # public release.
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the draft release
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

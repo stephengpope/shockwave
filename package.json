@@ -90,7 +90,7 @@
       "provider": "github",
       "owner": "stephengpope",
       "repo": "shockwave",
-      "releaseType": "release"
+      "releaseType": "draft"
     },
     "files": [
       "out/**",
