@@ -188,8 +188,14 @@ export function useFsWatcher({
         const prior = store.get(evt.path);
         const fresh = prior == null || evt.mtime > prior;
         store.set(evt.path, Math.max(prior ?? 0, evt.mtime));
+        // Accept 'add' as well as 'change': an atomic save (temp-write +
+        // rename-over — what `sed -i`, vim and most editors do) surfaces as a
+        // parcel `create`, which this path maps to 'add' because text files
+        // bypass the correlator's isKnown() check that converts it to a 'change'
+        // for .md. If the path is the ACTIVE tab it already existed, so an 'add'
+        // can only mean it was rewritten — reload it.
         if (
-          evt.type === 'change' &&
+          (evt.type === 'change' || evt.type === 'add') &&
           fresh &&
           evt.path === activeFileRef.current &&
           !activeIsDraftRef.current
