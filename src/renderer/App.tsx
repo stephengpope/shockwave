@@ -1831,9 +1831,15 @@ export default function App() {
           return (
             <button
               type="button"
-              // Soft status pill, not a CTA (polish spec §5). Anchored to the
-              // editor pane's top-right, below the tab strip.
-              className="absolute right-3 top-[42px] z-20 inline-flex items-center gap-1.5 rounded-full border border-success/20 bg-success-soft px-2.5 py-1 text-[11.5px] font-medium text-success hover:brightness-95"
+              // Soft status pill, not a CTA (polish spec §5). Top-right of the
+              // editor pane, vertically centered IN the tab-strip row rather
+              // than hanging below it (strip 39px, pill 27px -> top-1.5 = 6px
+              // gives equal 6px gaps; measured, not guessed). The strip's tabs
+              // + "+" button are left-aligned, so this right-hand space is
+              // free. Kept absolutely positioned instead of being a TabStrip
+              // child so it still shows when no workspace is open and there is
+              // no strip to sit in.
+              className="absolute right-3 top-1.5 z-20 inline-flex items-center gap-1.5 rounded-full border border-success/20 bg-success-soft px-2.5 py-1 text-[11.5px] font-medium text-success hover:brightness-95"
               onClick={() => u.downloaded ? window.api.app.restartToUpdate() : window.api.openExternal(u.url!)}
               title={u.downloaded
                 ? `Version ${u.latest} is downloaded — you're on ${u.current}. Click to restart and install.`
