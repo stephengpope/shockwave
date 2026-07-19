@@ -41,7 +41,9 @@ const TOOLS = (tools: ToolDescriptor[]) => `# Available tools
 
 ${formatToolList(tools)}
 
-In addition to the tools above, you may have access to other custom tools depending on the project.`;
+This is the complete set — there are no others.
+
+Use \`grep\`, \`find\`, and \`ls\` for searching and listing rather than shelling out through \`bash\`: they return structured, truncated output, they respect \`.gitignore\`, and they work on every platform (\`bash\` and Unix tools like \`grep\` are not available on Windows). Reach for \`bash\` to run programs, git, and anything the other tools don't cover.`;
 
 const GUIDELINES = `# Guidelines
 
@@ -122,7 +124,7 @@ Wiki-links are bidirectional in effect (Shockwave maintains a backlink index). W
 
 1. Open the central file (find by basename).
 2. Follow every \`[[…]]\` it points to (outgoing).
-3. Find files that point at it: \`grep -rEln '\\[\\[([^]]*/)?<Name>' .\` against the workspace (the \`([^]]*/)?\` matches both bare \`[[<Name>]]\` and path-qualified \`[[folder/<Name>]]\` links).
+3. Find files that point at it with the \`grep\` tool, pattern \`\\[\\[([^]]*/)?<Name>\` (the \`([^]]*/)?\` matches both bare \`[[<Name>]]\` and path-qualified \`[[folder/<Name>]]\` links).
 4. Two hops is usually enough surrounding context.`;
 
 const EXTENDING_GRAPH = `# Extending the graph

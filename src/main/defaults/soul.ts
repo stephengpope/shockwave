@@ -4,8 +4,9 @@
 // A workspace can carry its own `SOUL.md` at its root; the user edits it like any
 // other file (it's just markdown). When present, its contents replace
 // DEFAULT_SOUL below. When absent, DEFAULT_SOUL is used in-memory — nothing is
-// written to disk. New repos created via the sync "create new repo" flow get a
-// physical copy of DEFAULT_SOUL plus an empty AGENTS.md (see `scaffoldNewProject`).
+// written to disk. Workspaces created in the app get a physical copy of
+// DEFAULT_SOUL plus an empty AGENTS.md — see `ensureWorkspaceFiles` in
+// `files.ts` in this folder, which owns the on-disk default file set.
 //
 // EDITING: DEFAULT_SOUL and AGENTS_STUB are plain literals — edit freely.
 
@@ -45,20 +46,8 @@ export async function readSoul(workspacePath: string | null | undefined): Promis
   }
 }
 
-// Seed SOUL.md (from DEFAULT_SOUL) and an empty AGENTS.md into a new project,
-// only if each is absent. Called from the sync "create new repo" flow so the two
-// files are committed with the first push. Best-effort — a write failure here
-// must never block repo setup.
-export async function scaffoldNewProject(workspacePath: string): Promise<void> {
-  await writeIfAbsent(join(workspacePath, SOUL_FILENAME), `${DEFAULT_SOUL}\n`);
-  await writeIfAbsent(join(workspacePath, AGENTS_FILENAME), AGENTS_STUB);
-}
-
-async function writeIfAbsent(file: string, content: string): Promise<void> {
-  try {
-    // 'wx' fails if the file already exists — never clobber the user's own file.
-    await fs.writeFile(file, content, { flag: 'wx' });
-  } catch {
-    // Already exists (or unwritable): leave it alone.
-  }
-}
+// Seeding SOUL.md / AGENTS.md onto disk lives in `files.ts` now —
+// they're two entries in one workspace-wide default file set (alongside .ignore
+// and .gitignore), written by `ensureWorkspaceFiles` on every in-app workspace
+// creation rather than only the "create new repo" flow. This module keeps just
+// the identity content and the read path.

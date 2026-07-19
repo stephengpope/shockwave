@@ -1,11 +1,19 @@
 import React, { useState } from 'react';
-import { FolderOpen, Plus, Trash2, X } from 'lucide-react';
+import { FolderOpen, Plus, Trash2, X, FileCog } from 'lucide-react';
+import { toast } from 'sonner';
 import ConfirmDialog from '../ConfirmDialog.jsx';
 import AddWorkspaceDialog from './AddWorkspaceDialog';
 import { SettingsSection, SettingsGroup } from './SectionUI';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import ErrorMessage from '../ErrorMessage.jsx';
 
 // Workspaces — just the list and the ways in and out of it. The account, the
@@ -38,7 +46,33 @@ export default function WorkspacesSection({
   const [rowError, setRowError] = useState<any>(null);
   const [addOpen, setAddOpen] = useState(false);
 
+  // The workspace default files (SOUL.md, AGENTS.md, .ignore, .gitignore). Both
+  // creation paths seed them; this is the manual half, for workspaces that
+  // predate one being added to the set.
+  const [confirmResetWs, setConfirmResetWs] = useState<any>(null);
+
   const target = workspaces.find((w) => w.id === confirmRemoveId) ?? null;
+
+  // `overwrite` replaces all of them; without it only missing ones are written,
+  // so the safe action can't destroy anything and needs no confirm.
+  const writeDefaultFiles = async (ws: any, overwrite: boolean) => {
+    setRowError(null);
+    try {
+      const res = await window.api.workspace.ensureFiles({ workspacePath: ws.path, overwrite });
+      if (!res?.ok) {
+        setRowError({ id: ws.id, error: res?.error ?? 'Could not write the default files.' });
+        return;
+      }
+      const written = res.written ?? [];
+      toast(
+        written.length === 0
+          ? `${ws.name} already has every default file.`
+          : `${overwrite ? 'Reset' : 'Added'} ${written.join(', ')} in ${ws.name}.`,
+      );
+    } catch (err: any) {
+      setRowError({ id: ws.id, error: err?.message ?? 'Could not write the default files.' });
+    }
+  };
 
   // Renames go through the normal settings save — `updateWorkspaces` applies
   // name + order and can't create or delete, so sending the list is safe.
@@ -176,6 +210,31 @@ export default function WorkspacesSection({
               <FolderOpen /> {settingUpId === ws.id ? 'Setting up…' : 'Set up here'}
             </Button>
           )}
+          {/* Meaningless without a checkout — there's no folder to write to. */}
+          {here && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-muted-foreground"
+                  title="Default files"
+                  aria-label={`Default files for ${ws.name}`}
+                >
+                  <FileCog />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => writeDefaultFiles(ws, false)}>
+                  Add missing files
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onSelect={() => setConfirmResetWs(ws)}>
+                  Reset to defaults…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <Button
             variant="ghost"
             size="icon-sm"
@@ -250,6 +309,22 @@ export default function WorkspacesSection({
         destructive
         onConfirm={() => { onRemove(confirmRemoveId); setConfirmRemoveId(null); }}
         onClose={() => setConfirmRemoveId(null)}
+      />
+
+      {/* Names the files, because the destructive part is specific: the repo
+          makes this recoverable, but only for what's already COMMITTED — an
+          edit made since the last sync tick has no git copy to come back
+          from. */}
+      <ConfirmDialog
+        open={!!confirmResetWs}
+        title="Reset default files"
+        message={confirmResetWs
+          ? `Replace SOUL.md, AGENTS.md, .ignore, and .gitignore in "${confirmResetWs.name}" with the current defaults? Any edits you've made to them are overwritten — committed versions stay in the repo's history, but changes since the last sync are lost.`
+          : ''}
+        confirmLabel="Reset files"
+        destructive
+        onConfirm={() => { writeDefaultFiles(confirmResetWs, true); setConfirmResetWs(null); }}
+        onClose={() => setConfirmResetWs(null)}
       />
 
       <AddWorkspaceDialog

@@ -445,6 +445,15 @@ contextBridge.exposeInMainWorld('api', {
      *  vanished — the repo is still valid, so the identity must survive.
      *  @param {{ id: string }} opts @returns {Promise<{ ok: boolean }>} */
     forgetLocal: (opts) => ipcRenderer.invoke('workspace:forgetLocal', opts),
+    /** The workspace default file set and which of them are missing here.
+     *  @param {{ workspacePath: string }} opts
+     *  @returns {Promise<{ ok: boolean, files?: Array<{name: string, purpose: string}>, missing?: string[], error?: string }>} */
+    listFiles: (opts) => ipcRenderer.invoke('workspace:listFiles', opts),
+    /** Write the default files. Without `overwrite` only missing ones are added;
+     *  with it, all four are replaced by the current defaults (confirm first).
+     *  @param {{ workspacePath: string, overwrite?: boolean }} opts
+     *  @returns {Promise<{ ok: boolean, written?: string[], error?: string }>} */
+    ensureFiles: (opts) => ipcRenderer.invoke('workspace:ensureFiles', opts),
   },
 
   // ---- GitHub sync --------------------------------------------------------

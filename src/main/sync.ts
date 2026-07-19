@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process';
 import { app } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { scaffoldNewProject } from './prompt/index.js';
+import { ensureWorkspaceFiles } from './defaults/files.js';
 // Folder classification + GitHub URL parsing live in a plain `.js` sibling with
 // no electron import, so `node --test` can exercise them directly. Re-exported
 // here because this module is the public face of everything sync-related.
@@ -407,8 +407,8 @@ async function currentBranch(workspacePath: string) {
 }
 
 /**
- * Create a new GitHub repo and a local checkout of it. Seeds SOUL.md +
- * AGENTS.md; the engine's first tick commits and pushes them.
+ * Create a new GitHub repo and a local checkout of it. Seeds the workspace
+ * default file set; the engine's first tick commits and pushes it.
  */
 export async function createWorkspaceRepo({ workspacePath, repoName, pat, private: isPrivate = true }) {
   const folder = await requireEmptyFolder(workspacePath);
@@ -421,9 +421,9 @@ export async function createWorkspaceRepo({ workspacePath, repoName, pat, privat
   const init = await gitSpawn(folder.path, ['init', '-b', 'main'], { timeoutMs: 5000 });
   if (!init.ok) return { ok: false, error: init.stderr.trim() || 'git init failed' };
 
-  // Agent identity + per-project instructions. Best-effort; the first tick
-  // commits whatever landed.
-  await scaffoldNewProject(folder.path);
+  // The workspace default file set (SOUL.md, AGENTS.md, .ignore, .gitignore).
+  // Best-effort; the first tick commits whatever landed.
+  await ensureWorkspaceFiles(folder.path);
 
   const add = await gitSpawn(folder.path, ['remote', 'add', 'origin', cloneUrlFor(owner, repo)], { timeoutMs: 5000 });
   if (!add.ok) return { ok: false, error: add.stderr.trim() || 'could not set origin' };

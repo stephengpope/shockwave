@@ -19,7 +19,7 @@ import {
 import { CRON_FILE } from './cronScheduler.js';
 import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred, insertWorkspace, deleteWorkspace, deleteWorkspaceLocal, insertWorkspaceLocal, getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed, setWorkspaceSyncDisabled } from './db/index.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
-import { scaffoldNewProject } from './prompt/index.js';
+import { ensureWorkspaceFiles, missingWorkspaceFiles, DEFAULT_FILES } from './defaults/files.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
 import { getProviders } from '@earendil-works/pi-ai/compat';
 import { initModelCatalog, getCatalogModels } from './modelCatalog.js';
@@ -1180,6 +1180,26 @@ ipcMain.handle('workspace:setUpHere', async (_evt, { id, workspacePath }) => {
   }
   await notifyWorkspacesChanged();
   return { ok: true, id, path: workspacePath };
+});
+
+// The workspace default file set (SOUL.md, AGENTS.md, .ignore, .gitignore).
+// Both creation paths seed it automatically; these two handlers are the manual
+// half, for workspaces that predate a file being added to the manifest.
+//
+// `listFiles` lets the UI say what's missing before the user commits to writing
+// anything. `ensureFiles` with overwrite writes all four unconditionally — the
+// renderer confirms that first, since git only makes it recoverable for what's
+// already committed.
+ipcMain.handle('workspace:listFiles', async (_evt, { workspacePath }) => {
+  if (!workspacePath) return { ok: false, error: 'That workspace is not set up on this machine.' };
+  const missing = await missingWorkspaceFiles(workspacePath);
+  return { ok: true, files: DEFAULT_FILES.map((f) => ({ name: f.name, purpose: f.purpose })), missing };
+});
+
+ipcMain.handle('workspace:ensureFiles', async (_evt, { workspacePath, overwrite = false }) => {
+  if (!workspacePath) return { ok: false, error: 'That workspace is not set up on this machine.' };
+  const written = await ensureWorkspaceFiles(workspacePath, { overwrite });
+  return { ok: true, written };
 });
 
 // The engine holds a path captured at start(), not a live row reference, so

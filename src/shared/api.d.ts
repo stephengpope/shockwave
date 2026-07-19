@@ -314,6 +314,12 @@ export interface ShockwaveApi {
     setUpHere(opts: { id: string; workspacePath: string }): Promise<WorkspaceSetupResult>;
     remove(opts: { id: string }): Promise<{ ok: boolean; error?: string }>;
     forgetLocal(opts: { id: string }): Promise<{ ok: boolean }>;
+    /** The default file set (SOUL.md, AGENTS.md, .ignore, .gitignore) and which
+     *  are absent from this checkout. */
+    listFiles(opts: { workspacePath: string }): Promise<{ ok: boolean; files?: Array<{ name: string; purpose: string }>; missing?: string[]; error?: string }>;
+    /** Write the defaults. Default fills only what's missing and can't destroy
+     *  anything; `overwrite` replaces all of them. */
+    ensureFiles(opts: { workspacePath: string; overwrite?: boolean }): Promise<{ ok: boolean; written?: string[]; error?: string }>;
   };
 
   sync: {

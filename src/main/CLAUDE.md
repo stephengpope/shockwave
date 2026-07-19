@@ -20,8 +20,9 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 - `codingAgent.ts` — pi `AgentSession` lifecycle: one live session per chat in a map, sessionId-stamped events, mid-turn steering, system-prompt override, failed-image splice.
 - `cronScheduler.js` — PURE cron math (plain `.js`, unit-tested under `node --test`): `parseCronJobs` (validate cron.json), `planTick` (catch-up decision + longest-overdue pick), `nextAfter`/`prevOccurrence` (cron-parser, local tz), `describeSchedule`.
 - `cron.ts` — the stateful scheduler controller: reconciles `cron_state`, ticks every 60s + on activate/file-change, fires runs via the injected `runAgentTurn`. See "Scheduled runs (cron)" below.
-- `prompt/` — coding-agent system-prompt assembly. `tools.ts` (the tool catalog rendered into the prompt), `helper.ts` (`buildShockwaveHelper` — the app mechanics, sections as named consts), `soul.ts` (`DEFAULT_SOUL` + `AGENTS_STUB` + `readSoul`/`scaffoldNewProject`), `index.ts` (`assembleSystemPrompt`). See "System prompt" below.
-- `agentTokensExtension.ts` — pi extension exposing `list_agent_secrets` + `get_agent_secret`; installed via `installAgentTokensBridge` at startup. `get_agent_secret` returns a usable credential for both static tokens and OAuth connections (a fresh access token for the latter) via the bridge's `getToken`.
+- `defaults/` — everything a human authors: the system prompt AND the on-disk default files. `tools.ts` (`TOOL_CATALOG` — rendered into the prompt AND passed to pi as the `tools` allowlist; one list so the two can't drift), `helper.ts` (`buildShockwaveHelper` — the app mechanics, sections as named consts), `soul.ts` (`DEFAULT_SOUL` + `AGENTS_STUB` + `readSoul`), `files.ts` (`DEFAULT_FILES` + `ensureWorkspaceFiles`), `index.ts` (`assembleSystemPrompt`). See "System prompt" and "Workspace default files" below.
+- `agentTokensExtension.ts` — the `list_agent_secrets` + `get_agent_secret` tool definitions, passed to pi in-process via `customTools`. `installAgentTokensBridge` injects the secret getters at startup (module scope, not `global`). `get_agent_secret` returns a usable credential for both static tokens and OAuth connections (a fresh access token for the latter).
+- `openFileExtension.ts` — the `open_file` tool definition, same shape; `installOpenFileBridge` injects the handler.
 - `oauth.ts` — OAuth2 engine for `oauth`-kind agent secrets (arctic + a loopback callback server; BYO Desktop-app client). See "OAuth for agent secrets" below.
 - `skillLibrary.ts` — on-disk skill library under `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` and the workspace-override resolution.
 - `sync.ts` — GitHub sync support: REST helpers (`verifyPat`, `createRepo`, `listRepos`), the `gitSpawn` wrapper that injects a PAT via `GIT_ASKPASS`, the git-presence check, and the workspace setup flows. **`ensureCheckout`** makes a folder BE a checkout of `owner/repo` whatever state it starts in — clone if empty, verify-and-leave-alone if it's already that repo, refuse otherwise — so adding a workspace and checking one out on this machine are one operation, not two implementations of it. `createWorkspaceRepo` stays separate because creating a repo also scaffolds it. Folder classification itself lives in `workspaceFolder.js`; it is the one place that reads `.git/config`, ONCE at setup, to learn what a folder already is (not the per-tick re-derivation the row replaced). The old `setupLink` (git-init an arbitrary folder and force a remote onto it) is gone — adopting now requires the remote to already be there.
@@ -198,24 +199,30 @@ The agent runs with the **active workspace as `cwd`** and an in-memory `AuthStor
 
 ### System prompt
 
-The system prompt is **assembled**, not a setting. `assembleSystemPrompt(workspacePath)` (`prompt/index.ts`) joins two parts:
+The system prompt is **assembled**, not a setting. `assembleSystemPrompt(workspacePath)` (`defaults/index.ts`) joins two parts:
 
     <SOUL>            ← the workspace's SOUL.md (root of cwd), or DEFAULT_SOUL if absent
     <SHOCKWAVE_HELPER> ← buildShockwaveHelper({tools}) — app mechanics + the tool list from tools.ts
 
 That combined string is passed to pi via `DefaultResourceLoader`'s `systemPromptOverride`, replacing pi's built-in coding-agent prompt. pi then appends, on its own, at session boot: discovered context files (**AGENTS.md** / **CLAUDE.md**, walked cwd→root — standard pi discovery, unfiltered), the enabled skills list, and `Current date: YYYY-MM-DD` (date only). So the final order is SOUL → helper → context files → skills → date.
 
-The assembled string is part of the session key (`makeKey`), so it's baked once per conversation and only reboots when SOUL/workspace/model changes. **SOUL.md is a normal file** the user edits in-app; there is no settings UI for it. New repos created via the sync "create new repo" flow (`sync.ts` → `scaffoldNewProject`) get a physical `SOUL.md` (from `DEFAULT_SOUL`) + an empty `AGENTS.md`; other workspaces fall back to `DEFAULT_SOUL` in-memory. The old `codingAgent.systemPrompt` setting and the `agent:getDefaultSystemPrompt` IPC were removed.
+The assembled string is part of the session key (`makeKey`), so it's baked once per conversation and only reboots when SOUL/workspace/model changes. **SOUL.md is a normal file** the user edits in-app; there is no settings UI for it. A repo created through the app gets a physical `SOUL.md` — see "Workspace default files" below; a workspace whose file is missing or empty falls back to `DEFAULT_SOUL` in-memory. The old `codingAgent.systemPrompt` setting and the `agent:getDefaultSystemPrompt` IPC were removed.
 
 ### Skills (`skillLibrary.ts`)
 
 On-disk library at `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` (one folder per skill). Pi never auto-discovers this directory. Each session boot we recompute the effective enabled list (`computeEffectivePaths`: workspace override wins over global; `inherit` falls back to global) and write it as `skills: []` to `<userData>/pi-agent/settings.json` via `writePiSettings`. Pi reads `skills` only at session boot — the user can hit Clear in the chat to apply a changed set.
 
-### Agent-tokens extension (`agentTokensExtension.ts`)
+### Tools (`agentTokensExtension.ts`, `openFileExtension.ts`)
 
-Exposes `list_agent_secrets` + `get_agent_secret` tools so the agent can look up user-managed API tokens. The on-disk extension file is plain JS with no imports — it talks back to main through a process-global bridge (`global.__SHOCKWAVE_AGENT_TOKENS`) installed by `installAgentTokensBridge` at startup. The bridge re-reads settings on every call so user-side edits to secrets are picked up mid-conversation.
+**`TOOL_CATALOG` in `defaults/tools.ts` is the whole tool set** — it is BOTH the prompt's "Available tools" section AND the `tools:` allowlist handed to `createAgentSession`. Adding or removing a tool is one edit there plus, for a custom tool, its definition object.
 
-The extension source string is materialized fresh on every session boot via `ensureAgentTokensExtension`, so editing the source in this repo and restarting the app picks up the change without any user-side install step. The reason for the bridge pattern: the extension file lives under `<userData>/pi-agent/extensions/` (outside this project), and node's resolver can't find `electron` from there; writing decrypted secrets to disk would defeat the at-rest encryption; pi runs in the same V8 isolate as main so a `global` function is the cleanest bridge.
+Our three custom tools (`list_agent_secrets`, `get_agent_secret`, `open_file`) are passed **in-process** via `customTools`. Their getters/handlers are injected at startup by `installAgentTokensBridge` / `installOpenFileBridge` into module-scoped variables, so the definitions never import back into `main.ts`; the getters re-read settings per call, so secret edits land mid-conversation.
+
+pi's own built-ins are enabled by NAME in the same catalog. pi's default is only `read`/`bash`/`edit`/`write`; we also enable `grep`/`find`/`ls`, which `createAllToolDefinitions` instantiates regardless (the allowlist just selects). They return truncated, structured output and respect `.gitignore`, so the prompt steers searching to them rather than to `bash`.
+
+**Why the allowlist is not optional.** These used to be materialized as plain-JS extension files under `<userData>/pi-agent/extensions/`, reaching main through `global.__SHOCKWAVE_*` globals — necessary then, because node's resolver can't find `electron` from that directory. pi's `discoverAndLoadExtensions` **scans that directory unconditionally** (plus `<cwd>/.pi/extensions/`) and loads whatever it finds, ADDING to any configured list; the `extensions: []` we write to pi's settings.json cannot restrict it. So a retired extension's file outlived the source that wrote it: a deleted `resolve_link` kept registering itself for months against a bridge that no longer existed, and the prompt advertised 7 tools while pi ran 8. The allowlist is what bounds the set now — a stray extension can still load, but its tool is filtered out unless `TOOL_CATALOG` names it.
+
+Known pi quirk: the `grep` tool spawns ripgrep with a hardcoded `--hidden` and no way to disable it, so it descends into `.git/`. The workspace's default `.ignore` file (see below) is what excludes it.
 
 ### Failed-image guard
 
@@ -230,6 +237,26 @@ Pi pushes a user message into `state.messages` before the API call and a failure
 Because pi *executes* via a `Model` object (not a string), `codingAgent.ts`'s **`resolveModel(provider, model)`** reconciles catalog and runtime at boot: `getModel` (pi's bundled, vetted descriptor) when pi has the model, else **synthesize** one from the models.dev record — the provider's API wiring (`api`/`baseUrl`/`compat`) is a per-provider constant, so it's cloned from any sibling model pi already knows, and the models.dev metadata (name/context/cost/input) is overlaid. `bootSession` uses it and throws if it returns null.
 
 **Reasoning levels** (`listThinkingLevels`, async) come from models.dev's `reasoning_options`, not pi: `['off', …reasoningLevels]` translated to pi's vocabulary via `toPiThinkingLevel` (models.dev's top level is **`max`**, pi's is **`xhigh`** — the same tier) and de-duplicated (models.dev lists both). The same translation runs in `bootSession` before the level is handed to pi, so the level shown in the dropdown is exactly the one that executes — pick `max`/`xhigh` and pi runs its true top tier instead of clamping an unknown `max` down to `off`. The renderer's `THINKING_LABELS` (`AgentChatSection.tsx`) labels pi's vocabulary only.
+
+## Workspace default files
+
+Every workspace gets a small set of authored files at its root. They are **files, not settings**, so the user can read, edit, diff, and sync them like anything else — same reasoning that keeps `SOUL.md` out of the settings UI. The manifest and the write logic are in `defaults/files.ts`.
+
+| File | Purpose |
+|---|---|
+| `SOUL.md` | The agent's identity for this workspace (else `DEFAULT_SOUL` in memory) |
+| `AGENTS.md` | The user's own instructions; pi discovers and appends it |
+| `.ignore` | Paths the agent's search tools skip. Contains `.git/` — pi's `grep` runs ripgrep with `--hidden`, which would otherwise return binary blobs from `.git/objects`. ripgrep honors `.ignore` independently of `.gitignore`, so this is the only lever from outside pi |
+| `.gitignore` | OS droppings only (`.DS_Store`, `._*`, `Thumbs.db`). Deliberately minimal — syncing everything is the point. Notably NOT `.shockwave/`, which carries `workspace.json` and workspace skills and SHOULD travel between machines |
+
+`ensureWorkspaceFiles(path, { overwrite })` writes them. **Never clobbers by default** (`wx` — fail-if-exists), so adding an entry to `DEFAULT_FILES` is safe to ship: existing workspaces pick it up on request and nobody loses an edit.
+
+- **Automatic:** `createWorkspaceRepo` ONLY — a repo the user just created here, which is empty and theirs.
+- **Manual:** `workspace:listFiles` reports what's missing; `workspace:ensureFiles` writes it. With `overwrite: true` it replaces all of them — the renderer confirms first, because git only makes that recoverable for what's already COMMITTED, and an edit made since the last sync tick has no copy to come back from.
+
+**Clone / adopt / set-up-here (`ensureCheckout`) deliberately does NOT scaffold.** Cloning is adopting someone else's repo, and the sync engine commits and pushes on its next tick — automatic scaffolding there would push four files into a repo the user may neither own nor be alone in. `.gitignore` is the sharpest case, since adding one changes git's behavior for every collaborator. A cloned workspace with no `SOUL.md` falls back to `DEFAULT_SOUL` in memory and works fine; the manual action is how the user opts in.
+
+It deliberately does **not** run on workspace activation: writing to the user's folder every time they switch workspaces is silent, repeated, and surprising.
 
 ## Scheduled runs (cron)
 
@@ -318,7 +345,7 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 | Voice | `voice:getToken` |
 | Agent | `agent:send` (takes `sessionId`; steers if that chat is mid-turn), `agent:abort` (per sessionId), `agent:runningSessions`, `agent:listProviders`, `agent:listModels`; plus push events: `agent:event` / `agent:error` (every payload stamped with its `sessionId`) |
 | Skills | `skills:list`, `skills:libraryDir`, `skills:importPicker`, `skills:importFromPath`, `skills:remove` |
-| Workspaces | `workspace:inspectFolder`, `workspace:createWithRepo`, `workspace:addFromRepo` (covers both clone-into-empty and adopt-a-clone), `workspace:setUpHere`, `workspace:remove`, `workspace:forgetLocal` |
+| Workspaces | `workspace:inspectFolder`, `workspace:createWithRepo`, `workspace:addFromRepo` (covers both clone-into-empty and adopt-a-clone), `workspace:setUpHere`, `workspace:remove`, `workspace:forgetLocal`, `workspace:listFiles`, `workspace:ensureFiles` |
 | Sync | `sync:verifyPat`, `sync:checkGit`, `sync:listRepos`, `sync:setWorkspaceDisabled`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`, `sync:listConflicts`, `sync:resolveConflict`, `sync:keepConflict`, `sync:resetConflict`, `sync:keepAll`, `sync:resetToRemote`; plus push events `sync:status` (carries `conflicts[]` when paused), `sync:flushRequest` |
 
 The renderer reaches every one of these via `window.api.*` — see `src/preload/preload.cjs`. The renderer never touches Node directly.

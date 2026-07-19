@@ -37,9 +37,10 @@ import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { getModel, getModels, completeSimple } from '@earendil-works/pi-ai/compat';
 import { getCatalogModel } from './modelCatalog.js';
 import { agentDirFor, ensureDirs, listBuiltinSkills, listWorkspaceSkills, computeEffectivePaths, writePiSettings } from './skillLibrary.js';
-import { ensureAgentTokensExtension } from './agentTokensExtension.js';
-import { ensureOpenFileExtension } from './openFileExtension.js';
-import { assembleSystemPrompt } from './prompt/index.js';
+import { AGENT_TOKEN_TOOLS } from './agentTokensExtension.js';
+import { OPEN_FILE_TOOL } from './openFileExtension.js';
+import { assembleSystemPrompt } from './defaults/index.js';
+import { ACTIVE_TOOL_NAMES } from './defaults/tools.js';
 import { upsertSession, persistMessages, setSessionTitle, getSession } from './db/index.js';
 
 type Emit = (event: any) => void;
@@ -168,9 +169,11 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
   const builtins = await listBuiltinSkills(builtinDir);
   const wsSkills = await listWorkspaceSkills(workspacePath);
   const effectivePaths = computeEffectivePaths(builtins, wsBuiltinSkills, wsSkills);
-  const agentTokensPath = await ensureAgentTokensExtension(userDataDir);
-  const openFilePath = await ensureOpenFileExtension(userDataDir);
-  await writePiSettings(userDataDir, { skills: effectivePaths, extensions: [agentTokensPath, openFilePath] });
+  // Extensions are no longer materialized to disk — our tools are passed as
+  // `customTools` below. `extensions: []` clears any list an older build wrote;
+  // note it can't stop pi from SCANNING <agentDir>/extensions/ (that discovery
+  // is unconditional), which is what the `tools` allowlist is for.
+  await writePiSettings(userDataDir, { skills: effectivePaths, extensions: [] });
 
   // Config change on an idle chat: replace its session (same JSONL, new config).
   await disposeEntry(sessionId);
@@ -238,6 +241,13 @@ async function bootSession(sessionId: string, opts, emitEvent: Emit): Promise<En
     modelRegistry,
     sessionManager,
     resourceLoader,
+    // Our tools, in-process — no file on disk, no `global` bridge.
+    customTools: [...AGENT_TOKEN_TOOLS, OPEN_FILE_TOOL],
+    // Bounds the ENTIRE tool set (builtin + custom + anything pi discovers in
+    // its extension dirs) to exactly what TOOL_CATALOG names, which is also what
+    // the system prompt advertises. Without this, pi's default is
+    // read/bash/edit/write plus every extension it happens to find on disk.
+    tools: ACTIVE_TOOL_NAMES,
   });
 
   const entry: Entry = {

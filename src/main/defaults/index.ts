@@ -20,7 +20,7 @@ import { buildShockwaveHelper } from './helper.js';
 import { readSoul } from './soul.js';
 import { TOOL_CATALOG } from './tools.js';
 
-export { readSoul, scaffoldNewProject, SOUL_FILENAME, AGENTS_FILENAME, DEFAULT_SOUL } from './soul.js';
+export { readSoul, SOUL_FILENAME, AGENTS_FILENAME, AGENTS_STUB, DEFAULT_SOUL } from './soul.js';
 export { buildShockwaveHelper } from './helper.js';
 export { TOOL_CATALOG, formatToolList } from './tools.js';
 
