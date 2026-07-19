@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, FolderOpen, Link2, Sparkles } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -39,10 +39,14 @@ function slugify(name: string) {
 }
 
 export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
-  const [folder, setFolder] = useState('');
-  // null until a folder is picked; then { state: 'empty'|'clone'|'occupied', … }
-  const [info, setInfo] = useState<any>(null);
-  const [inspecting, setInspecting] = useState(false);
+  // ONE value, not three. `folder` / `info` / `inspecting` were separate and
+  // nothing kept them agreeing: re-picking a folder rendered "Checking folder…"
+  // AND "Already a clone of <the PREVIOUS folder's repo>" at the same time, and
+  // the repo section below kept the old answer while the new inspect ran.
+  //
+  // status: 'none' | 'checking' | 'clone' | 'empty' | 'occupied'
+  // A clone carries repoOwner/repoName; an occupied folder carries `error`.
+  const [folder, setFolder] = useState<any>({ path: '', status: 'none' });
 
   const [mode, setMode] = useState<string>(MODE.CREATE);
   const [name, setName] = useState('');
@@ -60,7 +64,8 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
 
   useEffect(() => {
     if (!open) return;
-    setFolder(''); setInfo(null); setInspecting(false);
+    inspectGen.current++;                      // abandon any inspect still in flight
+    setFolder({ path: '', status: 'none' });
     setMode(MODE.CREATE); setName(''); setRepoName(''); setRepoNameTouched(false);
     setIsPrivate(true); setPicked(null); setRepoFilter(''); setCursor(0); setBusy(false); setError(''); setReposError('');
     // `repos` must reset too. The dialog is permanently mounted inside
@@ -74,7 +79,7 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
   // fetched on first entry to that state, then cached until the dialog reopens
   // (it stays MOUNTED inside WorkspacesSection, so the reset effect is what
   // clears it, not an unmount).
-  const needsRepoList = info?.state === 'empty' && mode === MODE.EXISTING;
+  const needsRepoList = folder.status === 'empty' && mode === MODE.EXISTING;
   useEffect(() => {
     if (!open || !needsRepoList || repos !== null || reposError) return;
     let cancelled = false;
@@ -111,22 +116,27 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
     }
   };
 
+  // Each inspect claims a generation. Without it, picking a second folder before
+  // the first classification returned let the LATER-resolving response win — so
+  // `path` could be folder B while the repo shown came from folder A, and submit
+  // would clone A's repo into B.
+  const inspectGen = useRef(0);
   const chooseFolder = async () => {
     const dir = await window.api.openFolder();
     if (!dir) return;
-    setFolder(dir);
+    const gen = ++inspectGen.current;
     setError('');
-    setInspecting(true);
+    setFolder({ path: dir, status: 'checking' });
     const res = await window.api.workspace.inspectFolder(dir);
-    setInspecting(false);
-    setInfo(res);
+    if (inspectGen.current !== gen) return;
+    setFolder({ path: dir, status: res.state, ...res });
     // A clone answers the repo question, so seed the name from it.
     if (res.state === 'clone' && !name) setName(res.repoName ?? '');
   };
 
-  const canSubmit = !busy && !inspecting && (
-    info?.state === 'clone' ? true
-      : info?.state === 'empty'
+  const canSubmit = !busy && (
+    folder.status === 'clone' ? true
+      : folder.status === 'empty'
         ? (mode === MODE.CREATE ? !!(repoNameTouched ? repoName : slugify(name)) : !!picked)
         : false
   );
@@ -135,25 +145,25 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
     setBusy(true);
     setError('');
     let res;
-    if (info.state === 'clone') {
+    if (folder.status === 'clone') {
       // Same call as the picker path — `ensureCheckout` sees the folder already
       // matches and leaves it alone, so "adopt" isn't a separate operation.
       res = await window.api.workspace.addFromRepo({
-        workspacePath: folder,
-        owner: info.repoOwner,
-        repo: info.repoName,
-        name: name || info.repoName,
+        workspacePath: folder.path,
+        owner: folder.repoOwner,
+        repo: folder.repoName,
+        name: name || folder.repoName,
       });
     } else if (mode === MODE.CREATE) {
       res = await window.api.workspace.createWithRepo({
-        workspacePath: folder,
+        workspacePath: folder.path,
         repoName: repoNameTouched ? repoName : slugify(name),
         name,
         private: isPrivate,
       });
     } else {
       res = await window.api.workspace.addFromRepo({
-        workspacePath: folder,
+        workspacePath: folder.path,
         owner: picked.full_name.split('/')[0],
         repo: picked.full_name.split('/')[1],
         name: name || picked.full_name.split('/')[1],
@@ -166,7 +176,7 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
   };
 
   const submitLabel = busy
-    ? (info?.state === 'clone' ? 'Adding…' : mode === MODE.CREATE ? 'Creating…' : 'Cloning…')
+    ? (folder.status === 'clone' ? 'Adding…' : mode === MODE.CREATE ? 'Creating…' : 'Cloning…')
     : 'Add workspace';
 
   return (
@@ -185,46 +195,48 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
             <div className="flex gap-2">
               <Input
                 readOnly
-                value={folder}
+                value={folder.path}
                 placeholder="Choose a folder"
                 className="flex-1 font-mono text-xs"
-                title={folder}
+                title={folder.path}
               />
               <Button variant="outline" size="sm" onClick={chooseFolder} disabled={busy}>
                 <FolderOpen /> Choose…
               </Button>
             </div>
-            {!folder && (
+            {/* Exactly one of these renders — they're branches of one value now,
+                so "checking" can no longer show alongside a stale result. */}
+            {folder.status === 'none' && (
               <FieldDescription className="text-xs">
                 Pick a folder that's already a clone to connect it, or an empty folder to set up a new one.
               </FieldDescription>
             )}
-            {inspecting && <p className="text-xs text-muted-foreground">Checking folder…</p>}
-            {info?.state === 'clone' && (
+            {folder.status === 'checking' && <p className="text-xs text-muted-foreground">Checking folder…</p>}
+            {folder.status === 'clone' && (
               <p className="flex items-center gap-1.5 text-xs text-success">
                 <Check className="size-3.5" />
-                Already a clone of <strong className="font-mono">{info.repoOwner}/{info.repoName}</strong>
+                Already a clone of <strong className="font-mono">{folder.repoOwner}/{folder.repoName}</strong>
               </p>
             )}
-            {info?.state === 'occupied' && <ErrorMessage>{info.error}</ErrorMessage>}
+            {folder.status === 'occupied' && <ErrorMessage>{folder.error}</ErrorMessage>}
           </Field>
 
           {/* Name is asked in every usable case; the rest depends on the folder. */}
-          {(info?.state === 'clone' || info?.state === 'empty') && (
+          {(folder.status === 'clone' || folder.status === 'empty') && (
             <Field>
               <FieldLabel htmlFor="ws-name">Name</FieldLabel>
               <Input
                 id="ws-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder={info.state === 'clone' ? info.repoName : 'My notes'}
+                placeholder={folder.status === 'clone' ? folder.repoName : 'My notes'}
                 autoFocus
               />
             </Field>
           )}
 
           {/* Empty folder → the repo is still an open question. */}
-          {info?.state === 'empty' && (
+          {folder.status === 'empty' && (
             <>
               {/* A radio group: `variant` alone conveyed the choice visually
                   but announced nothing to a screen reader. */}

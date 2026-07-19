@@ -120,22 +120,3 @@ export function sameRepo(a, b) {
   return (a?.repoOwner ?? '').toLowerCase() === (b?.repoOwner ?? '').toLowerCase()
     && (a?.repoName ?? '').toLowerCase() === (b?.repoName ?? '').toLowerCase();
 }
-
-/**
- * The renderer-facing shape of a workspace row (see `WorkspaceEntry`).
- *
- * Lives here, beside the other pure logic, so the polarity flip is testable:
- * the column is `sync_disabled` (0 / absent = syncing, because a zero row
- * should mean normal behaviour) while everything above sees `syncEnabled`.
- * That negation happens exactly once — it used to leak into the renderer and
- * get negated three more times in the single switch that renders it.
- */
-export function projectWorkspaceRow(row) {
-  return {
-    id: row.id,
-    name: row.name,
-    path: row.path ?? null,
-    repo: `${row.repoOwner}/${row.repoName}`,
-    syncEnabled: !row.syncDisabled,
-  };
-}

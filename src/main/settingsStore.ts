@@ -43,7 +43,7 @@ import {
   getActiveWorkspaceId, setActiveWorkspace,
 } from './db/index.js';
 import { setting, agentSecret, secretValue } from './db/schema.js';
-import { projectWorkspaceRow } from './workspaceFolder.js';
+import { projectWorkspaceRow } from './workspaceRow.js';
 import { seal, unseal } from './masterKey.js';
 // Pure key policy + shape mapping, in a plain `.js` sibling so node --test can
 // exercise it without Electron. See settingsKeys.js.
