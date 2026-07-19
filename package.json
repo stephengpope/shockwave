@@ -1,6 +1,6 @@
 {
   "name": "shockwave",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "Shockwave — markdown-vault editor",
   "type": "module",
   "main": "./out/main/index.js",
@@ -67,6 +67,7 @@
     "dayjs": "^1.11.20",
     "diff": "^9.0.0",
     "drizzle-orm": "^0.45.2",
+    "electron-log": "^5.4.4",
     "electron-updater": "^6.8.9",
     "force-graph": "^1.51.4",
     "fuzzysort": "^3.1.0",

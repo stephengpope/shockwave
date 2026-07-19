@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, Menu, shell, nativeTheme, protocol
 // CJS package with lazy getter exports — named ESM imports fail at runtime
 // (cjs-module-lexer can't see them); destructure off the default instead.
 import electronUpdater from 'electron-updater';
+import updateLog from 'electron-log';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import fs from 'node:fs/promises';
@@ -951,6 +952,16 @@ ipcMain.handle('voice:getToken', async () => {
 // true. Unauthenticated GitHub API allows ~60 req/hr — a daily poll plus the
 // odd manual check is nowhere near that.
 const { autoUpdater } = electronUpdater;
+
+// electron-updater's own log of the whole check → download → stage sequence,
+// to `~/Library/Logs/<app>/main.log` (and the platform equivalents).
+//
+// Without this its failures go to stderr, which is discarded when the app is
+// launched from Finder — so a packaged build that silently refuses to update
+// gives you nothing to look at. That is exactly the state v1.0.16 shipped in:
+// diagnosing it meant relaunching from a terminal to see anything at all.
+updateLog.transports.file.level = 'info';
+autoUpdater.logger = updateLog;
 const UPDATE_REPO = { owner: 'stephengpope', repo: 'shockwave' };
 const UPDATE_POLL_MS = 24 * 60 * 60 * 1000; // daily auto-check
 
