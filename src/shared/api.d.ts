@@ -310,7 +310,6 @@ export interface ShockwaveApi {
     createWithRepo(opts: { workspacePath: string; repoName: string; name?: string; private?: boolean }): Promise<WorkspaceSetupResult>;
     addFromRepo(opts: { workspacePath: string; owner: string; repo: string; name?: string }): Promise<WorkspaceSetupResult>;
     inspectFolder(workspacePath: string): Promise<{ state: 'empty' | 'clone' | 'occupied'; repoOwner?: string; repoName?: string; defaultBranch?: string; error?: string }>;
-    addFromClone(opts: { workspacePath: string; name?: string }): Promise<WorkspaceSetupResult>;
     setUpHere(opts: { id: string; workspacePath: string }): Promise<{ ok: boolean; id?: string; path?: string; error?: string }>;
     remove(opts: { id: string }): Promise<{ ok: boolean; error?: string }>;
     forgetLocal(opts: { id: string }): Promise<{ ok: boolean }>;

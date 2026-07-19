@@ -15,6 +15,7 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { and, desc, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
 import { chatSession, message, cronState, workspace, workspaceLocal } from './schema.js';
+import { backfillWorkspaceOrigins, claimLocalRowsForThisMachine } from '../workspaceBackfill.js';
 
 let sqlite: Database.Database | null = null;
 let db: BetterSQLite3Database | null = null;
@@ -32,8 +33,16 @@ export function getDb(): BetterSQLite3Database {
   sqlite = new Database(file);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
+  // Before migrations: resolve each pre-0007 workspace's git remote into the
+  // `origin_url` column 0007 reads, so it can keep those workspaces rather than
+  // dropping them. SQL can't shell out; running it after migrations would force
+  // the repo columns nullable. No-ops on every DB that's already past 0007.
+  backfillWorkspaceOrigins(sqlite);
   const d = drizzle(sqlite);
   migrate(d, { migrationsFolder: migrationsFolder() });
+  // 0007 can't know this machine's hostname; it writes local rows with an empty
+  // one and they're claimed here.
+  claimLocalRowsForThisMachine(sqlite, hostname());
   db = d;
   return db;
 }

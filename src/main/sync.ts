@@ -20,7 +20,7 @@ import { scaffoldNewProject } from './prompt/index.js';
 // here because this module is the public face of everything sync-related.
 import { classifyFolder, parseGithubUrl, cloneUrlFor, repoMismatch } from './workspaceFolder.js';
 
-export { parseGithubUrl, cloneUrlFor, repoMismatch };
+export { classifyFolder, parseGithubUrl, cloneUrlFor, repoMismatch };
 
 const GITHUB_API = 'https://api.github.com';
 const API_HEADERS = (pat) => ({
@@ -300,52 +300,65 @@ async function setLocalIdentity(workspacePath, login, ghId) {
 }
 
 /**
- * Classify a folder the user picked, so the add-workspace dialog knows what's
- * left to ask: `empty` (clone into it), `clone` (we already know the repo), or
- * `occupied` (refuse, with a reason).
+ * Make `workspacePath` be a checkout of `owner/repo`, whatever state it starts
+ * in. ONE function because there was only ever one operation here — three call
+ * sites (add from the repo picker, add a folder that's already a clone, set an
+ * existing workspace up on this machine) each re-implemented clone-or-verify
+ * with slightly different error strings.
  *
- * The decision itself is in `workspaceFolder.js` — pure enough to test against
- * real git repos without Electron. Note it reads `.git/config`, deliberately and
- * narrowly: ONCE, at setup, to learn what a folder already is. That is not the
- * per-tick re-derivation the workspace row replaced.
+ *   empty     → clone it in
+ *   clone     → verify it's the SAME repo and leave it alone
+ *   occupied  → refuse
+ *
+ * Verifying rather than re-cloning matters: the folder may hold uncommitted
+ * work, and a matching clone needs nothing done to it.
+ *
+ * No write-probe first. `probeWrite` POSTs to `git/refs`, which a fine-grained
+ * token can be denied even when it holds Contents: Read and write — so probing
+ * rejected tokens that clone and push perfectly well. A genuine permission
+ * failure surfaces on the first push, where `isTerminalGitError` already routes
+ * it to `disabled` with GitHub's own message.
  */
-export async function inspectWorkspaceFolder(workspacePath) {
-  return classifyFolder(workspacePath);
-}
+export async function ensureCheckout({ workspacePath, owner, repo, pat }) {
+  const info = await classifyFolder(workspacePath);
 
-/**
- * Adopt a folder that is ALREADY a clone. Nothing is written — not git config,
- * not the working tree; the caller just records the row. Deliberately far
- * narrower than the `setupLink` flow this descends from, which would `git init`
- * an arbitrary folder and force a remote onto it. Here the remote must already
- * be there and is taken as given.
- */
-export async function adoptWorkspaceClone({ workspacePath, pat }) {
-  const info = await inspectWorkspaceFolder(workspacePath);
-  if (info.state !== 'clone') {
-    return { ok: false, error: info.error ?? 'That folder isn\'t a git clone.' };
+  if (info.state === 'occupied') {
+    return { ok: false, error: info.error ?? "That folder can't be used." };
   }
-  // Commits need an identity; a folder cloned outside the app may not have one
-  // set locally. Best-effort, same as the other two flows.
+
+  if (info.state === 'clone') {
+    const mismatch = repoMismatch(info, { repoOwner: owner, repoName: repo });
+    if (mismatch) return { ok: false, error: mismatch };
+  } else {
+    const cloned = await gitSpawn(workspacePath, ['clone', cloneUrlFor(owner, repo), '.'], { pat, timeoutMs: 120000 });
+    if (!cloned.ok) {
+      return { ok: false, error: cloned.stderr.trim() || `git clone exited ${cloned.code}` };
+    }
+  }
+
+  // Commits need an identity, and a folder cloned outside the app may not have
+  // one set locally. Best-effort.
   const who = await verifyPat(pat);
   if (who.ok) await setLocalIdentity(workspacePath, who.login, who.id);
 
   return {
     ok: true,
     path: workspacePath,
-    repoOwner: info.repoOwner,
-    repoName: info.repoName,
-    defaultBranch: info.defaultBranch,
+    repoOwner: owner,
+    repoName: repo,
+    // What git actually checked out, read once here — the row owns it after
+    // this, and the engine never re-derives it.
+    defaultBranch: info.state === 'clone' ? info.defaultBranch : await currentBranch(workspacePath),
   };
 }
 
 /**
- * The chosen folder must be empty before we clone into it.
+ * The chosen folder must be empty before we create a repo into it.
  *
  * The user picks this folder directly (the OS picker can create one on the
  * spot), so it always exists by the time we get here — there is no parent-plus-
  * name to join, and nothing to mkdir. Anything with contents is refused rather
- * than merged into: cloning over a populated folder is how you lose files.
+ * than merged into: scaffolding over a populated folder is how you lose files.
  */
 async function requireEmptyFolder(workspacePath) {
   const info = await classifyFolder(workspacePath);
@@ -404,32 +417,4 @@ export async function createWorkspaceRepo({ workspacePath, repoName, pat, privat
   };
 }
 
-/**
- * Clone an existing GitHub repo into a new local folder.
- */
-export async function cloneWorkspaceRepo({ workspacePath, owner, repo, pat }) {
-  // No write-probe before cloning. `probeWrite` POSTs to `git/refs`, which a
-  // fine-grained token can be denied even when it holds Contents: Read and
-  // write — so probing rejected tokens that clone and push perfectly well. The
-  // old clone flow never probed; a genuine permission failure surfaces on the
-  // first push, where `isTerminalGitError` already routes it to `disabled` with
-  // GitHub's own message.
-  const folder = await requireEmptyFolder(workspacePath);
-  if (!folder.ok) return folder;
 
-  const cloned = await gitSpawn(folder.path, ['clone', cloneUrlFor(owner, repo), '.'], { pat, timeoutMs: 120000 });
-  if (!cloned.ok) {
-    return { ok: false, error: cloned.stderr.trim() || `git clone exited ${cloned.code}` };
-  }
-
-  const who = await verifyPat(pat);
-  if (who.ok) await setLocalIdentity(folder.path, who.login, who.id);
-
-  return {
-    ok: true,
-    path: folder.path,
-    repoOwner: owner,
-    repoName: repo,
-    defaultBranch: await currentBranch(folder.path),
-  };
-}

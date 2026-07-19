@@ -107,7 +107,14 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
     setError('');
     let res;
     if (info.state === 'clone') {
-      res = await window.api.workspace.addFromClone({ workspacePath: folder, name });
+      // Same call as the picker path — `ensureCheckout` sees the folder already
+      // matches and leaves it alone, so "adopt" isn't a separate operation.
+      res = await window.api.workspace.addFromRepo({
+        workspacePath: folder,
+        owner: info.repoOwner,
+        repo: info.repoName,
+        name: name || info.repoName,
+      });
     } else if (mode === MODE.CREATE) {
       res = await window.api.workspace.createWithRepo({
         workspacePath: folder,

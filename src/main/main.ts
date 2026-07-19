@@ -36,10 +36,8 @@ import {
   verifyPat as syncVerifyPat,
   checkGit as syncCheckGit,
   createWorkspaceRepo as syncCreateWorkspaceRepo,
-  cloneWorkspaceRepo as syncCloneWorkspaceRepo,
-  inspectWorkspaceFolder as syncInspectWorkspaceFolder,
-  adoptWorkspaceClone as syncAdoptWorkspaceClone,
-  repoMismatch as syncRepoMismatch,
+  classifyFolder as syncClassifyFolder,
+  ensureCheckout as syncEnsureCheckout,
   listRepos as syncListRepos,
 } from './sync.js';
 import {
@@ -1125,25 +1123,29 @@ ipcMain.handle('workspace:createWithRepo', async (_evt, { workspacePath, repoNam
 // repo to clone in), already a clone (we know the repo — just confirm), or
 // occupied (refuse). Read-only.
 ipcMain.handle('workspace:inspectFolder', async (_evt, workspacePath) => {
-  return syncInspectWorkspaceFolder(workspacePath);
+  return syncClassifyFolder(workspacePath);
 });
 
-// Adopt a folder that's already a clone. No clone, no git writes beyond the
-// local commit identity — just records the row.
-ipcMain.handle('workspace:addFromClone', async (_evt, { workspacePath, name }) => {
+// Add a workspace for an existing repo. Covers both "clone this repo into an
+// empty folder" and "this folder is already a clone of it" — `ensureCheckout`
+// makes the folder match `owner/repo` whichever it was, so the dialog doesn't
+// need two calls and main doesn't need two handlers.
+ipcMain.handle('workspace:addFromRepo', async (_evt, { workspacePath, owner, repo, name }) => {
   const auth = await readSyncPat();
   if (!auth.ok) return auth;
-  const res = await syncAdoptWorkspaceClone({ workspacePath, pat: auth.pat });
+  // Two workspaces on one repo would sync over each other through the same
+  // branch, so the repo — not the folder — is what has to be unique.
+  const dup = findWorkspaceByRepo(owner, repo);
+  if (dup) return { ok: false, error: `${owner}/${repo} is already open as "${dup.name}".` };
+  const res = await syncEnsureCheckout({ workspacePath, owner, repo, pat: auth.pat });
   if (!res.ok) return res;
-  const dup = findWorkspaceByRepo(res.repoOwner, res.repoName);
-  if (dup) return { ok: false, error: `${res.repoOwner}/${res.repoName} is already open as "${dup.name}".` };
   return await finishWorkspaceSetup(res, name);
 });
 
 // Check out an EXISTING workspace on this machine — the workspace already has a
 // repo, it just has no local row here (a DB synced from another machine, or a
-// folder that went missing). Accepts an empty folder to clone into, or one
-// that's already a clone of the same repo.
+// folder that went missing). Same folder handling as adding one; only the
+// bookkeeping differs, since the workspace row already exists.
 ipcMain.handle('workspace:setUpHere', async (_evt, { id, workspacePath }) => {
   const auth = await readSyncPat();
   if (!auth.ok) return auth;
@@ -1151,20 +1153,10 @@ ipcMain.handle('workspace:setUpHere', async (_evt, { id, workspacePath }) => {
   if (!ws) return { ok: false, error: 'Workspace not found' };
   if (ws.path) return { ok: false, error: `"${ws.name}" is already set up at ${ws.path}.` };
 
-  const info = await syncInspectWorkspaceFolder(workspacePath);
-  if (info.state === 'clone') {
-    // Must be the SAME repo — pointing a workspace at a different remote would
-    // silently make the row lie about what the folder contains.
-    const mismatch = syncRepoMismatch(info, ws);
-    if (mismatch) return { ok: false, error: mismatch };
-  } else if (info.state === 'empty') {
-    const res = await syncCloneWorkspaceRepo({
-      workspacePath, owner: ws.repoOwner, repo: ws.repoName, pat: auth.pat,
-    });
-    if (!res.ok) return res;
-  } else {
-    return { ok: false, error: info.error ?? 'That folder can\'t be used.' };
-  }
+  const res = await syncEnsureCheckout({
+    workspacePath, owner: ws.repoOwner, repo: ws.repoName, pat: auth.pat,
+  });
+  if (!res.ok) return res;
 
   insertWorkspaceLocal(id, workspacePath);
   await notifyWorkspacesChanged();
@@ -1189,18 +1181,6 @@ ipcMain.handle('workspace:forgetLocal', async (_evt, { id }) => {
   deleteWorkspaceLocal(id);
   await notifyWorkspacesChanged();
   return { ok: true };
-});
-
-ipcMain.handle('workspace:addFromRepo', async (_evt, { workspacePath, owner, repo, name }) => {
-  const auth = await readSyncPat();
-  if (!auth.ok) return auth;
-  // Two workspaces on one repo would sync over each other through the same
-  // branch, so the repo — not the folder — is what has to be unique.
-  const dup = findWorkspaceByRepo(owner, repo);
-  if (dup) return { ok: false, error: `${owner}/${repo} is already open as "${dup.name}".` };
-  const res = await syncCloneWorkspaceRepo({ workspacePath, owner, repo, pat: auth.pat });
-  if (!res.ok) return res;
-  return await finishWorkspaceSetup(res, name);
 });
 
 // List repos visible to the configured PAT, for the per-workspace "link to

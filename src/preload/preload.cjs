@@ -422,7 +422,8 @@ contextBridge.exposeInMainWorld('api', {
      *  @param {{ workspacePath: string, repoName: string, name?: string, private?: boolean }} opts
      *  @returns {Promise<{ ok: boolean, id?: string, path?: string, repoOwner?: string, repoName?: string, error?: string }>} */
     createWithRepo: (opts) => ipcRenderer.invoke('workspace:createWithRepo', opts),
-    /** Clone an existing GitHub repo into `workspacePath` (must be empty). PAT pulled
+    /** Add a workspace for an existing repo: clones into `workspacePath` if it's
+     *  empty, or accepts it as-is when it's already a clone of that repo. PAT pulled
      *  from settings.
      *  @param {{ workspacePath: string, owner: string, repo: string, name?: string }} opts
      *  @returns {Promise<{ ok: boolean, id?: string, path?: string, repoOwner?: string, repoName?: string, error?: string }>} */
@@ -433,10 +434,6 @@ contextBridge.exposeInMainWorld('api', {
      *  @param {string} workspacePath
      *  @returns {Promise<{ state: 'empty'|'clone'|'occupied', repoOwner?: string, repoName?: string, defaultBranch?: string, error?: string }>} */
     inspectFolder: (workspacePath) => ipcRenderer.invoke('workspace:inspectFolder', workspacePath),
-    /** Adopt a folder that is already a clone. Records the row; clones nothing.
-     *  @param {{ workspacePath: string, name?: string }} opts
-     *  @returns {Promise<{ ok: boolean, id?: string, path?: string, repoOwner?: string, repoName?: string, error?: string }>} */
-    addFromClone: (opts) => ipcRenderer.invoke('workspace:addFromClone', opts),
     /** Check out an existing workspace on this machine (it has a repo but no
      *  local folder here). Clones into an empty folder, or accepts one that's
      *  already a clone of the same repo.
