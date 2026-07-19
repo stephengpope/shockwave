@@ -79,6 +79,12 @@ export const workspaceLocal = sqliteTable('workspace_local', {
 }, (t) => ({
   pk: primaryKey({ columns: [t.workspaceId, t.machine] }),
   byPath: index('idx_workspace_local_path').on(t.machine, t.path),
+  // NOTE: `idx_workspace_local_active` — the PARTIAL unique index that makes
+  // two-active-on-one-machine unrepresentable — is created in
+  // drizzle/0007_workspace_repo.sql and CANNOT be declared here: drizzle-kit
+  // has no partial-index syntax. It is therefore invisible to schema diffing,
+  // so a generated migration would emit a DROP for it and silently delete the
+  // invariant. Hand-carry it, the same way `message_fts` is.
 }));
 
 // Scalar app preferences, one row per leaf key (dotted path, e.g.

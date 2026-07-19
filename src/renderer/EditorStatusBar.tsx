@@ -49,8 +49,13 @@ function SyncStatusIcon({ syncStatus, onOpenConflicts, onEnableSync }) {
   }
 
   // Conflicts → yellow triangle, click opens the resolve view.
-  if (status === 'paused' && conflictCount > 0) {
-    const title = `${conflictCount} conflict${conflictCount === 1 ? '' : 's'} — click to resolve`;
+  // Handled unconditionally. Gating on `conflictCount > 0` let a paused engine
+  // fall through to the block below, which renders a green "Synced" check off
+  // `lastSyncAt` — the engine stopped, the UI claiming it's up to date.
+  if (status === 'paused') {
+    const title = conflictCount > 0
+      ? `${conflictCount} conflict${conflictCount === 1 ? '' : 's'} — click to resolve`
+      : (detail || 'Sync paused');
     return (
       <button
         type="button"
@@ -125,11 +130,7 @@ export default function EditorStatusBar({
   const saveTitle = isSaved ? 'All changes saved' : 'Saving…';
 
   return (
-    <div
-      className="flex items-center gap-4 border-t border-border px-4 py-[5px] text-[11.5px] text-muted-foreground"
-      role="status"
-      aria-live="polite"
-    >
+    <div className="flex items-center gap-4 border-t border-border px-4 py-[5px] text-[11.5px] text-muted-foreground">
       <div className="flex items-center gap-1">
         <button type="button" className={statusBtn} onClick={onUndo} disabled={!canUndo} title="Undo" aria-label="Undo">
           <RotateCcwIcon size={13} />
@@ -163,7 +164,10 @@ export default function EditorStatusBar({
       <span>{formatNum(words)} words</span>
       <span>{formatNum(chars)} characters</span>
 
-      <span className="ml-auto flex items-center gap-2">
+      {/* The live region is scoped to save + sync state. It used to wrap the
+          WHOLE bar, so every word-count tick was announced while typing, and
+          the undo/redo/view-toggle buttons lived inside a live region. */}
+      <span className="ml-auto flex items-center gap-2" role="status" aria-live="polite">
         <span
           className={cn('flex size-5 items-center justify-center', isSaved ? 'text-success' : 'text-muted-2')}
           title={saveTitle}

@@ -20,7 +20,7 @@ const DEFAULT_CANONICAL: Settings = {
   codingAgent: { provider: DEFAULT_PROVIDER_SLUG, model: 'claude-sonnet-4-5', providerKeys: {}, baseUrl: '', thinkingLevel: 'medium' },
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
-  sync: { pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] },
+  sync: { pat: '', pullIntervalSeconds: 10 },
   // Cron is managed in main via window.api.cron.* (main persists the slice); the
   // renderer never writes it through persistSettings. Present here only to satisfy
   // the Settings type + hydrate a default before disk load.
@@ -35,6 +35,10 @@ const DEFAULT_CANONICAL: Settings = {
 };
 
 interface UseSettingsOpts {
+  /** Called when MAIN pushes a new workspace list (create / remove / set-up-here
+   *  / sync toggle). The list lives in App, so this hands it over rather than
+   *  duplicating the state here. */
+  onWorkspacesPushed?: (workspaces: any[], activeWorkspaceId: string | null) => void;
   // Needed for onSyncChange to restart the sync engine for the active workspace.
   activeWorkspacePath: string | null;
 }
@@ -46,7 +50,7 @@ interface UseSettingsOpts {
 // boot. Non-settings persisted fields (workspaces, viewMode, sidebar widths)
 // flow through persistSettings too; their UI state lives in App.
 
-export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
+export function useSettings({ activeWorkspacePath, onWorkspacesPushed }: UseSettingsOpts) {
   const [themeMode, setThemeMode] = useState<ThemeMode>(THEME_MODES.SYSTEM);
   const [hideLineNumbers, setHideLineNumbers] = useState(false);
   const [treePanel, setTreePanel] = useState<TreePanel>({ content: 'off', count: 10 });
@@ -63,7 +67,7 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
   const [codingAgentSettings, setCodingAgentSettings] = useState<CodingAgentSettings>(DEFAULT_CANONICAL.codingAgent);
   const [agentSecrets, setAgentSecrets] = useState<AgentSecret[]>([]);
   const [transcription, setTranscription] = useState<Transcription>({ provider: 'assemblyai', apiKey: '' });
-  const [sync, setSync] = useState<SyncSettings>({ pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] });
+  const [sync, setSync] = useState<SyncSettings>({ pat: '', pullIntervalSeconds: 10 });
   const syncRef = useSyncRef(sync);
 
   // Local cache of everything persisted, for rendering and for building whole
@@ -222,6 +226,14 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
   useEffect(() => {
     const off = window.api.settings.onChanged(({ keys, settings }: { keys: string[]; settings: any }) => {
       const changed = new Set(keys);
+      // Workspaces are MAIN-owned now — only main creates, removes, or flips
+      // sync on one — so main pushing them is the renderer's only correct
+      // source. It used to be sent and silently dropped here, which is why the
+      // list had to be hand-patched at four call sites and could go stale.
+      if (changed.has('workspaces') && Array.isArray(settings.workspaces)) {
+        onWorkspacesPushed?.(settings.workspaces, settings.activeWorkspaceId ?? null);
+        settingsRef.current = { ...settingsRef.current, workspaces: settings.workspaces };
+      }
       if (changed.has('agentSecrets')) {
         const secrets: AgentSecret[] = Array.isArray(settings.agentSecrets) ? settings.agentSecrets : [];
         setAgentSecrets(secrets);
@@ -250,27 +262,12 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
       // update; they're in MAIN_OWNED_KEYS so they're never written back either.
     });
     return off;
-  }, [syncRef]);
+  }, [syncRef, onWorkspacesPushed]);
 
   const onTranscriptionChange = useCallback(async (next: Transcription) => {
     setTranscription(next);
     await persistSettings({ transcription: next });
   }, [persistSettings]);
-
-  // Per-workspace sync disable toggle. Persisted via IPC elsewhere; we mirror the
-  // disabled-set into local state + keep settingsRef coherent so a later save
-  // doesn't write a stale sync.
-  const onSyncDisabledChange = useCallback((workspaceId: string, disabled: boolean) => {
-    setSync((prev) => {
-      const cur = new Set(prev.disabledWorkspaceIds || []);
-      if (disabled) cur.add(workspaceId);
-      else cur.delete(workspaceId);
-      const next = { ...prev, disabledWorkspaceIds: [...cur] };
-      syncRef.current = next;
-      settingsRef.current = { ...settingsRef.current, sync: next };
-      return next;
-    });
-  }, [syncRef]);
 
   const onSyncChange = useCallback(async (next: SyncSettings) => {
     setSync(next);
@@ -289,7 +286,6 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     const sy: SyncSettings = {
       pat: disk.sync?.pat || '',
       pullIntervalSeconds: typeof disk.sync?.pullIntervalSeconds === 'number' && disk.sync.pullIntervalSeconds > 0 ? disk.sync.pullIntervalSeconds : 10,
-      disabledWorkspaceIds: Array.isArray(disk.sync?.disabledWorkspaceIds) ? disk.sync.disabledWorkspaceIds : [],
     };
     const tm: ThemeMode = disk.appearance?.themeMode || THEME_MODES.SYSTEM;
     const hln = !!disk.appearance?.hideLineNumbers;
@@ -344,6 +340,6 @@ export function useSettings({ activeWorkspacePath }: UseSettingsOpts) {
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
-    onSyncChange, onSyncDisabledChange,
+    onSyncChange,
   };
 }

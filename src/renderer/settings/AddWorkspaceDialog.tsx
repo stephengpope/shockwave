@@ -32,7 +32,10 @@ const MODE = { CREATE: 'create', EXISTING: 'existing' };
 // a hyphen. Applied so the repo name tracks the display name until the user
 // takes it over, rather than being rejected by the API after the fact.
 function slugify(name: string) {
-  return name.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return name.trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')   // GitHub rejects leading/trailing dots too
+    .replace(/\.{2,}/g, '.');        // ...and consecutive dots
 }
 
 export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
@@ -50,6 +53,7 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
   const [isPrivate, setIsPrivate] = useState(true);
   const [picked, setPicked] = useState<any>(null);
   const [repos, setRepos] = useState<any[] | null>(null);
+  const [reposError, setReposError] = useState('');
   const [repoFilter, setRepoFilter] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -58,22 +62,31 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
     if (!open) return;
     setFolder(''); setInfo(null); setInspecting(false);
     setMode(MODE.CREATE); setName(''); setRepoName(''); setRepoNameTouched(false);
-    setIsPrivate(true); setPicked(null); setRepoFilter(''); setBusy(false); setError('');
+    setIsPrivate(true); setPicked(null); setRepoFilter(''); setCursor(0); setBusy(false); setError(''); setReposError('');
+    // `repos` must reset too. The dialog is permanently mounted inside
+    // WorkspacesSection, so a list left as [] by one failed fetch survived every
+    // reopen — one network blip and "No matching repositories." for the rest of
+    // the session.
+    setRepos(null);
   }, [open]);
 
   // Only the empty-folder path needs the repo list, and it's a network call —
-  // fetched on first entry to that state and cached for the dialog's life.
+  // fetched on first entry to that state, then cached until the dialog reopens
+  // (it stays MOUNTED inside WorkspacesSection, so the reset effect is what
+  // clears it, not an unmount).
   const needsRepoList = info?.state === 'empty' && mode === MODE.EXISTING;
   useEffect(() => {
-    if (!open || !needsRepoList || repos !== null) return;
+    if (!open || !needsRepoList || repos !== null || reposError) return;
     let cancelled = false;
     window.api.sync.listRepos().then((res) => {
       if (cancelled) return;
       if (res.ok) setRepos(res.repos ?? []);
-      else { setRepos([]); setError(res.error ?? 'Could not list repositories'); }
+      // Leave `repos` null on failure so the effect can run again — setting []
+      // would satisfy the `repos !== null` guard and never retry.
+      else setReposError(res.error ?? 'Could not list repositories');
     });
     return () => { cancelled = true; };
-  }, [open, needsRepoList, repos]);
+  }, [open, needsRepoList, repos, reposError]);
 
   const filteredRepos = useMemo(() => {
     if (!repos) return [];
@@ -81,6 +94,22 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
     if (!q) return repos.slice(0, 50);
     return repos.filter((r) => r.full_name.toLowerCase().includes(q)).slice(0, 50);
   }, [repos, repoFilter]);
+
+  // Keyboard cursor into the filtered list (aria-activedescendant target).
+  const [cursor, setCursor] = useState(0);
+  const onRepoKeyDown = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setCursor((c) => {
+        const n = filteredRepos.length;
+        if (!n) return 0;
+        return e.key === 'ArrowDown' ? (c + 1) % n : (c - 1 + n) % n;
+      });
+    } else if (e.key === 'Enter' && filteredRepos[cursor]) {
+      e.preventDefault();
+      setPicked(filteredRepos[cursor]);
+    }
+  };
 
   const chooseFolder = async () => {
     const dir = await window.api.openFolder();
@@ -92,7 +121,7 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
     setInspecting(false);
     setInfo(res);
     // A clone answers the repo question, so seed the name from it.
-    if (res.state === 'clone' && !name) setName(res.repoName);
+    if (res.state === 'clone' && !name) setName(res.repoName ?? '');
   };
 
   const canSubmit = !busy && !inspecting && (
@@ -132,7 +161,7 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
     }
     setBusy(false);
     if (!res.ok) { setError(res.error ?? 'Could not add workspace'); return; }
-    await onAdded(res.id, res.path, name || res.repoName);
+    await onAdded(res.id);
     onClose();
   };
 
@@ -141,7 +170,7 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
     : 'Add workspace';
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v && !busy) onClose(); }}>
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle>Add workspace</DialogTitle>
@@ -197,8 +226,12 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
           {/* Empty folder → the repo is still an open question. */}
           {info?.state === 'empty' && (
             <>
-              <div className="flex gap-2">
+              {/* A radio group: `variant` alone conveyed the choice visually
+                  but announced nothing to a screen reader. */}
+              <div className="flex gap-2" role="radiogroup" aria-label="Repository source">
                 <Button
+                  role="radio"
+                  aria-checked={mode === MODE.CREATE}
                   variant={mode === MODE.CREATE ? 'default' : 'outline'}
                   size="sm"
                   className="flex-1"
@@ -207,6 +240,8 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
                   <Sparkles /> Create new repo
                 </Button>
                 <Button
+                  role="radio"
+                  aria-checked={mode === MODE.EXISTING}
                   variant={mode === MODE.EXISTING ? 'default' : 'outline'}
                   size="sm"
                   className="flex-1"
@@ -273,7 +308,10 @@ export default function AddWorkspaceDialog({ open, onClose, onAdded }) {
           {error && <ErrorMessage>{error}</ErrorMessage>}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+          {/* Enabled during a clone on purpose. It doesn't abort — main finishes
+              and the workspace appears in the list — but a long clone used to
+              lock the dialog with no progress and no way out. */}
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={submit} disabled={!canSubmit}>{submitLabel}</Button>
         </DialogFooter>
       </DialogContent>

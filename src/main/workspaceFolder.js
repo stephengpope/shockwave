@@ -38,13 +38,9 @@ export function cloneUrlFor(owner, repo) {
 function git(cwd, args) {
   return new Promise((resolve) => {
     let stdout = '';
-    let child;
-    try {
-      child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
-    } catch {
-      resolve({ ok: false, stdout: '' });
-      return;
-    }
+    // No try/catch around spawn: it doesn't throw synchronously for a missing
+    // binary, it emits 'error', which is handled below.
+    const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
     child.stdout.on('data', (b) => { stdout += b.toString(); });
     child.on('error', () => resolve({ ok: false, stdout: '' }));
     child.on('close', (code) => resolve({ ok: code === 0, stdout }));
@@ -108,6 +104,38 @@ export async function classifyFolder(workspacePath, runGit = git) {
  * Returns null when it matches, or the error string when it doesn't.
  */
 export function repoMismatch(info, ws) {
-  if (info.repoOwner === ws.repoOwner && info.repoName === ws.repoName) return null;
+  if (sameRepo(info, ws)) return null;
   return `That folder is a clone of ${info.repoOwner}/${info.repoName}, not ${ws.repoOwner}/${ws.repoName}.`;
+}
+
+/**
+ * GitHub treats owner and repo names case-insensitively — `Acme/Widgets` and
+ * `acme/widgets` are one repo. Comparing with `===` rejected a clone whose
+ * `.git/config` merely cased the URL differently from the picker's listing, and
+ * let the same repo be added twice under two casings, which is exactly the
+ * "two workspaces syncing one repo through one branch" state the duplicate
+ * guard exists to prevent.
+ */
+export function sameRepo(a, b) {
+  return (a?.repoOwner ?? '').toLowerCase() === (b?.repoOwner ?? '').toLowerCase()
+    && (a?.repoName ?? '').toLowerCase() === (b?.repoName ?? '').toLowerCase();
+}
+
+/**
+ * The renderer-facing shape of a workspace row (see `WorkspaceEntry`).
+ *
+ * Lives here, beside the other pure logic, so the polarity flip is testable:
+ * the column is `sync_disabled` (0 / absent = syncing, because a zero row
+ * should mean normal behaviour) while everything above sees `syncEnabled`.
+ * That negation happens exactly once — it used to leak into the renderer and
+ * get negated three more times in the single switch that renders it.
+ */
+export function projectWorkspaceRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    path: row.path ?? null,
+    repo: `${row.repoOwner}/${row.repoName}`,
+    syncEnabled: !row.syncDisabled,
+  };
 }

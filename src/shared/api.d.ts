@@ -122,6 +122,8 @@ export interface WorkspaceSetupResult {
   ok: boolean;
   id?: string;
   path?: string;
+  /** Present when the workspace was created or added; omitted by `setUpHere`,
+   *  which only records a checkout for a workspace that already exists. */
   repoOwner?: string;
   repoName?: string;
   error?: string;
@@ -177,7 +179,6 @@ export interface ChatSearchHit {
 export interface ShockwaveApi {
   // Dialogs
   openFolder(): Promise<string | null>;
-  scaffoldWorkspace(workspacePath: string): Promise<void>;
 
   // Filesystem reads
   readTree(dirPath: string): Promise<TreeNode[]>;
@@ -310,7 +311,7 @@ export interface ShockwaveApi {
     createWithRepo(opts: { workspacePath: string; repoName: string; name?: string; private?: boolean }): Promise<WorkspaceSetupResult>;
     addFromRepo(opts: { workspacePath: string; owner: string; repo: string; name?: string }): Promise<WorkspaceSetupResult>;
     inspectFolder(workspacePath: string): Promise<{ state: 'empty' | 'clone' | 'occupied'; repoOwner?: string; repoName?: string; defaultBranch?: string; error?: string }>;
-    setUpHere(opts: { id: string; workspacePath: string }): Promise<{ ok: boolean; id?: string; path?: string; error?: string }>;
+    setUpHere(opts: { id: string; workspacePath: string }): Promise<WorkspaceSetupResult>;
     remove(opts: { id: string }): Promise<{ ok: boolean; error?: string }>;
     forgetLocal(opts: { id: string }): Promise<{ ok: boolean }>;
   };
@@ -327,7 +328,7 @@ export interface ShockwaveApi {
     resolveConflict(workspacePath: string, relPath: string): Promise<string[]>;
     keepConflict(workspacePath: string, relPath: string): Promise<string[]>;
     resetConflict(workspacePath: string, relPath: string): Promise<string[]>;
-    keepAll(workspacePath: string): Promise<void>;
+    keepAll(workspacePath: string): Promise<string[]>;
     resetToRemote(workspacePath: string): Promise<void>;
     flushDone(token: number): Promise<void>;
     onFlushRequest(cb: (token: number) => void): Unsubscribe;

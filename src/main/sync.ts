@@ -18,9 +18,9 @@ import { scaffoldNewProject } from './prompt/index.js';
 // Folder classification + GitHub URL parsing live in a plain `.js` sibling with
 // no electron import, so `node --test` can exercise them directly. Re-exported
 // here because this module is the public face of everything sync-related.
-import { classifyFolder, parseGithubUrl, cloneUrlFor, repoMismatch } from './workspaceFolder.js';
+import { classifyFolder, cloneUrlFor, repoMismatch } from './workspaceFolder.js';
 
-export { classifyFolder, parseGithubUrl, cloneUrlFor, repoMismatch };
+export { classifyFolder };
 
 const GITHUB_API = 'https://api.github.com';
 const API_HEADERS = (pat) => ({
@@ -330,9 +330,33 @@ export async function ensureCheckout({ workspacePath, owner, repo, pat }) {
     const mismatch = repoMismatch(info, { repoOwner: owner, repoName: repo });
     if (mismatch) return { ok: false, error: mismatch };
   } else {
-    const cloned = await gitSpawn(workspacePath, ['clone', cloneUrlFor(owner, repo), '.'], { pat, timeoutMs: 120000 });
-    if (!cloned.ok) {
-      return { ok: false, error: cloned.stderr.trim() || `git clone exited ${cloned.code}` };
+    // init + fetch + checkout rather than `git clone <url> .`, because clone
+    // demands a TRULY empty directory. `classifyFolder` calls a folder holding
+    // only dotfiles "empty" — deliberately, since `.DS_Store` or a failed
+    // clone's leftovers shouldn't send the user off to delete invisible files —
+    // so clone refused folders we'd just told the user were fine.
+    const init = await gitSpawn(workspacePath, ['init', '-q'], { timeoutMs: 5000 });
+    if (!init.ok) return { ok: false, error: init.stderr.trim() || 'git init failed' };
+
+    const add = await gitSpawn(workspacePath, ['remote', 'add', 'origin', cloneUrlFor(owner, repo)], { timeoutMs: 5000 });
+    if (!add.ok && !/exists/i.test(add.stderr)) {
+      return { ok: false, error: add.stderr.trim() || 'could not set origin' };
+    }
+
+    const fetched = await gitSpawn(workspacePath, ['fetch', '-q', 'origin'], { pat, timeoutMs: 120000 });
+    if (!fetched.ok) {
+      return { ok: false, error: fetched.stderr.trim() || `git fetch exited ${fetched.code}` };
+    }
+
+    // An empty repo has no branch to check out; the row keeps its default and
+    // the engine's first tick pushes the initial commit.
+    const head = await gitSpawn(workspacePath, ['rev-parse', '--verify', '-q', 'origin/HEAD'], { timeoutMs: 5000 });
+    const remoteBranch = head.ok
+      ? (await gitSpawn(workspacePath, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { timeoutMs: 5000 })).stdout.trim().replace(/^origin\//, '')
+      : '';
+    if (remoteBranch) {
+      const co = await gitSpawn(workspacePath, ['checkout', '-q', '-B', remoteBranch, `origin/${remoteBranch}`], { timeoutMs: 60000 });
+      if (!co.ok) return { ok: false, error: co.stderr.trim() || 'could not check out the repo' };
     }
   }
 
@@ -413,7 +437,6 @@ export async function createWorkspaceRepo({ workspacePath, repoName, pat, privat
     repoOwner: owner,
     repoName: repo,
     defaultBranch: await currentBranch(folder.path),
-    htmlUrl: created.html_url,
   };
 }
 

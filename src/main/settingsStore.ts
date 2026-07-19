@@ -37,12 +37,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app, safeStorage, BrowserWindow } from 'electron';
-import { and, eq, like, inArray, notInArray } from 'drizzle-orm';
+import { and, eq, like, notInArray } from 'drizzle-orm';
 import {
-  getDb, listWorkspaces, updateWorkspaces, listSyncDisabledIds,
+  getDb, listWorkspaces, updateWorkspaces,
   getActiveWorkspaceId, setActiveWorkspace,
 } from './db/index.js';
 import { setting, agentSecret, secretValue } from './db/schema.js';
+import { projectWorkspaceRow } from './workspaceFolder.js';
 import { seal, unseal } from './masterKey.js';
 // Pure key policy + shape mapping, in a plain `.js` sibling so node --test can
 // exercise it without Electron. See settingsKeys.js.
@@ -97,7 +98,7 @@ export const DEFAULT_SETTINGS = {
   },
   agentSecrets: [],
   transcription: { provider: 'assemblyai', apiKey: '' },
-  sync: { pat: '', pullIntervalSeconds: 10, disabledWorkspaceIds: [] },
+  sync: { pat: '', pullIntervalSeconds: 10 },
   cron: { enabled: false, maxCatchupHours: 36, maxRunMinutes: 30 },
   chatSidebarOpen: false,
   chatSidebarWidth: 360,
@@ -174,11 +175,7 @@ export async function readSettings(): Promise<any> {
   // on this machine — the list renders it with a "set up here" action rather
   // than hiding it. `repo` is display-only ("owner/name"); the columns behind it
   // stay main-only.
-  merged.workspaces = listWorkspaces().map((w: any) => ({
-    id: w.id, name: w.name, path: w.path,
-    repo: `${w.repoOwner}/${w.repoName}`,
-  }));
-  merged.sync.disabledWorkspaceIds = listSyncDisabledIds();
+  merged.workspaces = listWorkspaces().map(projectWorkspaceRow);
   // Derived, like the list above: it's `workspace_local.active` on THIS machine,
   // not a stored scalar. As a `setting` row it was a foreign key hiding in a
   // key-value store — global when it should be per-machine, and free to name a
@@ -233,16 +230,6 @@ export async function writeSettings(patch: any, opts: { notify?: boolean } = {})
       // into per-slug rows that can never be removed.
       const { providerKeys, ...rest } = value as any;
       if (isPlainObject(providerKeys)) providerKeysPatch = providerKeys;
-      flattenInto(key, rest, flat);
-      continue;
-    }
-    if (key === 'sync' && isPlainObject(value)) {
-      // `disabledWorkspaceIds` is DERIVED from workspace.sync_disabled and
-      // authored only by the sync:setWorkspaceDisabled IPC. The renderer echoes
-      // it back inside the sync object because it arrives on read; dropping it
-      // here means that echo is a no-op instead of a rewrite of every workspace
-      // row. Same treatment as `workspaces` and `activeWorkspaceId`.
-      const { disabledWorkspaceIds: _ignored, ...rest } = value as any;
       flattenInto(key, rest, flat);
       continue;
     }
@@ -448,6 +435,14 @@ export async function importLegacySettingsIfNeeded(): Promise<boolean> {
   for (const key of Object.keys(DEFAULT_SETTINGS)) {
     if (key in parsed) known[key] = parsed[key];
   }
+  // Workspaces can't come across. A legacy entry is `{id, name, path}` — no
+  // repo — and a workspace without one is unrepresentable now. Leaving them in
+  // would be worse than dropping them: `writeSettings` routes `workspaces` to
+  // `updateWorkspaces`, which by design cannot insert, so they'd vanish
+  // silently while appearing to import. The folders and their repos are
+  // untouched on disk; re-adding one is Settings → Workspaces → Add.
+  delete known.workspaces;
+  delete known.activeWorkspaceId;
   // Retired NESTED keys. Can't be caught by shape-matching against
   // DEFAULT_SETTINGS, because providerKeys is an open-ended map — a recursive
   // filter would delete real provider keys along with the cruft.

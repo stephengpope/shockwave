@@ -50,9 +50,8 @@ let state: any = {
   pat: null,
   intervalMs: 10_000,
   windowId: null,           // BrowserWindow target for status + flush events
-  ticking: false,           // a tick is currently executing
   intervalHandle: null,
-  pendingTickPromise: null, // resolves when current tick finishes (for stop())
+  pendingTickPromise: null, // the serial op chain; stop()/drain await it
   backoffStep: 0,           // network-error backoff: 0 = none, 1/2/3 = 10s/30s/60s
   retryAt: null,            // timestamp before which ticks are skipped (backing off)
 };
@@ -80,12 +79,20 @@ function isTerminalGitError(stderr) {
   const s = (stderr || '').toLowerCase();
   return (
     s.includes('gh001') || s.includes('file size limit') || s.includes('large files detected') ||  // file too big
-    s.includes('gh013') || s.includes('push protection') || s.includes('secret') ||                // secret scanning
+    s.includes('gh013') || s.includes('push protection') ||                                        // secret scanning
+    s.includes('push declined due to a detected secret') ||
     s.includes('protected branch') || s.includes('pre-receive hook declined') ||                   // branch protection
-    isAuthError(s) || s.includes('permission denied') || s.includes('403') ||                      // auth / perms
+    isAuthError(s) ||                                                                              // auth
+    s.includes('permission to') ||                                                                 // "Permission to o/r denied"
+    s.includes('http 403') || s.includes('status code 403') ||                                     // perms
     s.includes('repository not found')                                                             // bad repo / no access
   );
 }
+// Deliberately NOT matched, because they fire on innocent output and DISABLE
+// sync — the opposite of the "when unsure, keep retrying" bias above:
+//   'secret'           — any repo with a `secrets/` folder in a changed path
+//   '403'              — any SHA or byte count containing those digits
+//   'permission denied' — a local file-mode problem, which retrying can fix
 
 let currentStatus = { status: STATUS.UNCONFIGURED, detail: '', lastSyncAt: null, repoUrl: null, conflicts: [] };
 
@@ -101,6 +108,13 @@ function emitStatus(patch) {
 
 export function getCurrentStatus() {
   return currentStatus;
+}
+
+/** The workspace the engine is bound to right now, or null. Callers that remove
+ *  a workspace need this: the engine captured its path at start(), so deleting
+ *  the row doesn't reach it. */
+export function boundWorkspacePath(): string | null {
+  return state.running ? state.workspacePath : null;
 }
 
 // A transient/network error: don't disable — back off (10s → 30s → 1m) and keep
@@ -160,16 +174,53 @@ export function handleFlushDone(token) {
   entry.resolve(undefined);
 }
 
+// ─── Serialization ─────────────────────────────────────────────────────────
+//
+// Every git operation that touches the index — the tick, and each
+// conflict-resolution op — runs through this one chain. They used to
+// hand-manage `state.ticking`: the resolution ops did
+// `await pendingTickPromise; state.ticking = true;`, and the interval could
+// fire in the gap between those two statements, so a tick and a
+// `git checkout --ours` ran against the same index at once. Worse, the op's
+// `finally` cleared `ticking` while the real tick was still in flight,
+// unblocking a third.
+//
+// `pendingTickPromise` now tracks the whole chain, so `stop()` and
+// `drainBeforeQuit()` wait for resolution ops too — previously a
+// `git checkout --theirs` could outlive app quit.
+
+let opChain: Promise<any> = Promise.resolve();
+let queueDepth = 0;
+
+function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+  queueDepth++;
+  const run = opChain.then(fn, fn);
+  opChain = run.then(() => { queueDepth--; }, () => { queueDepth--; });
+  state.pendingTickPromise = opChain;
+  return run;
+}
+
+/** Is any git op running or queued? The interval SKIPS when busy (queuing would
+ *  pile up ticks); user-driven ops queue instead. */
+function isBusy() {
+  return queueDepth > 0;
+}
+
 // ─── Tick ──────────────────────────────────────────────────────────────────
 
 // The list of unmerged (conflicted) files, workspace-relative POSIX paths.
 // `-z` is required: the default output escapes/quotes paths with spaces or
 // non-ASCII (e.g. `"My Folder/note \303\251.md"`), which we'd then mis-parse.
 // NUL-separated output is raw. Empty array = no conflicts.
+// Returns { ok, files }. `ok:false` means git couldn't tell us — a stale
+// index.lock, a timeout, an FS error — which is NOT the same as "no conflicts"
+// and must never be treated as one. This is the tick's step-0 defense: reading
+// a failure as "clean" lets `git add -A` stage files with their <<<<<<< markers
+// still in them and push the result. It used to `return []`.
 async function listConflicts(workspacePath) {
-  const res = await gitSpawn(workspacePath, ['diff', '--name-only', '--diff-filter=U', '-z'], { timeoutMs: 10_000 });
-  if (!res.ok) return [];
-  return res.stdout.split('\0').filter((p) => p.length > 0);
+  const res = await gitLocking(workspacePath, ['diff', '--name-only', '--diff-filter=U', '-z'], { timeoutMs: 10_000 });
+  if (!res.ok) return { ok: false, files: [] };
+  return { ok: true, files: res.stdout.split('\0').filter((p) => p.length > 0) };
 }
 
 // Treat a stderr blob as an auth failure. Same heuristic used in several places.
@@ -231,14 +282,17 @@ async function commitDirty(workspacePath) {
   return true;
 }
 
-async function runTick() {
-  if (!state.running) return;
-  if (state.ticking) return; // serial: never overlap a tick with itself
-  if (state.retryAt && Date.now() < state.retryAt) return; // backing off after a network error
-  state.ticking = true;
-  let tickResolve;
-  state.pendingTickPromise = new Promise<any>((res) => { tickResolve = res; });
+function runTick() {
+  if (!state.running) return Promise.resolve();
+  if (isBusy()) return Promise.resolve();                  // a tick or a resolution op is already running
+  if (state.retryAt && Date.now() < state.retryAt) return Promise.resolve(); // backing off after a network error
+  // A throw in here (a torn-down window during emitStatus, say) used to become
+  // an unhandled rejection with no offline transition — the three call sites'
+  // `.catch(enterOffline)` were dead, because the old runTick never rejected.
+  return exclusive(tickBody).catch(() => enterOffline());
+}
 
+async function tickBody() {
   try {
     // 0. If there are unmerged files (a merge is paused on conflicts), do NOT
     // touch the tree — `git add -A` here would stage the marker-laden files and
@@ -246,8 +300,15 @@ async function runTick() {
     // to resolve each (resolveConflict → git add). Once the list is empty, the
     // next tick falls through and commitDirty's commit concludes the merge.
     const conflicts = await listConflicts(state.workspacePath);
-    if (conflicts.length > 0) {
-      emitStatus({ status: STATUS.PAUSED, detail: `${conflicts.length} conflict${conflicts.length > 1 ? 's' : ''} — resolve to continue`, conflicts });
+    if (!conflicts.ok) {
+      // Git couldn't answer. Backing off is the only safe move — proceeding
+      // would run `git add -A` without knowing whether markers are staged.
+      enterOffline();
+      return;
+    }
+    if (conflicts.files.length > 0) {
+      const n = conflicts.files.length;
+      emitStatus({ status: STATUS.PAUSED, detail: `${n} conflict${n > 1 ? 's' : ''} — resolve to continue`, conflicts: conflicts.files });
       return;
     }
 
@@ -299,13 +360,14 @@ async function runTick() {
         await requestFlush();
         if (!(await commitDirty(state.workspacePath))) return;
         emitStatus({ status: STATUS.SYNCING, detail: 'Pulling from origin' });
-        const merge = await gitSpawn(state.workspacePath, ['merge', `origin/${branchName}`], { timeoutMs: 60_000 });
+        const merge = await gitLocking(state.workspacePath, ['merge', `origin/${branchName}`], { timeoutMs: 60_000 });
         if (!merge.ok) {
           // Conflicts → unmerged files + MERGE_HEAD left in place. Surface the
           // list and stop; the user resolves, then a later tick concludes it.
           const merged = await listConflicts(state.workspacePath);
-          if (merged.length > 0) {
-            emitStatus({ status: STATUS.PAUSED, detail: `${merged.length} conflict${merged.length > 1 ? 's' : ''} — resolve to continue`, conflicts: merged });
+          if (merged.ok && merged.files.length > 0) {
+            const n = merged.files.length;
+            emitStatus({ status: STATUS.PAUSED, detail: `${n} conflict${n > 1 ? 's' : ''} — resolve to continue`, conflicts: merged.files });
             return;
           }
           handleGitFailure(merge.stderr, 'git merge');
@@ -329,12 +391,15 @@ async function runTick() {
         pat: state.pat,
         timeoutMs: 60_000,
       });
+      // Any non-zero push is a failure. git exits 0 for "Everything
+      // up-to-date", so there is nothing benign to filter out here. This used to
+      // let stderr merely CONTAINING "up-to-date" fall through to the success
+      // path below — reporting a green synced cloud for work that never left the
+      // machine — behind a `push.code !== 0` test that was dead anyway (`ok` IS
+      // `code === 0`).
       if (!push.ok) {
-        const stderr = push.stderr.toLowerCase();
-        if (push.code !== 0 && !stderr.includes('up-to-date') && !stderr.includes('nothing to')) {
-          handleGitFailure(push.stderr, 'git push');  // big file/auth/etc → disabled; network → offline+retry
-          return;
-        }
+        handleGitFailure(push.stderr, 'git push');  // big file/auth/etc → disabled; network → offline+retry
+        return;
       }
     }
 
@@ -343,39 +408,65 @@ async function runTick() {
     state.retryAt = null;
     emitStatus({ status: STATUS.IDLE, detail: '', lastSyncAt: Date.now() });
   } finally {
-    state.ticking = false;
-    tickResolve();
-    state.pendingTickPromise = null;
+    // Nothing to release — `exclusive` owns the chain and clears the queue depth.
   }
 }
 
 // ─── Conflict resolution (driven by the renderer's conflict view) ───────────
+//
+// Every entry point below takes a path from the RENDERER and runs index- or
+// worktree-mutating git in it — `checkout --ours`, `reset --hard`. They're only
+// ever meaningful for the workspace the engine is currently bound to, so they
+// verify that rather than trusting the argument. Without this, a call arriving
+// after `stop()` (workspace switch, window reload) would operate on an
+// arbitrary directory using another workspace's branch and PAT.
+function boundTo(workspacePath) {
+  return state.running && !!state.workspacePath && workspacePath === state.workspacePath;
+}
 
-/** Current unmerged files, workspace-relative. Used by `sync:listConflicts`. */
+/** Current unmerged files, workspace-relative. Used by `sync:listConflicts`.
+ *  An unanswerable git returns [] here — the renderer's conflict VIEW showing
+ *  nothing is harmless, unlike the tick, which must not write on that basis. */
 export async function getConflicts(workspacePath) {
-  return listConflicts(workspacePath);
+  if (!boundTo(workspacePath)) return [];
+  return (await listConflicts(workspacePath)).files;
 }
 
 // Run a sequence of staging commands (checkout/add) under the tick guard, then
 // re-list conflicts. If any remain, emit the paused status; if none remain,
 // kick a tick so the merge commit + push happen immediately. Serialized with
 // the tick loop so we never touch the index mid-tick. Returns the new list.
-async function stageAndReport(workspacePath, ops) {
-  if (state.pendingTickPromise) await state.pendingTickPromise.catch(() => {});
-  state.ticking = true;
+function stageAndReport(workspacePath, ops) {
+  if (!boundTo(workspacePath)) return Promise.resolve(currentStatus.conflicts);
+  return exclusive(() => stageAndReportBody(workspacePath, ops));
+}
+
+async function stageAndReportBody(workspacePath, ops) {
   let remaining;
-  try {
-    for (const args of ops) await gitSpawn(workspacePath, args, { timeoutMs: 30_000 });
-    remaining = await listConflicts(workspacePath);
+  {
+    // Bail on the first failure. Ignoring it left the file unmerged and
+    // re-emitted the same paused status with no reason — the user clicks
+    // "Keep ours" and nothing visibly happens.
+    for (const args of ops) {
+      const res = await gitLocking(workspacePath, args, { timeoutMs: 30_000 });
+      if (!res.ok) {
+        emitStatus({ status: STATUS.PAUSED, detail: res.stderr.trim() || 'Could not resolve that file', conflicts: currentStatus.conflicts });
+        return currentStatus.conflicts;
+      }
+    }
+    const listed = await listConflicts(workspacePath);
+    remaining = listed.files;
+    if (!listed.ok) {
+      emitStatus({ status: STATUS.PAUSED, detail: "Couldn't read conflict state", conflicts: currentStatus.conflicts });
+      return currentStatus.conflicts;
+    }
     if (remaining.length > 0) {
       emitStatus({ status: STATUS.PAUSED, detail: `${remaining.length} conflict${remaining.length > 1 ? 's' : ''} — resolve to continue`, conflicts: remaining });
     }
-  } finally {
-    state.ticking = false;
   }
-  if (remaining.length === 0) {
-    runTick().catch(() => enterOffline());
-  }
+  // Conflicts gone → resume immediately so the merge commit + push happen now
+  // rather than on the next interval. Deferred so it queues behind this op.
+  if (remaining.length === 0) setImmediate(runTick);
   return remaining;
 }
 
@@ -403,23 +494,26 @@ export function keepAll(workspacePath) {
  * the user would rather take GitHub's version than resolve file by file. This
  * throws away local-only commits + working-tree changes — the caller confirms.
  */
-export async function resetToRemote(workspacePath) {
-  if (state.pendingTickPromise) await state.pendingTickPromise.catch(() => {});
-  state.ticking = true;
-  try {
+export function resetToRemote(workspacePath) {
+  // Hard-resets the worktree. Refusing when unbound is what stops this running
+  // against an arbitrary directory with another workspace's branch.
+  if (!boundTo(workspacePath)) return Promise.resolve();
+  return exclusive(() => resetToRemoteBody(workspacePath));
+}
+
+async function resetToRemoteBody(workspacePath) {
+  {
     // Same branch the tick uses (the row's). Only reachable from the conflict
     // view, which exists only while the engine is bound to this workspace.
     const branch = state.branch;
     // No-op (non-zero, ignored) if no merge is in progress.
-    await gitSpawn(workspacePath, ['merge', '--abort'], { timeoutMs: 30_000 });
+    await gitLocking(workspacePath, ['merge', '--abort'], { timeoutMs: 30_000 });
     await gitSpawn(workspacePath, ['fetch', 'origin', branch], { pat: state.pat, timeoutMs: 60_000 });
-    const reset = await gitSpawn(workspacePath, ['reset', '--hard', `origin/${branch}`], { timeoutMs: 30_000 });
+    const reset = await gitLocking(workspacePath, ['reset', '--hard', `origin/${branch}`], { timeoutMs: 30_000 });
     if (!reset.ok) { handleGitFailure(reset.stderr, 'git reset'); return; }
-  } finally {
-    state.ticking = false;
   }
   // Back in sync with origin → resume normal ticking (clears the paused status).
-  runTick().catch(() => enterOffline());
+  setImmediate(runTick);
 }
 
 // ─── Lifecycle ─────────────────────────────────────────────────────────────
@@ -478,14 +572,25 @@ export async function stop() {
   }
   state.workspacePath = null;
   state.pat = null;
+  // Clear the repo identity as well. Leaving `branch` behind let a later call
+  // into a conflict op run `git reset --hard origin/<stale branch>` against
+  // whatever path it was handed.
+  state.branch = 'main';
+  state.repoOwner = null;
+  state.repoName = null;
   // Benign stop (workspace switch / window reload) → UNCONFIGURED hides the icon.
   emitStatus({ status: STATUS.UNCONFIGURED, detail: '', lastSyncAt: currentStatus.lastSyncAt, repoUrl: null });
 }
 
 /** User turned sync off for this workspace. Like stop(), but the icon STAYS
  *  (DISABLED → stop icon) so they can re-enable it right from the status bar. */
-export async function userDisable() {
+export async function userDisable(windowId: number | null = null) {
   await stop();
+  // `stop()` doesn't clear windowId, but a caller reaching us right after a
+  // renderer reload holds the only live window id — without adopting it the
+  // stop icon is emitted at a destroyed window and never appears, leaving no
+  // way to turn sync back on.
+  if (windowId != null) state.windowId = windowId;
   emitStatus({ status: STATUS.DISABLED, detail: 'Sync is turned off', lastSyncAt: currentStatus.lastSyncAt, repoUrl: null });
 }
 

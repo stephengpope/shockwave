@@ -218,9 +218,13 @@ export default function App() {
   const [saveState, setSaveState] = useState<any>(SAVE_STATES.SAVED);
   // Send-to-Agent state (sendToAgentPending, chatSidebarRef, injection) lives in
   // useSendToAgent, called below once its chat-sidebar deps exist.
-  // Sync engine status pushed from main via `sync:status` events.
-  // status: 'disabled' | 'idle' | 'syncing' | 'paused' | 'error'.
-  const [syncStatus, setSyncStatus] = useState<any>({ status: 'disabled', detail: '', lastSyncAt: null });
+  // Sync engine status pushed from main via `sync:status` events. See SyncStatus
+  // in src/shared/api.d.ts for the union:
+  //   unconfigured | idle | syncing | paused | offline | disabled
+  // Seeded as `unconfigured` (icon hidden) rather than `disabled`, which painted
+  // a stop icon and an Enable button at every launch — an offer that does
+  // nothing for a workspace that never had sync set up.
+  const [syncStatus, setSyncStatus] = useState<any>({ status: 'unconfigured', detail: '', lastSyncAt: null });
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || null;
   const workspacePath = activeWorkspace?.path ?? null;
@@ -258,8 +262,16 @@ export default function App() {
     onThemeModeChange, onHideLineNumbersChange, onTreePanelChange,
     onBookmarkFilterActiveChange, onDailyNoteChange, onTemplatesChange, onBuiltinSkillToggle, onTreeSortOrderChange,
     onCodingAgentChange, onAgentSecretsChange, reloadAgentSecrets, onTranscriptionChange,
-    onSyncChange, onSyncDisabledChange,
-  } = useSettings({ activeWorkspacePath: workspacePath });
+    onSyncChange,
+  } = useSettings({
+    activeWorkspacePath: workspacePath,
+    // Main owns the workspace list; this is the renderer catching up rather
+    // than four call sites hand-patching their own copy.
+    onWorkspacesPushed: useCallback((list, activeId) => {
+      setWorkspaces(list);
+      setActiveWorkspaceId(activeId);
+    }, []),
+  });
 
   // App-update status: feeds the editor-pane "Update available" pill + Settings → Updates.
   const appUpdate = useAppUpdate();
@@ -736,20 +748,35 @@ export default function App() {
     await persistSettings({ sidebarWidth: width });
   }, [persistSettings]);
 
+  // Every load claims a generation. Two quick switches used to interleave —
+  // nothing cancelled the first, and its `Promise.all` could resolve after the
+  // second's, dropping workspace A's tree, link index and bookmarks into a
+  // window showing workspace B. Each await is followed by a generation check so
+  // a superseded load stops writing state instead of racing the winner.
+  const loadGenRef = useRef(0);
   const loadWorkspace = useCallback(async (workspace) => {
+    const gen = ++loadGenRef.current;
+    const current = () => loadGenRef.current === gen;
+
     await writeNow();
     await window.api.watchStop();
+    if (!current()) return;
     resetTabs();
     setTree([]);
     setSelectedFolderPath(null);
     setGraphMode(false);
     setSaveState(SAVE_STATES.SAVED);
     resetBookmarks();
+    // A stale conflict list belongs to the workspace we just left; its paths are
+    // relative and would re-root under the new workspace's folder.
+    setSyncStatus({ status: 'unconfigured', detail: '', lastSyncAt: null, conflicts: [] });
+
     const [treeData, files, wsData] = await Promise.all([
       window.api.readTree(workspace.path),
       window.api.readAllMarkdown(workspace.path),
       window.api.workspaceSettings.read(workspace.path),
     ]);
+    if (!current()) return;
     setTree(treeData);
     linkIndex.rebuild(files);
     // Seed the bookmark set from disk, pruning names whose .md file is gone.
@@ -757,9 +784,10 @@ export default function App() {
     // Seed this workspace's daily-note + templates config from its own file.
     loadWorkspaceData(wsData);
     await window.api.watchStart(workspace.path);
-    // Kick the sync engine. It self-checks whether the workspace has an
-    // origin and what the PAT is, so we don't gate on those here. Status
-    // events flow back via `onStatus` (subscribed once on mount).
+    if (!current()) return;
+    // Kick the sync engine. It reads the workspace row for repo + branch and
+    // self-checks the PAT, so we don't gate on those here. Status events flow
+    // back via `onStatus` (subscribed once on mount).
     window.api.sync.engineStart({
       workspacePath: workspace.path,
       intervalSeconds: syncRef.current?.pullIntervalSeconds,
@@ -791,33 +819,41 @@ export default function App() {
     const exists = await window.api.pathExists(ws.path);
     if (!exists) {
       // The folder is gone, the repo isn't — forget the checkout, keep the
-      // workspace so it can be re-cloned.
+      // workspace so it can be re-cloned. Main pushes the updated list.
+      //
+      // The workspace the user is CURRENTLY in stays open: it has nothing to do
+      // with this failure. Clearing activeWorkspaceId here used to close it
+      // while skipping every teardown — tabs left open on the old tree, watcher
+      // and engine still running against it.
       await window.api.workspace.forgetLocal({ id });
-      setWorkspaces(workspaces.map((w) => (w.id === id ? { ...w, path: null } : w)));
-      setActiveWorkspaceId(null);
-      showError(`Workspace "${ws.name}" is no longer on disk. Set it up again in Settings.`);
+      showError(`"${ws.name}" is no longer on disk. Set it up again in Settings → Workspaces.`);
       return;
     }
     setActiveWorkspaceId(id);
     await persistSettings({ activeWorkspaceId: id });
     await loadWorkspace(ws);
-  }, [workspaces, persistSettings, themeMode, loadWorkspace, showError]);
+  }, [workspaces, persistSettings, loadWorkspace, showError]);
 
-  // Adopt a workspace main just created (repo made or cloned) — select it and
-  // load it. The row already exists, so this doesn't persist `workspaces`; it
-  // re-reads them, because main minted the id and holds the repo columns the
-  // renderer's projection doesn't carry.
+  // Open a workspace main just created (repo made, cloned, or adopted).
   //
-  // Scaffolding moved into the setup flow: SOUL.md + AGENTS.md are seeded when
-  // a repo is CREATED, and a cloned repo brings whatever it already has.
-  const adoptWorkspace = useCallback(async (id: string, path: string, name: string) => {
-    const ws = { id, name, path };
-    const next = [...workspaces.filter((w) => w.id !== id), ws];
-    setWorkspaces(next);
+  // The row already exists in main, so this RE-READS the list rather than
+  // building one. It used to hand-build `{id, name, path}`, which was missing
+  // `repo` and `syncDisabled` — the row then rendered "undefined — not on this
+  // machine" if its folder ever went missing — and the filter+append reordered
+  // the list, which a later rename would persist.
+  //
+  // Scaffolding lives in the setup flow: SOUL.md + AGENTS.md are seeded when a
+  // repo is CREATED; a cloned repo brings whatever it already has.
+  const adoptWorkspace = useCallback(async (id: string) => {
+    const fresh = await window.api.settings.read();
+    const list = Array.isArray(fresh.workspaces) ? fresh.workspaces : [];
+    const ws = list.find((w: any) => w.id === id);
+    if (!ws?.path) return;
+    setWorkspaces(list);
     setActiveWorkspaceId(id);
     await persistSettings({ activeWorkspaceId: id });
     await loadWorkspace(ws);
-  }, [workspaces, persistSettings, themeMode, loadWorkspace]);
+  }, [persistSettings, loadWorkspace]);
 
   // Rename only. `updateWorkspaces` in main applies name + order and cannot
   // create or delete, so sending the whole list here is safe.
@@ -829,16 +865,19 @@ export default function App() {
   const removeWorkspace = useCallback(async (id) => {
     // Deleting the row clears `workspace_local.active` with it (ON DELETE
     // CASCADE), so removing the open workspace needs no separate active write.
-    await window.api.workspace.remove({ id });
-    setWorkspaces(workspaces.filter((w) => w.id !== id));
+    const res = await window.api.workspace.remove({ id });
+    if (!res?.ok) { showError(res?.error ?? 'Could not remove that workspace.'); return; }
+    // Main deletes the row, stops the engine if it was bound to it, and pushes
+    // the new list — so there's no local array to patch here.
     if (id === activeWorkspaceId) {
       setActiveWorkspaceId(null);
       resetTabs();
       setTree([]);
       setSelectedFolderPath(null);
+      setSyncStatus({ status: 'unconfigured', detail: '', lastSyncAt: null, conflicts: [] });
       await window.api.watchStop();
     }
-  }, [workspaces, activeWorkspaceId, resetTabs]);
+  }, [activeWorkspaceId, resetTabs, showError]);
 
 
   // File-delete confirmation state — holds the path(s) the user asked to delete
@@ -1427,6 +1466,12 @@ export default function App() {
       const lastId = settings.activeWorkspaceId;
       if (lastId) {
         const ws = (settings.workspaces || []).find((w) => w.id === lastId);
+        // No path = it exists but isn't checked out here. Say so; the block
+        // below can't run, and silence left the user on the empty welcome
+        // screen with no hint that Settings has a Set up here button.
+        if (ws && !ws.path) {
+          showError(`"${ws.name}" isn't set up on this machine yet. Choose a folder for it in Settings → Workspaces.`);
+        }
         if (ws?.path) {
           const exists = await window.api.pathExists(ws.path);
           if (exists) {
@@ -2161,7 +2206,6 @@ export default function App() {
           onTranscriptionChange={onTranscriptionChange}
           sync={sync}
           onSyncChange={onSyncChange}
-          onSyncDisabledChange={onSyncDisabledChange}
           onRebuildCache={rebuildLinkCache}
           appUpdate={appUpdate}
           saveStatus={saveStatus}

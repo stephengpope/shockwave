@@ -16,7 +16,7 @@ import {
   cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
 } from './cron.js';
 import { CRON_FILE } from './cronScheduler.js';
-import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred, insertWorkspace, deleteWorkspace, deleteWorkspaceLocal, insertWorkspaceLocal, getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, setWorkspaceSyncDisabled } from './db/index.js';
+import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred, insertWorkspace, deleteWorkspace, deleteWorkspaceLocal, insertWorkspaceLocal, getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, isPathClaimed, setWorkspaceSyncDisabled } from './db/index.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
 import { scaffoldNewProject } from './prompt/index.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
@@ -44,6 +44,7 @@ import {
   start as engineStart,
   stop as engineStop,
   userDisable as engineUserDisable,
+  boundWorkspacePath as engineBoundPath,
   drainBeforeQuit as engineDrainBeforeQuit,
   handleFlushDone as engineHandleFlushDone,
   getCurrentStatus as engineGetCurrentStatus,
@@ -288,11 +289,6 @@ ipcMain.handle('dialog:openFolder', async () => {
 // creation, so a new workspace has them from the start — not only when a repo
 // is created via GitHub sync. Idempotent: writes only files that don't exist,
 // best-effort (never throws).
-ipcMain.handle('workspace:scaffold', async (_evt, workspacePath) => {
-  if (typeof workspacePath !== 'string' || !workspacePath) return;
-  await scaffoldNewProject(workspacePath);
-});
-
 async function buildTree(dirPath) {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
   const children = await Promise.all(
@@ -1137,6 +1133,9 @@ ipcMain.handle('workspace:addFromRepo', async (_evt, { workspacePath, owner, rep
   // branch, so the repo — not the folder — is what has to be unique.
   const dup = findWorkspaceByRepo(owner, repo);
   if (dup) return { ok: false, error: `${owner}/${repo} is already open as "${dup.name}".` };
+  if (isPathClaimed(workspacePath)) {
+    return { ok: false, error: 'Another workspace already uses that folder.' };
+  }
   const res = await syncEnsureCheckout({ workspacePath, owner, repo, pat: auth.pat });
   if (!res.ok) return res;
   return await finishWorkspaceSetup(res, name);
@@ -1152,22 +1151,42 @@ ipcMain.handle('workspace:setUpHere', async (_evt, { id, workspacePath }) => {
   const ws = getWorkspace(id);
   if (!ws) return { ok: false, error: 'Workspace not found' };
   if (ws.path) return { ok: false, error: `"${ws.name}" is already set up at ${ws.path}.` };
+  if (isPathClaimed(workspacePath, id)) {
+    return { ok: false, error: 'Another workspace already uses that folder.' };
+  }
 
   const res = await syncEnsureCheckout({
     workspacePath, owner: ws.repoOwner, repo: ws.repoName, pat: auth.pat,
   });
   if (!res.ok) return res;
 
-  insertWorkspaceLocal(id, workspacePath);
+  // A concurrent call could still lose the (workspace_id, machine) primary-key
+  // race; surfacing it beats an unhandled rejection in the IPC.
+  try {
+    insertWorkspaceLocal(id, workspacePath);
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'Could not record that checkout.' };
+  }
   await notifyWorkspacesChanged();
   return { ok: true, id, path: workspacePath };
 });
+
+// The engine holds a path captured at start(), not a live row reference, so
+// anything that removes a workspace has to stop it explicitly first.
+async function stopEngineForWorkspace(id: string) {
+  const ws = getWorkspace(id);
+  if (ws?.path && engineBoundPath() === ws.path) await engineStop();
+}
 
 // Removal is its own call, not a settings save that happens to omit an id.
 // That's both what the user action actually is, and what stops a stale renderer
 // list from deleting a workspace it never knew about — see `updateWorkspaces`.
 // Nothing on disk is touched: not the checkout, not the GitHub repo.
 ipcMain.handle('workspace:remove', async (_evt, { id }) => {
+  // Stop the engine FIRST if it's bound to this workspace. It captured its
+  // path at start(), so deleting the row doesn't reach it — it would keep
+  // committing and pushing to a folder the user just removed from the app.
+  await stopEngineForWorkspace(id);
   deleteWorkspace(id);
   await notifyWorkspacesChanged();
   return { ok: true };
@@ -1178,6 +1197,7 @@ ipcMain.handle('workspace:remove', async (_evt, { id }) => {
 // would discard a perfectly valid remote because a folder moved — the row drops
 // back to "not set up here" and can be re-cloned.
 ipcMain.handle('workspace:forgetLocal', async (_evt, { id }) => {
+  await stopEngineForWorkspace(id);
   deleteWorkspaceLocal(id);
   await notifyWorkspacesChanged();
   return { ok: true };
@@ -1201,14 +1221,16 @@ ipcMain.handle('sync:listRepos', async () => {
 ipcMain.handle('sync:engineStart', async (evt, { workspacePath, intervalSeconds }) => {
   const settings = await readSettings();
   const pat = settings.sync?.pat || '';
-  const wsId = (settings.workspaces || []).find((w) => w.path === workspacePath)?.id ?? null;
-  const disabledIds = settings.sync?.disabledWorkspaceIds || [];
+  const ws = findWorkspaceByPath(workspacePath);
   const win = BrowserWindow.fromWebContents(evt.sender);
   // User turned sync off for this workspace → don't start the engine, but show
   // the DISABLED (stop) icon so they can re-enable from the status bar. Nothing
   // on disk changes, so re-enabling is a single engineStart with no setup.
-  if (wsId && disabledIds.includes(wsId)) {
-    await engineUserDisable();
+  if (ws && !ws.syncEnabled) {
+    // Target this window BEFORE emitting — `userDisable` emits through
+    // `state.windowId`, which after a reload is a destroyed id, so the stop
+    // icon would go nowhere and the user couldn't re-enable.
+    await engineUserDisable(win?.id ?? null);
     return;
   }
   await engineStart({
@@ -1230,6 +1252,9 @@ ipcMain.handle('sync:setWorkspaceDisabled', async (evt, { workspacePath, disable
   if (!ws) return { ok: false, error: 'Workspace not found' };
   const wsId = ws.id;
   setWorkspaceSyncDisabled(wsId, disabled);
+  // The flag lives on the workspace row, so the renderer learns about it the
+  // same way it learns about any other workspace change.
+  await notifyWorkspacesChanged();
   const settings = await readSettings();
   const nextSync = settings.sync;
 
@@ -1240,7 +1265,8 @@ ipcMain.handle('sync:setWorkspaceDisabled', async (evt, { workspacePath, disable
     if (disabled) {
       // Show the DISABLED (stop) icon — not hidden — so it can be re-enabled
       // from the status bar.
-      await engineUserDisable();
+      const win = BrowserWindow.fromWebContents(evt.sender);
+      await engineUserDisable(win?.id ?? null);
     } else {
       const win = BrowserWindow.fromWebContents(evt.sender);
       await engineStart({

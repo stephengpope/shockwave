@@ -94,7 +94,6 @@ export default function SettingsModal({
   onTranscriptionChange,
   sync,
   onSyncChange,
-  onSyncDisabledChange,
   onRebuildCache,
   appUpdate,
   saveStatus,
@@ -154,6 +153,7 @@ export default function SettingsModal({
                   active === row.id && 'bg-selected font-medium text-selected-foreground hover:bg-selected',
                 )}
                 onClick={() => setActive(row.id)}
+                aria-current={active === row.id ? 'page' : undefined}
               >
                 {row.label}
               </button>
@@ -175,14 +175,12 @@ export default function SettingsModal({
             <WorkspacesSection
               workspaces={workspaces}
               activeWorkspaceId={activeWorkspaceId}
-              onWorkspaceAdded={(id, path, name) => { onWorkspaceAdded(id, path, name); onClose(); }}
+              onWorkspaceAdded={(id) => { onWorkspaceAdded(id); onClose(); }}
               onSwitch={(id) => { onSwitchWorkspace(id); onClose(); }}
               onRemove={onRemoveWorkspace}
               onRename={onRenameWorkspaces}
               syncPat={sync?.pat}
               onOpenGitHubSettings={() => setActive(SETTINGS_SECTIONS.GITHUB)}
-              disabledWorkspaceIds={sync?.disabledWorkspaceIds || []}
-              onSyncDisabledChange={onSyncDisabledChange}
             />
           )}
           {active === SETTINGS_SECTIONS.GITHUB && (

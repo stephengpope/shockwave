@@ -134,13 +134,19 @@ test('repoMismatch names BOTH repos when they differ', () => {
   assert.match(err, /acme\/gadgets/);
 });
 
-test('repoMismatch is case-sensitive on the repo name', () => {
-  // GitHub treats owner/name case-insensitively for lookup but we compare what
-  // we stored against what git reported; both come from GitHub, so a difference
-  // here means a genuinely different remote rather than a spelling variant.
-  assert.notEqual(repoMismatch(
-    { repoOwner: 'acme', repoName: 'Widgets' },
+test('repoMismatch ignores case, because GitHub does', () => {
+  // `Acme/Widgets` and `acme/widgets` are ONE repo on GitHub. Comparing exactly
+  // rejected a clone whose .git/config merely cased the URL differently from the
+  // repo listing, and let the same repo be added twice under two casings — two
+  // workspaces then syncing it through the same branch.
+  assert.equal(repoMismatch(
+    { repoOwner: 'Acme', repoName: 'Widgets' },
     { repoOwner: 'acme', repoName: 'widgets' },
+  ), null);
+  // A genuinely different repo is still rejected.
+  assert.notEqual(repoMismatch(
+    { repoOwner: 'acme', repoName: 'widgets' },
+    { repoOwner: 'acme', repoName: 'gadgets' },
   ), null);
 });
 
@@ -189,4 +195,35 @@ test('parseGithubUrl keeps dots in a repo name and strips only a trailing .git',
 
 test('cloneUrlFor round-trips through parseGithubUrl', () => {
   assert.deepEqual(parseGithubUrl(cloneUrlFor('acme', 'widgets')), { owner: 'acme', repo: 'widgets' });
+});
+
+// ─── sync flag polarity ────────────────────────────────────────────────────
+//
+// The DB column is `sync_disabled` (0 = syncing) because an absent or zero row
+// should mean normal behaviour. Everything above the projection sees
+// `syncEnabled`. Getting that negation wrong silently inverts every Sync switch
+// in Settings, so it's pinned here rather than left to reading.
+
+import { projectWorkspaceRow } from '../src/main/workspaceFolder.js';
+
+test('syncEnabled is the inverse of the stored sync_disabled column', () => {
+  assert.equal(projectWorkspaceRow({ syncDisabled: 0 }).syncEnabled, true);
+  assert.equal(projectWorkspaceRow({ syncDisabled: 1 }).syncEnabled, false);
+});
+
+test('a missing sync_disabled reads as syncing', () => {
+  // No row / null must mean "normal", which is the whole reason the column is
+  // stored as *disabled* rather than *enabled*.
+  assert.equal(projectWorkspaceRow({}).syncEnabled, true);
+  assert.equal(projectWorkspaceRow({ syncDisabled: null }).syncEnabled, true);
+});
+
+test('projectWorkspaceRow carries repo as owner/name and keeps a null path', () => {
+  const row = projectWorkspaceRow({
+    id: 'w1', name: 'Notes', path: null,
+    repoOwner: 'acme', repoName: 'widgets', syncDisabled: 0,
+  });
+  assert.equal(row.repo, 'acme/widgets');
+  assert.equal(row.path, null);   // "exists, not checked out on this machine"
+  assert.equal(row.id, 'w1');
 });

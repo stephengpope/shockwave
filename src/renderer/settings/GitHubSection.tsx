@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -47,9 +47,18 @@ export default function GitHubSection({ sync, onSyncChange }) {
   const pat = sync?.pat ?? '';
   const interval = sync?.pullIntervalSeconds ?? 10;
 
+  // The PAT is edited locally and committed on blur. Every change here writes
+  // settings (re-encrypting through the keychain) AND restarts the sync engine,
+  // so typing a token character by character did ~90 of each, against ~90
+  // partial tokens.
+  const [patDraft, setPatDraft] = useState(pat);
+  useEffect(() => { setPatDraft(pat); }, [pat]);
   const [showPat, setShowPat] = useState(false);
   const [verifyState, setVerifyState] = useState<any>({ status: 'idle' });
   const [gitState, setGitState] = useState<any>({ status: 'checking' });
+  // Tracks the thumb while dragging; the real write happens on release.
+  const [draftInterval, setDraftInterval] = useState(interval);
+  useEffect(() => { setDraftInterval(interval); }, [interval]);
 
   // Cheap (one process) and the answer can change while the app runs, so it's
   // re-checked whenever the section mounts rather than cached.
@@ -67,10 +76,17 @@ export default function GitHubSection({ sync, onSyncChange }) {
 
   // Verifying a token the user hasn't saved yet: pass the current form value
   // (not the persisted one) so they can verify before committing.
+  // Each verify claims a token. Without it, editing the PAT mid-flight (which
+  // resets the result to idle) still got overwritten by the in-flight response —
+  // a green "Signed in as X" beside a token that was never checked.
+  const verifyReq = useRef(0);
   const onVerify = async () => {
-    if (!pat) return;
+    const value = patDraft.trim();
+    if (!value) return;
+    const req = ++verifyReq.current;
     setVerifyState({ status: 'checking' });
-    const res = await window.api.sync.verifyPat(pat);
+    const res = await window.api.sync.verifyPat(value);
+    if (verifyReq.current !== req) return;
     setVerifyState(res.ok
       ? { status: 'ok', login: res.login, name: res.name }
       : { status: 'error', error: res.error });
@@ -78,8 +94,13 @@ export default function GitHubSection({ sync, onSyncChange }) {
 
   // A stale green check next to a changed token would be actively misleading.
   const onPatChange = (e) => {
-    updateSync({ pat: e.target.value });
+    setPatDraft(e.target.value);
+    verifyReq.current++;   // invalidate any verify already in flight
     if (verifyState.status !== 'idle') setVerifyState({ status: 'idle' });
+  };
+
+  const commitPat = () => {
+    if (patDraft !== pat) updateSync({ pat: patDraft });
   };
 
   // Clamped here as well as on the slider: the engine clamps to this same range
@@ -105,8 +126,9 @@ export default function GitHubSection({ sync, onSyncChange }) {
                 id="sync-pat"
                 type={showPat ? 'text' : 'password'}
                 className="font-mono text-[13px]"
-                value={pat}
+                value={patDraft}
                 onChange={onPatChange}
+                onBlur={commitPat}
                 spellCheck={false}
                 autoComplete="off"
                 autoCorrect="off"
@@ -118,7 +140,7 @@ export default function GitHubSection({ sync, onSyncChange }) {
                 </InputGroupButton>
               </InputGroupAddon>
             </InputGroup>
-            <Button variant="outline" onClick={onVerify} disabled={!pat || verifyState.status === 'checking'}>
+            <Button variant="outline" onClick={onVerify} disabled={!patDraft.trim() || verifyState.status === 'checking'}>
               {verifyState.status === 'checking' ? 'Verifying…' : 'Verify'}
             </Button>
           </div>
@@ -147,15 +169,16 @@ export default function GitHubSection({ sync, onSyncChange }) {
         <Field>
           <div className="flex items-center justify-between">
             <FieldLabel htmlFor="sync-interval">Sync interval</FieldLabel>
-            <span className="text-xs text-muted-foreground">{interval}s</span>
+            <span className="text-xs text-muted-foreground">{draftInterval}s</span>
           </div>
           <Slider
             id="sync-interval"
             min={MIN_INTERVAL}
             max={MAX_INTERVAL}
             step={1}
-            value={[interval]}
-            onValueChange={(v) => setInterval(Number.parseInt(v?.[0], 10))}
+            value={[draftInterval]}
+            onValueChange={(v) => setDraftInterval(Number(v?.[0]))}
+            onValueCommit={(v) => setInterval(Number(v?.[0]))}
           />
           <FieldDescription className="text-xs">
             How often the open workspace pulls and pushes. Min {MIN_INTERVAL}s, max {MAX_INTERVAL}s.

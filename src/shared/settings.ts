@@ -33,6 +33,16 @@ export interface WorkspaceEntry {
   path: string | null;
   /** "owner/name", for display. */
   repo: string;
+  /** Whether this workspace syncs to GitHub ON THIS MACHINE. Lives here rather
+   *  than in `sync` because it's per-workspace: as a list inside the sync object
+   *  it was rebuilt — and dropped — whenever anything else in that object
+   *  changed.
+   *
+   *  Stored as `workspace_local.sync_disabled` (0 = syncing), because a zero /
+   *  absent row should mean normal behaviour. The negation happens once, in the
+   *  projection — it used to leak up here and get negated three more times in
+   *  the one switch that renders it. */
+  syncEnabled: boolean;
 }
 
 export type SkillState = 'enabled' | 'disabled';
@@ -143,7 +153,7 @@ export interface Settings {
   codingAgent: CodingAgentSettings;
   agentSecrets: AgentSecret[];
   transcription: { provider: string; apiKey: string };
-  sync: { pat: string; pullIntervalSeconds: number; disabledWorkspaceIds: string[] };
+  sync: { pat: string; pullIntervalSeconds: number };
   // Scheduled runs (cron). Machine-local and global: `enabled` is the master
   // on/off (gates FIRING only — watching/validation/UI stay live when off), and
   // cron follows the active workspace. Job definitions live per-workspace in

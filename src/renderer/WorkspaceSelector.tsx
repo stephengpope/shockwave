@@ -29,7 +29,8 @@ export default function WorkspaceSelector({
               'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-foreground',
               'hover:bg-accent data-[state=open]:bg-accent',
             )}
-            title={active?.path ?? 'No workspace open'}
+            title={active ? (active.path ?? `${active.repo} — not on this machine`) : 'No workspace open'}
+            aria-label={active ? `Workspace: ${active.name}. Switch workspace` : 'No workspace open. Choose a workspace'}
           >
             {/* Square accent workspace badge (polish spec §4). */}
             <span className="flex size-[18px] items-center justify-center rounded-[5px] bg-primary text-[9px] font-bold text-primary-foreground">
@@ -46,8 +47,17 @@ export default function WorkspaceSelector({
             <div className="px-2 py-1.5 text-xs text-muted-foreground">No workspaces yet</div>
           ) : (
             workspaces.map((w) => (
-              <DropdownMenuItem key={w.id} onSelect={() => onSwitch(w.id)} title={w.path}>
+              // Disabled when it can't be opened: no checkout on this machine
+              // (selecting it only produced an error), or it's already open
+              // (re-selecting re-ran the whole load and destroyed every tab).
+              <DropdownMenuItem
+                key={w.id}
+                onSelect={() => onSwitch(w.id)}
+                disabled={!w.path || w.id === activeWorkspaceId}
+                title={w.path ?? `${w.repo} — not on this machine`}
+              >
                 <span className="truncate">{w.name}</span>
+                {!w.path && <span className="ml-2 shrink-0 text-[10px] text-muted-foreground">not here</span>}
                 {w.id === activeWorkspaceId && <Check className="ml-auto" />}
               </DropdownMenuItem>
             ))

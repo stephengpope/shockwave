@@ -13,7 +13,7 @@ import { app } from 'electron';
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { and, desc, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, lt, notInArray, sql } from 'drizzle-orm';
 import { chatSession, message, cronState, workspace, workspaceLocal } from './schema.js';
 import { backfillWorkspaceOrigins, claimLocalRowsForThisMachine } from '../workspaceBackfill.js';
 
@@ -350,6 +350,7 @@ const WS_COLUMNS = {
   sortOrder: workspace.sortOrder,
   path: workspaceLocal.path,
   active: workspaceLocal.active,
+  // Negated once, in `settingsStore`'s projection — see WorkspaceEntry.
   syncDisabled: workspaceLocal.syncDisabled,
 };
 
@@ -456,16 +457,22 @@ export function insertWorkspaceLocal(workspaceId: string, workspacePath: string)
 // Open a workspace. Clearing every other row first isn't bookkeeping — the
 // partial unique index on `active = 1` rejects a second active row, so the
 // clear has to happen in the same transaction as the set.
-export function setActiveWorkspace(workspaceId: string | null) {
+export function setActiveWorkspace(workspaceId: string | null): boolean {
   const db = getDb();
   const me = hostname();
+  let ok = true;
   db.transaction((tx: any) => {
     tx.update(workspaceLocal).set({ active: null }).where(eq(workspaceLocal.machine, me)).run();
     if (workspaceId) {
-      tx.update(workspaceLocal).set({ active: 1 })
+      const res = tx.update(workspaceLocal).set({ active: 1 })
         .where(and(eq(workspaceLocal.workspaceId, workspaceId), eq(workspaceLocal.machine, me))).run();
+      // Zero rows means the workspace isn't checked out on this machine, so it
+      // can't be the open one. Reporting success let the renderer believe it had
+      // switched while the next read returned null.
+      ok = res.changes > 0;
     }
   });
+  return ok;
 }
 
 export function getActiveWorkspaceId(): string | null {
@@ -489,12 +496,6 @@ export function setWorkspaceSyncDisabled(workspaceId: string, disabled: boolean)
     .run();
 }
 
-export function listSyncDisabledIds(): string[] {
-  return getDb().select({ id: workspaceLocal.workspaceId }).from(workspaceLocal)
-    .where(and(eq(workspaceLocal.syncDisabled, 1), eq(workspaceLocal.machine, hostname())))
-    .all().map((r: any) => r.id);
-}
-
 // The workspace occupying a folder, or null. This is what makes the row the
 // source of truth for the remote: the engine is started with a path and reads
 // its repo + branch from here instead of shelling out to `.git/config`.
@@ -503,11 +504,24 @@ export function findWorkspaceByPath(workspacePath: string) {
   return rows[0] ?? null;
 }
 
+// Whether a folder is already claimed on this machine. Two workspaces sharing
+// one checkout would have `findWorkspaceByPath` return whichever row came
+// first, so the engine could bind a folder to the wrong repo.
+export function isPathClaimed(workspacePath: string, exceptId?: string) {
+  const row = findWorkspaceByPath(workspacePath);
+  return !!row && row.id !== exceptId;
+}
+
 // Whether this repo is already open as a workspace. Two workspaces pointing at
 // one repo would have them syncing over each other through the same branch.
 export function findWorkspaceByRepo(owner: string, repo: string) {
-  const rows = selectWorkspaces()
-    .where(and(eq(workspace.repoOwner, owner), eq(workspace.repoName, repo))).all() as any[];
+  // Case-insensitive: GitHub treats `Acme/Widgets` and `acme/widgets` as one
+  // repo, so an exact match let the same repo be added twice under two casings —
+  // two workspaces then sync it through the same branch, over each other.
+  const rows = selectWorkspaces().where(and(
+    sql`lower(${workspace.repoOwner}) = lower(${owner})`,
+    sql`lower(${workspace.repoName}) = lower(${repo})`,
+  )).all() as any[];
   return rows[0] ?? null;
 }
 

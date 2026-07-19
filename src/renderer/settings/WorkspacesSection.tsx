@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { FolderOpen, Plus, Trash2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { FolderOpen, Plus, Trash2, X } from 'lucide-react';
 import ConfirmDialog from '../ConfirmDialog.jsx';
 import AddWorkspaceDialog from './AddWorkspaceDialog';
 import { SettingsSection, SettingsGroup } from './SectionUI';
@@ -15,7 +15,8 @@ import ErrorMessage from '../ErrorMessage.jsx';
 //
 // The PAT is still required to add one. What the old split got wrong wasn't
 // that the token lived elsewhere — it's that this page left you to find it on
-// your own. The add dialog links straight there now.
+// your own. The Add button is now disabled without a token, with a link to the
+// GitHub Sync section right above it.
 
 export default function WorkspacesSection({
   workspaces,
@@ -26,14 +27,15 @@ export default function WorkspacesSection({
   onRename,
   syncPat,
   onOpenGitHubSettings,
-  disabledWorkspaceIds,
-  onSyncDisabledChange,
 }) {
   const [confirmRemoveId, setConfirmRemoveId] = useState<any>(null);
   const [renamingId, setRenamingId] = useState<any>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [settingUpId, setSettingUpId] = useState<any>(null);
-  const [setupError, setSetupError] = useState<any>(null);
+  // One error slot per row, for both setup and sync-toggle failures — they're
+  // the same kind of thing to the user ("this row's action failed") and having
+  // two meant one could silently replace the other.
+  const [rowError, setRowError] = useState<any>(null);
   const [addOpen, setAddOpen] = useState(false);
 
   const target = workspaces.find((w) => w.id === confirmRemoveId) ?? null;
@@ -50,28 +52,40 @@ export default function WorkspacesSection({
     onRename?.(workspaces.map((w) => (w.id === id ? { ...w, name: next } : w)));
   };
 
-  // Main owns the column and reconciles the engine (only if this is the active
-  // workspace); the callback just mirrors the change into the renderer's copy
-  // of `sync` so a later settings save doesn't write a stale disabled list.
-  const toggleSync = async (ws: any, disabled: boolean) => {
-    const res = await window.api.sync.setWorkspaceDisabled({ workspacePath: ws.path, disabled });
-    if (res?.ok) onSyncDisabledChange?.(ws.id, disabled);
+  // Main owns the column, reconciles the engine (only if this is the active
+  // workspace), and pushes the updated list back — so there's nothing to mirror
+  // here. A failure has to SAY so: this used to be `if (res?.ok)` with no else,
+  // so a failed toggle just snapped the switch back with no explanation.
+  const setSyncEnabled = async (ws: any, enabled: boolean) => {
+    setRowError(null);
+    try {
+      const res = await window.api.sync.setWorkspaceDisabled({ workspacePath: ws.path, disabled: !enabled });
+      if (!res?.ok) setRowError({ id: ws.id, error: res?.error ?? 'Could not change sync for this workspace.' });
+    } catch (err: any) {
+      setRowError({ id: ws.id, error: err?.message ?? 'Could not change sync for this workspace.' });
+    }
   };
 
   // Clone (or attach) a workspace that exists but has no folder on this box.
   const setUpHere = async (ws: any) => {
-    const dir = await window.api.openFolder();
-    if (!dir) return;
+    // Claim the row BEFORE the picker opens — it's an await, and without this
+    // the button stays live long enough to open two pickers.
+    if (settingUpId) return;
     setSettingUpId(ws.id);
+    const dir = await window.api.openFolder();
+    if (!dir) { setSettingUpId(null); return; }
     const res = await window.api.workspace.setUpHere({ id: ws.id, workspacePath: dir });
     setSettingUpId(null);
-    if (!res.ok) { setSetupError({ id: ws.id, error: res.error }); return; }
-    setSetupError(null);
-    await onWorkspaceAdded(ws.id, res.path, ws.name);
+    if (!res.ok) { setRowError({ id: ws.id, error: res.error }); return; }
+    setRowError(null);
+    // No switch. Main pushes the updated list, so the row refreshes on its own —
+    // checking a workspace out on this machine shouldn't yank you out of the
+    // one you're currently in, which is what routing this through the add
+    // callback used to do (it also closed Settings).
   };
 
   const renderRow = (ws: any) => {
-    const syncOff = (disabledWorkspaceIds ?? []).includes(ws.id);
+
     // No path = the workspace exists but isn't checked out on this machine
     // (a DB from another machine, or a folder that went missing). It stays in
     // the list — hiding it would lose a repo you still own.
@@ -88,6 +102,7 @@ export default function WorkspacesSection({
           {renamingId === ws.id ? (
             <Input
               autoFocus
+              aria-label="Workspace name"
               value={renameDraft}
               onChange={(e) => setRenameDraft(e.target.value)}
               onBlur={commitRename}
@@ -103,6 +118,7 @@ export default function WorkspacesSection({
               className="block max-w-full truncate rounded px-1 -mx-1 text-left text-[13px] font-medium hover:bg-accent"
               onClick={() => { setRenamingId(ws.id); setRenameDraft(ws.name); }}
               title="Rename"
+              aria-label={`Rename ${ws.name}`}
             >
               {ws.name}
             </button>
@@ -110,8 +126,19 @@ export default function WorkspacesSection({
           <div className="truncate font-mono text-xs text-muted-2" title={ws.path || ws.repo}>
             {here ? ws.path : `${ws.repo} — not on this machine`}
           </div>
-          {setupError?.id === ws.id && (
-            <p className="mt-1 text-xs text-destructive">{setupError.error}</p>
+          {rowError?.id === ws.id && (
+            <div className="mt-1.5 flex items-start gap-2" role="alert">
+              <ErrorMessage className="flex-1">{rowError.error}</ErrorMessage>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setRowError(null)}
+                aria-label="Dismiss error"
+                title="Dismiss"
+              >
+                <X />
+              </Button>
+            </div>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2.5">
@@ -123,8 +150,9 @@ export default function WorkspacesSection({
           {here && (
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title="Sync to GitHub while this workspace is open">
               <Switch
-                checked={!syncOff}
-                onCheckedChange={(v) => toggleSync(ws, !v)}
+                checked={ws.syncEnabled}
+                onCheckedChange={(v) => setSyncEnabled(ws, v)}
+                aria-label={`Sync ${ws.name} to GitHub`}
               />
               Sync
             </label>
@@ -179,7 +207,7 @@ export default function WorkspacesSection({
               the requirement is visible without clicking into a dialog to be
               told. The old split's failure was leaving people to discover the
               token requirement on their own. */}
-          {!syncPat && (
+          {!syncPat?.trim() && (
             <p className="mb-2 text-[13px] text-muted-foreground">
               A GitHub token is required.{' '}
               <button
@@ -189,7 +217,7 @@ export default function WorkspacesSection({
               >Add one in GitHub Sync settings</button>.
             </p>
           )}
-          <Button size="sm" onClick={() => setAddOpen(true)} disabled={!syncPat}>
+          <Button size="sm" onClick={() => setAddOpen(true)} disabled={!syncPat?.trim()}>
             <Plus /> Add workspace
           </Button>
         </div>
