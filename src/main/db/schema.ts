@@ -19,25 +19,66 @@ import { sqliteTable, text, integer, real, blob, index, primaryKey } from 'drizz
 // fixed shape, and it must be atomic (one row = one workspace, so a delete can't
 // leave a half-workspace behind the way N key rows could).
 //
-// `originUrl`/`checkedAt` are a main-authored CACHE of `git remote get-url
-// origin`, filled in by workspaceStatus() as it shells out. Display only —
-// `.git/config` remains the source of truth, and every sync decision still reads
-// it live, so an out-of-app `git remote set-url` can't route a push wrongly.
+// A workspace IS a GitHub repo — `repoOwner`/`repoName`/`defaultBranch` are NOT
+// NULL, so a workspace without a remote is unrepresentable. They are also the
+// SOURCE OF TRUTH: nothing reads `.git/config`. They replaced an
+// `origin_url`/`checked_at` cache that existed only because the repo used to be
+// *discovered* by shelling out; owning it removed the discovery, the cache, the
+// `setupLink` adopt-a-folder flow, and the id↔path adapters bridging the two.
+//
+// The trade that buys: a hand-run `git remote set-url` now makes disk disagree
+// with this table, and this table wins. Pointing a workspace at a different repo
+// is a UI action, not something picked up out of band.
 export const workspace = sqliteTable('workspace', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
-  path: text('path').notNull(),
+  repoOwner: text('repo_owner').notNull(),
+  repoName: text('repo_name').notNull(),
+  defaultBranch: text('default_branch').notNull().default('main'),
   // REAL, not INTEGER, so a future drag-to-reorder can insert between two
   // neighbours (2.0, 3.0 → 2.5) in ONE write instead of renumbering the list.
   sortOrder: real('sort_order').notNull(),
-  originUrl: text('origin_url'),
-  checkedAt: integer('checked_at'),
+}, (t) => ({
+  bySort: index('idx_workspace_sort').on(t.sortOrder),
+  byRepo: index('idx_workspace_repo').on(t.repoOwner, t.repoName),
+}));
+
+// What's true about a workspace ON ONE MACHINE. Split out from `workspace`
+// because those two things answer different questions: `workspace` says which
+// repo this is — the same answer everywhere — while everything here is local. A
+// checkout path is meaningless on another box, "which one is open" is
+// per-install, and pausing sync is a thing you do to one machine, not to a repo.
+//
+// Keyed by `(workspaceId, machine)` rather than workspaceId alone, so the rows
+// for every machine can coexist. That's what lets this DB be copied or synced
+// without its local half being wrong somewhere: each install reads its own row
+// (every query joins on `machine = hostname()`) and leaves the others alone. A
+// machine that has never opened a given workspace simply has no row, which is
+// also how "not checked out here" is represented — there is no null path.
+//
+// `activeWorkspaceId` used to be a row in `setting`, i.e. a foreign key hiding
+// in a key-value store — free to name a workspace that no longer existed, and
+// global when it should have been per-machine. As a column it's deleted with
+// its row, and the partial unique index makes two-active unrepresentable.
+export const workspaceLocal = sqliteTable('workspace_local', {
+  workspaceId: text('workspace_id').notNull()
+    .references(() => workspace.id, { onDelete: 'cascade' }),
+  // `os.hostname()`, same value and meaning as `chat_session.machine`.
+  machine: text('machine').notNull(),
+  // Absolute path of the clone on that machine.
+  path: text('path').notNull(),
+  // At most one row PER MACHINE may hold 1 (see idx_workspace_local_active).
+  // NULL rather than 0 for "not active": SQLite treats NULLs as distinct in a
+  // unique index, so a partial index over `active = 1` enforces the
+  // single-active rule without a trigger.
+  active: integer('active'),
   // Was `sync.disabledWorkspaceIds` — an array of ids in the settings blob,
   // i.e. a foreign key by another name. As a column it can't outlive its
   // workspace; the array could (and did) keep ids for workspaces long deleted.
   syncDisabled: integer('sync_disabled').notNull().default(0),
 }, (t) => ({
-  bySort: index('idx_workspace_sort').on(t.sortOrder),
+  pk: primaryKey({ columns: [t.workspaceId, t.machine] }),
+  byPath: index('idx_workspace_local_path').on(t.machine, t.path),
 }));
 
 // Scalar app preferences, one row per leaf key (dotted path, e.g.

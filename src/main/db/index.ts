@@ -13,8 +13,8 @@ import { app } from 'electron';
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { and, desc, eq, inArray, lt, notInArray } from 'drizzle-orm';
-import { chatSession, message, cronState, workspace } from './schema.js';
+import { and, desc, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
+import { chatSession, message, cronState, workspace, workspaceLocal } from './schema.js';
 
 let sqlite: Database.Database | null = null;
 let db: BetterSQLite3Database | null = null;
@@ -329,34 +329,140 @@ export function deleteCronStateForWorkspace(workspace: string) {
 // schema.ts). settingsStore's readSettings/writeSettings route `workspaces`
 // here, which is why the renderer still sees it as a plain field on Settings.
 
-export function listWorkspaces() {
-  return getDb().select().from(workspace).orderBy(workspace.sortOrder).all();
+// Every read joins the two tables — callers want one workspace, not an identity
+// and a local half. The split is a storage concern (see schema.ts), not a shape
+// anything above this file has to know about.
+const WS_COLUMNS = {
+  id: workspace.id,
+  name: workspace.name,
+  repoOwner: workspace.repoOwner,
+  repoName: workspace.repoName,
+  defaultBranch: workspace.defaultBranch,
+  sortOrder: workspace.sortOrder,
+  path: workspaceLocal.path,
+  active: workspaceLocal.active,
+  syncDisabled: workspaceLocal.syncDisabled,
+};
+
+// LEFT join, scoped to this machine. A workspace with no local row here is a
+// real workspace that just isn't checked out on this box — `path` comes back
+// null and the UI offers to clone it. Hiding those (an inner join) would make a
+// synced DB look empty on a second machine even though it knows every repo.
+function selectWorkspaces() {
+  return getDb().select(WS_COLUMNS).from(workspace)
+    .leftJoin(workspaceLocal, and(
+      eq(workspace.id, workspaceLocal.workspaceId),
+      eq(workspaceLocal.machine, hostname()),
+    ));
 }
 
-// Reconciles the table against the full list the renderer sent: drops workspaces
-// no longer present, upserts the rest, and renumbers sort_order from array
-// position.
+export function listWorkspaces() {
+  return selectWorkspaces().orderBy(workspace.sortOrder).all();
+}
+
+export function getWorkspace(workspaceId: string) {
+  const rows = selectWorkspaces().where(eq(workspace.id, workspaceId)).all() as any[];
+  return rows[0] ?? null;
+}
+
+// Adds a workspace. The ONLY way a row is created — a workspace can't exist
+// without a repo, and only the setup flows (which create or pick one, then
+// clone) know it. `updateWorkspaces` deliberately cannot insert.
 //
-// Deliberately does NOT touch origin_url / checked_at — those are main-authored
-// (workspaceStatus fills them) and the renderer never sends them. Listing them
-// in the upsert's `set` would wipe the cache on every settings save, the same
-// clobber that OAUTH_OWNED_RE prevents for tokens.
-export function replaceWorkspaces(list: Array<{ id: string; name: string; path: string }>) {
+// Both halves in one transaction: a workspace with no local row would join to
+// nothing and be invisible to every read, which is a worse failure than not
+// existing at all.
+export function insertWorkspace(row: {
+  id: string; name: string; path: string;
+  repoOwner: string; repoName: string; defaultBranch: string;
+}) {
   const db = getDb();
   db.transaction((tx: any) => {
-    const keep = list.filter((w) => w?.id).map((w) => w.id);
-    if (keep.length) tx.delete(workspace).where(notInArray(workspace.id, keep)).run();
-    else tx.delete(workspace).run();
+    const [{ max = 0 } = {} as any] = tx.select({ max: sql<number>`coalesce(max(${workspace.sortOrder}), 0)` })
+      .from(workspace).all() as any[];
+    tx.insert(workspace).values({
+      id: row.id,
+      name: row.name,
+      repoOwner: row.repoOwner,
+      repoName: row.repoName,
+      defaultBranch: row.defaultBranch,
+      sortOrder: max + 1,
+    }).run();
+    tx.insert(workspaceLocal).values({ workspaceId: row.id, machine: hostname(), path: row.path }).run();
+  });
+}
 
+// Applies the fields the renderer owns — name and order — to workspaces that
+// already exist.
+//
+// It cannot insert and it cannot DELETE, which is the point. It used to
+// reconcile: anything absent from the incoming list was dropped. That made every
+// settings save a potential deletion, so a renderer holding a list from before
+// the newest workspace existed would silently erase it. Removal is now its own
+// call (`deleteWorkspace`), which is also what the user action actually is.
+// An unknown id is ignored rather than erroring — a stale copy is the only way
+// to produce one, and the next read corrects it.
+//
+// Path isn't updated either: it's set at clone time, and moving a workspace
+// folder isn't an operation the app offers.
+export function updateWorkspaces(list: Array<{ id: string; name: string }>) {
+  const db = getDb();
+  db.transaction((tx: any) => {
     list.forEach((w, i) => {
       if (!w?.id) return;
-      const row = { id: w.id, name: w.name ?? '', path: w.path ?? '', sortOrder: i + 1 };
-      tx.insert(workspace).values(row).onConflictDoUpdate({
-        target: workspace.id,
-        set: { name: row.name, path: row.path, sortOrder: row.sortOrder },
-      }).run();
+      tx.update(workspace)
+        .set({ name: w.name ?? '', sortOrder: i + 1 })
+        .where(eq(workspace.id, w.id))
+        .run();
     });
   });
+}
+
+// Removes a workspace everywhere. Nothing on disk is touched — not the
+// checkout, not the GitHub repo. Local rows for EVERY machine go with it via
+// ON DELETE CASCADE, so this is the "I'm done with this repo" action.
+export function deleteWorkspace(workspaceId: string) {
+  getDb().delete(workspace).where(eq(workspace.id, workspaceId)).run();
+}
+
+// Forget only THIS machine's checkout, keeping the workspace itself. What a
+// vanished folder means: the clone is gone, but the repo is still perfectly
+// valid and re-clonable, so the identity must survive. Deleting the whole
+// workspace there would throw away the remote because a folder moved.
+export function deleteWorkspaceLocal(workspaceId: string) {
+  getDb().delete(workspaceLocal)
+    .where(and(eq(workspaceLocal.workspaceId, workspaceId), eq(workspaceLocal.machine, hostname())))
+    .run();
+}
+
+// Record a checkout of an existing workspace on this machine.
+export function insertWorkspaceLocal(workspaceId: string, workspacePath: string) {
+  getDb().insert(workspaceLocal)
+    .values({ workspaceId, machine: hostname(), path: workspacePath })
+    .run();
+}
+
+// ---- workspace_local ----------------------------------------------------------
+
+// Open a workspace. Clearing every other row first isn't bookkeeping — the
+// partial unique index on `active = 1` rejects a second active row, so the
+// clear has to happen in the same transaction as the set.
+export function setActiveWorkspace(workspaceId: string | null) {
+  const db = getDb();
+  const me = hostname();
+  db.transaction((tx: any) => {
+    tx.update(workspaceLocal).set({ active: null }).where(eq(workspaceLocal.machine, me)).run();
+    if (workspaceId) {
+      tx.update(workspaceLocal).set({ active: 1 })
+        .where(and(eq(workspaceLocal.workspaceId, workspaceId), eq(workspaceLocal.machine, me))).run();
+    }
+  });
+}
+
+export function getActiveWorkspaceId(): string | null {
+  const rows = getDb().select({ id: workspaceLocal.workspaceId }).from(workspaceLocal)
+    .where(and(eq(workspaceLocal.active, 1), eq(workspaceLocal.machine, hostname()))).all() as any[];
+  return rows[0]?.id ?? null;
 }
 
 // Sync on/off for ONE workspace — the shape of the actual user action ("disable
@@ -366,34 +472,34 @@ export function replaceWorkspaces(list: Array<{ id: string; name: string; path: 
 // every workspace row to flip one flag — the same all-at-once write this schema
 // exists to avoid. `sync.disabledWorkspaceIds` is an array only because a JSON
 // blob had no better option; it's now derived on read (listSyncDisabledIds) and
-// ignored on write, like workspace.origin_url.
+// ignored on write.
 export function setWorkspaceSyncDisabled(workspaceId: string, disabled: boolean) {
-  getDb().update(workspace)
+  getDb().update(workspaceLocal)
     .set({ syncDisabled: disabled ? 1 : 0 })
-    .where(eq(workspace.id, workspaceId))
+    .where(and(eq(workspaceLocal.workspaceId, workspaceId), eq(workspaceLocal.machine, hostname())))
     .run();
 }
 
 export function listSyncDisabledIds(): string[] {
-  return getDb().select({ id: workspace.id }).from(workspace)
-    .where(eq(workspace.syncDisabled, 1)).all().map((r: any) => r.id);
+  return getDb().select({ id: workspaceLocal.workspaceId }).from(workspaceLocal)
+    .where(and(eq(workspaceLocal.syncDisabled, 1), eq(workspaceLocal.machine, hostname())))
+    .all().map((r: any) => r.id);
 }
 
-export function findWorkspaceIdByPath(workspacePath: string): string | null {
-  const rows = getDb().select({ id: workspace.id }).from(workspace)
-    .where(eq(workspace.path, workspacePath)).all() as any[];
-  return rows[0]?.id ?? null;
+// The workspace occupying a folder, or null. This is what makes the row the
+// source of truth for the remote: the engine is started with a path and reads
+// its repo + branch from here instead of shelling out to `.git/config`.
+export function findWorkspaceByPath(workspacePath: string) {
+  const rows = selectWorkspaces().where(eq(workspaceLocal.path, workspacePath)).all() as any[];
+  return rows[0] ?? null;
 }
 
-// Write-through cache for `git remote get-url origin`, called by workspaceStatus
-// as it shells out. Matches on path (unique per workspace) and no-ops when the
-// folder isn't a known workspace — the sync setup flows call workspaceStatus for
-// folders that aren't in the list yet.
-export function cacheWorkspaceOrigin(workspacePath: string, originUrl: string | null, now: number) {
-  getDb().update(workspace)
-    .set({ originUrl, checkedAt: now })
-    .where(eq(workspace.path, workspacePath))
-    .run();
+// Whether this repo is already open as a workspace. Two workspaces pointing at
+// one repo would have them syncing over each other through the same branch.
+export function findWorkspaceByRepo(owner: string, repo: string) {
+  const rows = selectWorkspaces()
+    .where(and(eq(workspace.repoOwner, owner), eq(workspace.repoName, repo))).all() as any[];
+  return rows[0] ?? null;
 }
 
 // Trim a message body to a ~120-char window around the first query term.

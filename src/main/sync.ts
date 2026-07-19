@@ -15,7 +15,12 @@ import { app } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { scaffoldNewProject } from './prompt/index.js';
-import { cacheWorkspaceOrigin } from './db/index.js';
+// Folder classification + GitHub URL parsing live in a plain `.js` sibling with
+// no electron import, so `node --test` can exercise them directly. Re-exported
+// here because this module is the public face of everything sync-related.
+import { classifyFolder, parseGithubUrl, cloneUrlFor, repoMismatch } from './workspaceFolder.js';
+
+export { parseGithubUrl, cloneUrlFor, repoMismatch };
 
 const GITHUB_API = 'https://api.github.com';
 const API_HEADERS = (pat) => ({
@@ -28,8 +33,9 @@ const API_HEADERS = (pat) => ({
 // ─── REST helpers ──────────────────────────────────────────────────────────
 
 /**
- * GET /user. Used as a PAT sanity check. Doesn't probe scopes — that's done
- * per-repo via probeWrite when needed.
+ * GET /user. Used as a PAT sanity check. Doesn't probe scopes — a token that
+ * can't write to a given repo surfaces on the first push, with GitHub's own
+ * message, rather than being guessed at up front.
  */
 export async function verifyPat(pat) {
   if (!pat) return { ok: false, error: 'No token provided' };
@@ -83,33 +89,6 @@ export async function listRepos(pat) {
 }
 
 /**
- * Probe whether the PAT has Contents:Write on a repo. Creates a ref pointing
- * at the null SHA — 422 means git accepted the request (we have write but
- * the SHA is invalid; nothing is created), 403 means the token lacks the
- * scope. Pattern borrowed from thepopebot/lib/tools/github.js.
- */
-export async function probeWrite(owner, repo, pat) {
-  if (!pat) return { ok: false, error: 'No token provided' };
-  try {
-    const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/git/refs`, {
-      method: 'POST',
-      headers: { ...API_HEADERS(pat), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ref: 'refs/heads/__shockwave_probe__',
-        sha: '0000000000000000000000000000000000000000',
-      }),
-    });
-    if (res.status === 422) return { ok: true };
-    if (res.status === 403) return { ok: false, error: 'Token lacks Contents:Write on this repo' };
-    if (res.status === 404) return { ok: false, error: 'Repo not found or token can\'t see it' };
-    if (res.status === 401) return { ok: false, error: 'Invalid or expired token' };
-    return { ok: false, error: `GitHub returned ${res.status}` };
-  } catch (err: any) {
-    return { ok: false, error: `Network error: ${err.message}` };
-  }
-}
-
-/**
  * Create a new repo under the authenticated user. Repo creation needs a wider
  * scope than read/write on existing repos (fine-grained: Administration:Write;
  * classic: `repo`); we surface the 403 cleanly so the user knows their token
@@ -149,32 +128,6 @@ export async function createRepo(name, pat, { private: isPrivate = true, descrip
   } catch (err: any) {
     return { ok: false, error: `Network error: ${err.message}` };
   }
-}
-
-// ─── URL parsing ───────────────────────────────────────────────────────────
-
-/**
- * Extract { owner, repo } from a GitHub URL. Accepts:
- *   https://github.com/owner/repo(.git)?
- *   git@github.com:owner/repo(.git)?
- *   github.com/owner/repo
- * Returns null on anything else (gitlab, gitea, raw paths, etc.).
- */
-export function parseGithubUrl(url) {
-  if (!url || typeof url !== 'string') return null;
-  const trimmed = url.trim();
-  // SSH-style: git@github.com:owner/repo.git
-  const ssh = trimmed.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/);
-  if (ssh) return { owner: ssh[1], repo: ssh[2] };
-  // HTTPS / bare host
-  const https = trimmed.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/.*)?$/);
-  if (https) return { owner: https[1], repo: https[2] };
-  return null;
-}
-
-/** Return canonical HTTPS clone URL for a (owner, repo) pair. */
-export function cloneUrlFor(owner, repo) {
-  return `https://github.com/${owner}/${repo}.git`;
 }
 
 // ─── System check ──────────────────────────────────────────────────────────
@@ -322,47 +275,18 @@ export async function gitSpawn(cwd, args, { pat = null, timeoutMs = 60000 } = {}
   });
 }
 
-// ─── Per-workspace status ──────────────────────────────────────────────────
-
-/**
- * Inspect a workspace folder for sync-relevant state. Used by the UI to
- * decide which setup buttons to show.
- */
-export async function workspaceStatus(workspacePath) {
-  if (!workspacePath) return { hasGit: false, hasOrigin: false, originUrl: null };
-  try {
-    await fs.access(path.join(workspacePath, '.git'));
-  } catch {
-    return { hasGit: false, hasOrigin: false, originUrl: null };
-  }
-  const remote = await gitSpawn(workspacePath, ['remote', 'get-url', 'origin'], { timeoutMs: 5000 });
-  if (!remote.ok) {
-    cacheOrigin(workspacePath, null);
-    return { hasGit: true, hasOrigin: false, originUrl: null };
-  }
-  const originUrl = remote.stdout.trim();
-  cacheOrigin(workspacePath, originUrl);
-  return { hasGit: true, hasOrigin: true, originUrl };
-}
-
-// Write-through cache of what git just told us, so UI that wants to show a repo
-// for every workspace doesn't have to spawn a git per workspace. Display only —
-// the live value above is what every caller actually acts on, so an out-of-app
-// `git remote set-url` can never route a push using a stale cache. Best-effort:
-// a failure here must not break the status read.
-function cacheOrigin(workspacePath: string, originUrl: string | null) {
-  try {
-    cacheWorkspaceOrigin(workspacePath, originUrl, Date.now());
-  } catch (err: any) {
-    console.warn('[sync] could not cache origin url:', err?.message ?? err);
-  }
-}
-
 // ─── Setup flows ───────────────────────────────────────────────────────────
 //
-// All three setup flows leave the workspace with `.git/` initialized and
-// `origin` pointing at the GitHub repo. No content syncs yet — the sync
-// engine's first tick picks up from there.
+// Two flows, because there are exactly two ways to get a repo: make one or pick
+// one. Both OWN the folder — they create it and clone into it — which is what
+// retired the old third flow (`setupLink`, "adopt a folder that already has
+// files"). That flow existed only because a workspace could be a folder chosen
+// before any repo was involved; now the repo comes first and the folder is its
+// checkout, so there is never an existing folder to adopt.
+//
+// Both return the columns the `workspace` row needs. The caller inserts the row;
+// nothing here writes to the DB, so a half-finished clone leaves no workspace
+// behind.
 
 /**
  * Set local git user.name / user.email for the repo. Without these, commits
@@ -376,123 +300,136 @@ async function setLocalIdentity(workspacePath, login, ghId) {
 }
 
 /**
- * Clone an existing GitHub repo into an empty workspace folder. Fails if the
- * folder isn't empty (we don't want to clobber a populated workspace).
+ * Classify a folder the user picked, so the add-workspace dialog knows what's
+ * left to ask: `empty` (clone into it), `clone` (we already know the repo), or
+ * `occupied` (refuse, with a reason).
+ *
+ * The decision itself is in `workspaceFolder.js` — pure enough to test against
+ * real git repos without Electron. Note it reads `.git/config`, deliberately and
+ * narrowly: ONCE, at setup, to learn what a folder already is. That is not the
+ * per-tick re-derivation the workspace row replaced.
  */
-export async function setupClone({ workspacePath, remoteUrl, pat }) {
-  const parsed = parseGithubUrl(remoteUrl);
-  if (!parsed) return { ok: false, error: 'Not a valid GitHub URL' };
-  const url = cloneUrlFor(parsed.owner, parsed.repo);
+export async function inspectWorkspaceFolder(workspacePath) {
+  return classifyFolder(workspacePath);
+}
 
-  // Refuse to clone into a non-empty folder. We clone INTO it (--separate-git-dir
-  // would let us merge, but the simple rule "must be empty" avoids data loss).
-  let entries;
-  try {
-    entries = await fs.readdir(workspacePath);
-  } catch (err: any) {
-    return { ok: false, error: `Workspace folder unreadable: ${err.message}` };
+/**
+ * Adopt a folder that is ALREADY a clone. Nothing is written — not git config,
+ * not the working tree; the caller just records the row. Deliberately far
+ * narrower than the `setupLink` flow this descends from, which would `git init`
+ * an arbitrary folder and force a remote onto it. Here the remote must already
+ * be there and is taken as given.
+ */
+export async function adoptWorkspaceClone({ workspacePath, pat }) {
+  const info = await inspectWorkspaceFolder(workspacePath);
+  if (info.state !== 'clone') {
+    return { ok: false, error: info.error ?? 'That folder isn\'t a git clone.' };
   }
-  // Allow .DS_Store and hidden-only state but no real files.
-  const real = entries.filter((e) => e !== '.DS_Store' && !e.startsWith('.'));
-  if (real.length > 0) {
-    return { ok: false, error: 'Workspace folder must be empty to clone into. Move/remove existing files first or use "Init new repo" instead.' };
-  }
+  // Commits need an identity; a folder cloned outside the app may not have one
+  // set locally. Best-effort, same as the other two flows.
+  const who = await verifyPat(pat);
+  if (who.ok) await setLocalIdentity(workspacePath, who.login, who.id);
 
-  // `git clone <url> .` clones into the current directory.
-  const cloned = await gitSpawn(workspacePath, ['clone', url, '.'], { pat, timeoutMs: 120000 });
+  return {
+    ok: true,
+    path: workspacePath,
+    repoOwner: info.repoOwner,
+    repoName: info.repoName,
+    defaultBranch: info.defaultBranch,
+  };
+}
+
+/**
+ * The chosen folder must be empty before we clone into it.
+ *
+ * The user picks this folder directly (the OS picker can create one on the
+ * spot), so it always exists by the time we get here — there is no parent-plus-
+ * name to join, and nothing to mkdir. Anything with contents is refused rather
+ * than merged into: cloning over a populated folder is how you lose files.
+ */
+async function requireEmptyFolder(workspacePath) {
+  const info = await classifyFolder(workspacePath);
+  if (info.state === 'empty') return { ok: true, path: workspacePath };
+  return {
+    ok: false,
+    error: info.state === 'clone'
+      ? `That folder is already a clone of ${info.repoOwner}/${info.repoName}.`
+      : (info.error ?? "That folder can't be used."),
+  };
+}
+
+/**
+ * Read the checked-out branch. Called ONCE at setup to record `defaultBranch`
+ * on the row — thereafter the row is what the engine reads. Deliberately not
+ * taken from the caller or the repo listing: what git actually checked out is
+ * the only answer that can't be stale.
+ */
+async function currentBranch(workspacePath: string) {
+  const res = await gitSpawn(workspacePath, ['rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5000 });
+  return (res.ok && res.stdout.trim()) || 'main';
+}
+
+/**
+ * Create a new GitHub repo and a local checkout of it. Seeds SOUL.md +
+ * AGENTS.md; the engine's first tick commits and pushes them.
+ */
+export async function createWorkspaceRepo({ workspacePath, repoName, pat, private: isPrivate = true }) {
+  const folder = await requireEmptyFolder(workspacePath);
+  if (!folder.ok) return folder;
+
+  const created = await createRepo(repoName, pat, { private: isPrivate });
+  if (!created.ok) return created;
+  const [owner, repo] = created.full_name.split('/') as [string, string];
+
+  const init = await gitSpawn(folder.path, ['init', '-b', 'main'], { timeoutMs: 5000 });
+  if (!init.ok) return { ok: false, error: init.stderr.trim() || 'git init failed' };
+
+  // Agent identity + per-project instructions. Best-effort; the first tick
+  // commits whatever landed.
+  await scaffoldNewProject(folder.path);
+
+  const add = await gitSpawn(folder.path, ['remote', 'add', 'origin', cloneUrlFor(owner, repo)], { timeoutMs: 5000 });
+  if (!add.ok) return { ok: false, error: add.stderr.trim() || 'could not set origin' };
+
+  const who = await verifyPat(pat);
+  if (who.ok) await setLocalIdentity(folder.path, who.login, who.id);
+
+  return {
+    ok: true,
+    path: folder.path,
+    repoOwner: owner,
+    repoName: repo,
+    defaultBranch: await currentBranch(folder.path),
+    htmlUrl: created.html_url,
+  };
+}
+
+/**
+ * Clone an existing GitHub repo into a new local folder.
+ */
+export async function cloneWorkspaceRepo({ workspacePath, owner, repo, pat }) {
+  // No write-probe before cloning. `probeWrite` POSTs to `git/refs`, which a
+  // fine-grained token can be denied even when it holds Contents: Read and
+  // write — so probing rejected tokens that clone and push perfectly well. The
+  // old clone flow never probed; a genuine permission failure surfaces on the
+  // first push, where `isTerminalGitError` already routes it to `disabled` with
+  // GitHub's own message.
+  const folder = await requireEmptyFolder(workspacePath);
+  if (!folder.ok) return folder;
+
+  const cloned = await gitSpawn(folder.path, ['clone', cloneUrlFor(owner, repo), '.'], { pat, timeoutMs: 120000 });
   if (!cloned.ok) {
     return { ok: false, error: cloned.stderr.trim() || `git clone exited ${cloned.code}` };
   }
 
-  // Set local identity so subsequent commits don't fail.
   const who = await verifyPat(pat);
-  if (who.ok) await setLocalIdentity(workspacePath, who.login, who.id);
+  if (who.ok) await setLocalIdentity(folder.path, who.login, who.id);
 
-  return { ok: true, remoteUrl: url };
-}
-
-/**
- * Create a brand-new repo on GitHub and wire the workspace folder up to push
- * to it. The workspace can already have files — they'll be picked up by the
- * sync engine's first tick (status → commit → push).
- */
-export async function setupInitAndCreate({ workspacePath, repoName, pat, private: isPrivate = true }) {
-  const created = await createRepo(repoName, pat, { private: isPrivate });
-  if (!created.ok) return created;
-
-  // Idempotent init — safe even if .git/ already exists.
-  const init = await gitSpawn(workspacePath, ['init', '-b', 'main'], { timeoutMs: 5000 });
-  if (!init.ok) {
-    return { ok: false, error: init.stderr.trim() || 'git init failed' };
-  }
-
-  // Seed a new project with SOUL.md (agent identity) + an empty AGENTS.md
-  // (per-project instructions). Only writes files that don't already exist; the
-  // first sync tick commits + pushes them. Best-effort.
-  await scaffoldNewProject(workspacePath);
-
-  // Set origin. `remote add` fails if origin exists; use `set-url` to be
-  // idempotent against partial setups.
-  const setUrl = await gitSpawn(workspacePath, ['remote', 'add', 'origin', cloneUrlFor(...(created.full_name.split('/') as [string, string]))], { timeoutMs: 5000 });
-  if (!setUrl.ok && !/exists/.test(setUrl.stderr)) {
-    return { ok: false, error: setUrl.stderr.trim() };
-  }
-  if (!setUrl.ok) {
-    const reset = await gitSpawn(workspacePath, ['remote', 'set-url', 'origin', cloneUrlFor(...(created.full_name.split('/') as [string, string]))], { timeoutMs: 5000 });
-    if (!reset.ok) return { ok: false, error: reset.stderr.trim() };
-  }
-
-  const who = await verifyPat(pat);
-  if (who.ok) await setLocalIdentity(workspacePath, who.login, who.id);
-
-  return { ok: true, remoteUrl: cloneUrlFor(...(created.full_name.split('/') as [string, string])), full_name: created.full_name, html_url: created.html_url };
-}
-
-/**
- * Link this workspace to an existing GitHub repo without cloning. Use when
- * the workspace folder already has files (or even already has a .git/) and
- * you just want to attach it to a remote. The first sync tick handles the
- * commit + pull --rebase + push dance. Idempotent across:
- *   - no .git/ → `git init` creates it
- *   - .git/ with no origin → `git remote add origin`
- *   - .git/ with a different origin → `git remote set-url origin`
- */
-export async function setupLink({ workspacePath, remoteUrl, pat }) {
-  const parsed = parseGithubUrl(remoteUrl);
-  if (!parsed) return { ok: false, error: 'Not a valid GitHub URL' };
-  const url = cloneUrlFor(parsed.owner, parsed.repo);
-
-  // Verify we can write to the chosen repo before we touch git config.
-  const probe = await probeWrite(parsed.owner, parsed.repo, pat);
-  if (!probe.ok) return probe;
-
-  const status = await workspaceStatus(workspacePath);
-  if (!status.hasGit) {
-    const init = await gitSpawn(workspacePath, ['init', '-b', 'main'], { timeoutMs: 5000 });
-    if (!init.ok) return { ok: false, error: init.stderr.trim() || 'git init failed' };
-  }
-  if (status.hasOrigin) {
-    const reset = await gitSpawn(workspacePath, ['remote', 'set-url', 'origin', url], { timeoutMs: 5000 });
-    if (!reset.ok) return { ok: false, error: reset.stderr.trim() };
-  } else {
-    const add = await gitSpawn(workspacePath, ['remote', 'add', 'origin', url], { timeoutMs: 5000 });
-    if (!add.ok) return { ok: false, error: add.stderr.trim() };
-  }
-
-  const who = await verifyPat(pat);
-  if (who.ok) await setLocalIdentity(workspacePath, who.login, who.id);
-
-  return { ok: true, remoteUrl: url };
-}
-
-/**
- * Detach a workspace from its remote. Leaves `.git/` in place (cheap to
- * resume) but removes origin so the sync engine won't try to push.
- */
-export async function teardown({ workspacePath }) {
-  const status = await workspaceStatus(workspacePath);
-  if (!status.hasOrigin) return { ok: true };
-  const res = await gitSpawn(workspacePath, ['remote', 'remove', 'origin'], { timeoutMs: 5000 });
-  if (!res.ok) return { ok: false, error: res.stderr.trim() };
-  return { ok: true };
+  return {
+    ok: true,
+    path: folder.path,
+    repoOwner: owner,
+    repoName: repo,
+    defaultBranch: await currentBranch(folder.path),
+  };
 }

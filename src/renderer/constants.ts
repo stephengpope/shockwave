@@ -13,12 +13,12 @@ export {
 
 export const SETTINGS_SECTIONS = Object.freeze({
   APPEARANCE: 'appearance',
-  SYNC: 'sync',
   TRANSCRIPTION: 'transcription',
   UPDATES: 'updates',
   ADVANCED: 'advanced',
   // Workspace group — Workspaces list + per-(active-)workspace config.
   WORKSPACES: 'workspaces',
+  GITHUB: 'github',
   DAILY_NOTE: 'daily-note',
   TEMPLATES: 'templates',
   WORKSPACE_SKILLS: 'workspace-skills',

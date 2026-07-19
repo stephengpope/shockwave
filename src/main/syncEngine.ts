@@ -32,13 +32,21 @@
 import { BrowserWindow } from 'electron';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { gitSpawn, workspaceStatus, parseGithubUrl } from './sync.js';
+import { gitSpawn } from './sync.js';
+import { findWorkspaceByPath } from './db/index.js';
 
 // ─── Engine state ──────────────────────────────────────────────────────────
 
 let state: any = {
   running: false,           // is the tick interval armed?
   workspacePath: null,
+  // Repo + branch off the workspace ROW, read once at start(). The engine used
+  // to re-derive both from the checkout every tick (`git remote get-url` /
+  // `rev-parse`) because the DB only cached them; the row owns them now, so a
+  // hand-edited `.git/config` no longer changes where a push lands.
+  branch: 'main',
+  repoOwner: null,
+  repoName: null,
   pat: null,
   intervalMs: 10_000,
   windowId: null,           // BrowserWindow target for status + flush events
@@ -248,11 +256,11 @@ async function runTick() {
     // for the routine checks we run every tick.
     await requestFlush();
 
-    // Resolve the current branch once. We pass it explicitly to fetch / merge
-    // / push so we don't depend on an upstream being configured (the first
-    // tick on a freshly-init'd repo has no upstream yet).
-    const branchRes = await gitSpawn(state.workspacePath, ['rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5_000 });
-    const branchName = branchRes.ok ? branchRes.stdout.trim() : 'main';
+    // The branch comes from the workspace row (recorded at setup from what git
+    // actually checked out). Passed explicitly to fetch / merge / push so we
+    // don't depend on an upstream being configured — the first tick on a
+    // freshly-init'd repo has no upstream yet.
+    const branchName = state.branch;
 
     // 2. Commit local changes if dirty. Silent.
     if (!(await commitDirty(state.workspacePath))) return;
@@ -399,8 +407,9 @@ export async function resetToRemote(workspacePath) {
   if (state.pendingTickPromise) await state.pendingTickPromise.catch(() => {});
   state.ticking = true;
   try {
-    const branchRes = await gitSpawn(workspacePath, ['rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5_000 });
-    const branch = branchRes.ok ? branchRes.stdout.trim() : 'main';
+    // Same branch the tick uses (the row's). Only reachable from the conflict
+    // view, which exists only while the engine is bound to this workspace.
+    const branch = state.branch;
     // No-op (non-zero, ignored) if no merge is in progress.
     await gitSpawn(workspacePath, ['merge', '--abort'], { timeoutMs: 30_000 });
     await gitSpawn(workspacePath, ['fetch', 'origin', branch], { pat: state.pat, timeoutMs: 60_000 });
@@ -423,25 +432,30 @@ export async function start({ workspacePath, pat, intervalSeconds, windowId }) {
     emitStatus({ status: STATUS.UNCONFIGURED, detail: pat ? 'No workspace' : 'No PAT set', lastSyncAt: null, repoUrl: null });
     return;
   }
-  // No origin → sync isn't set up for this workspace. UNCONFIGURED hides the icon.
-  const ws = await workspaceStatus(workspacePath);
-  if (!ws.hasOrigin) {
+  // The row IS the sync config. No row means the folder isn't a workspace —
+  // which for a caller passing a path is a bug, not a user state, so it hides
+  // the icon rather than reporting an error. This replaced a `git remote
+  // get-url` probe: "is sync set up" used to be a question about the checkout,
+  // and is now a question about the table.
+  const ws = findWorkspaceByPath(workspacePath);
+  if (!ws) {
     state.windowId = windowId ?? state.windowId;
-    emitStatus({ status: STATUS.UNCONFIGURED, detail: 'Workspace has no remote', lastSyncAt: null, repoUrl: null });
+    emitStatus({ status: STATUS.UNCONFIGURED, detail: 'Not a workspace', lastSyncAt: null, repoUrl: null });
     return;
   }
   state.backoffStep = 0;
   state.retryAt = null;
   state.running = true;
   state.workspacePath = workspacePath;
+  state.branch = ws.defaultBranch || 'main';
+  state.repoOwner = ws.repoOwner;
+  state.repoName = ws.repoName;
   state.pat = pat;
   state.intervalMs = Math.max(5_000, Math.min(600_000, (intervalSeconds ?? 10) * 1000));
   state.windowId = windowId ?? state.windowId;
-  // Derive the GitHub web URL from the origin so the status-bar icon can
-  // open the repo in a browser. Non-GitHub remotes parse to null and the
-  // status payload carries null (renderer just renders the icon static).
-  const parsed = parseGithubUrl(ws.originUrl);
-  const repoUrl = parsed ? `https://github.com/${parsed.owner}/${parsed.repo}` : null;
+  // Web URL for the status-bar icon's "open on GitHub" — composed from the row
+  // rather than parsed back out of a remote URL.
+  const repoUrl = `https://github.com/${ws.repoOwner}/${ws.repoName}`;
   emitStatus({ status: STATUS.IDLE, detail: '', lastSyncAt: null, repoUrl });
   // First tick fires immediately (so workspace switch picks up remote
   // changes without waiting up to 10s), then on the interval.

@@ -120,7 +120,7 @@ The engine lives in main (see `src/main/CLAUDE.md`); the renderer just bridges t
 
 **Mount-only subscription.** `App.jsx` subscribes once on mount (no workspace dep) to two push events: `sync.onFlushRequest` and `sync.onStatus`. Same discipline as the `fs:changed` listener — do NOT add per-render objects (`writeNow`, `linkIndex`, etc.) to deps. `writeNow` is read via `writeNowRef.current()`, so the closure stays stable. If the listener tore down per render, an in-flight tick could lose its flush ack.
 
-**Engine start on workspace switch.** `loadWorkspace` calls `window.api.sync.engineStart({ workspacePath, intervalSeconds })` after `watchStart`. The engine self-checks for an origin + PAT and emits `disabled` if either's missing, so the renderer doesn't gate on those locally. The mount-effect cleanup calls `engineStop` so a full reload doesn't leave a tick running against a torn-down window.
+**Engine start on workspace switch.** `loadWorkspace` calls `window.api.sync.engineStart({ workspacePath, intervalSeconds })` after `watchStart`. The engine looks the workspace row up by path and reads repo + branch from it; a missing PAT or an unknown path emits `unconfigured`, so the renderer doesn't gate on those locally. The mount-effect cleanup calls `engineStop` so a full reload doesn't leave a tick running against a torn-down window.
 
 **Status icon.** `EditorStatusBar.jsx`'s `SyncStatusIcon` maps the 6 statuses to one icon each: `unconfigured` → **hidden**; `idle` + `lastSyncAt===null` → gray `Cloud` ("not synced yet"); `idle` + set → `CloudCheck`; `syncing` → spinning `Refresh`; `offline` → `CloudAlert` (amber, "retrying"); `paused` → yellow `AlertTriangle` (click → conflict view via `onOpenConflicts`); `disabled` → `Stop` (click → a small popover with the reason + an **Enable** button → `onEnableSync` → `setWorkspaceDisabled(false)`). Idle/syncing/offline still click through to the repo URL when known.
 
@@ -133,9 +133,15 @@ When `syncStatus.conflicts` is non-empty, a red conflict toggle appears at the *
 - **Whole-tree** actions live on the cloud icon's **right-click** (`showConflictCloudMenu` → `keep`/`reset` → confirm dialog → `sync.keepAll`/`resetToRemote`). Both are behind a `ConfirmDialog` (destructive).
 - The view refreshes from the engine's `sync:status` push (fewer conflicts / idle), not the watcher — the watcher ignores dotfiles and `git add` changes nothing on disk.
 
-**Settings.** Two UI files under `settings/`:
-- `SyncSection.jsx` — global PAT (verify button hits `sync:verifyPat`), interval slider, and a git-presence check that runs once on mount.
-- `WorkspaceSyncDialog.jsx` — per-workspace setup picker (three choice cards: clone into empty, init+create new repo, adopt existing local `.git`). Launched from `WorkspacesSection.jsx`.
+**Settings.** Two sections, split by scope:
+- `settings/GitHubSection.tsx` ("GitHub Sync") — the PAT + verify, the sync interval, and the `git --version` check. None of it is per-workspace: one account, one engine, one binary.
+- `settings/WorkspacesSection.tsx` — the list and nothing else.
+
+They were briefly merged (account above the list) and split again: the list is what you come to that page for, and three global controls on top pushed it below the fold. The merge's actual gain is kept — the old split's failure was that Workspaces never told you where the token lived, so `AddWorkspaceDialog` now links straight to the GitHub section when none is set.
+
+Each row: inline rename (click the name), a **Sync** switch, and Open / remove. The switch only takes effect while that workspace is open — the engine is a singleton bound to the active workspace — which the tooltip says, since the label has no room for it.
+
+A row whose `path` is null is a workspace that exists but **isn't checked out on this machine** (a DB copied from another machine, or a folder that went missing). It shows `owner/repo — not on this machine` and offers **Set up here** → folder picker → `workspace:setUpHere`, which clones into an empty folder or attaches one that's already a clone of that same repo. Sync + Open are hidden there — neither means anything without a checkout.
 
 ## Send to Agent
 
@@ -173,10 +179,10 @@ Settings → Daily Notes lets the user choose a dayjs format string (`YYYY-MM-DD
 `SettingsModal.jsx` is the host; each section lives in `settings/`:
 
 - `AppearanceSection.jsx` — theme mode, hide-line-numbers.
-- `WorkspacesSection.jsx` — list/add/remove/switch workspaces (folder picker via `dialog:openFolder`). Each row offers a Sync button that opens `WorkspaceSyncDialog`.
+- `WorkspacesSection.tsx` — the workspace list (open / rename / remove / per-row sync switch / set-up-here). "Add workspace" opens `AddWorkspaceDialog`.
+- `GitHubSection.tsx` — PAT (encrypted at rest) + `sync:verifyPat`, sync interval, `sync:checkGit` presence check. Everything global; nothing per-workspace.
+- `AddWorkspaceDialog.tsx` — the one way to add a workspace. **The folder is asked FIRST**, because it decides what's left to ask: `workspace:inspectFolder` classifies it as `clone` (already a checkout — the repo is known, so only a name is needed), `empty` (the Create new / Clone existing choice appears), or `occupied` (refused). That's why there's no "adopt existing folder" mode to hunt for — it's just what happens when you pick a folder that already is one.
 - `DailyNoteSection.jsx` — format presets + custom format + `FolderCombobox` for the target folder.
-- `SyncSection.jsx` — global GitHub sync settings: PAT (encrypted at rest), tick interval, `sync:verifyPat` button, `sync:checkGit` presence check.
-- `WorkspaceSyncDialog.jsx` — per-workspace setup picker (three choice cards: clone into empty / init+create new / adopt existing). Launched from `WorkspacesSection.jsx`.
 - `TranscriptionSection.jsx` — AssemblyAI API key + "Test microphone" button (see Voice input above).
 - `AgentChatSection.jsx` — provider/model/API key + reasoning level. The system prompt is no longer editable here — it's assembled from the workspace's `SOUL.md` + the internal helper (see `src/main/prompt/`); the section just points users at `SOUL.md` / `AGENTS.md`. Provider + model lists are fetched live from main via `agent:listProviders` / `agent:listModels`.
 - `AiSkillsTab.jsx` (Global Skills) — drop folder / pick folder to import a SKILL.md-bearing folder into the library; enable/disable each skill globally; remove.

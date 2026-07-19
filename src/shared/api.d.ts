@@ -116,6 +116,17 @@ export interface UpdateStatus {
   downloaded: boolean;
 }
 
+// Result of the two workspace setup flows. On success the row already exists
+// and `id`/`path` are what the renderer needs to select and load it.
+export interface WorkspaceSetupResult {
+  ok: boolean;
+  id?: string;
+  path?: string;
+  repoOwner?: string;
+  repoName?: string;
+  error?: string;
+}
+
 export interface SyncStatus {
   status: 'unconfigured' | 'idle' | 'syncing' | 'paused' | 'offline' | 'disabled' | string;
   detail: string;
@@ -293,15 +304,22 @@ export interface ShockwaveApi {
     restartToUpdate(): Promise<void>;
   };
 
+  // A workspace IS a GitHub repo — both calls clone into a new folder and
+  // insert the row in main. There is no way to register one from the renderer.
+  workspace: {
+    createWithRepo(opts: { workspacePath: string; repoName: string; name?: string; private?: boolean }): Promise<WorkspaceSetupResult>;
+    addFromRepo(opts: { workspacePath: string; owner: string; repo: string; name?: string }): Promise<WorkspaceSetupResult>;
+    inspectFolder(workspacePath: string): Promise<{ state: 'empty' | 'clone' | 'occupied'; repoOwner?: string; repoName?: string; defaultBranch?: string; error?: string }>;
+    addFromClone(opts: { workspacePath: string; name?: string }): Promise<WorkspaceSetupResult>;
+    setUpHere(opts: { id: string; workspacePath: string }): Promise<{ ok: boolean; id?: string; path?: string; error?: string }>;
+    remove(opts: { id: string }): Promise<{ ok: boolean; error?: string }>;
+    forgetLocal(opts: { id: string }): Promise<{ ok: boolean }>;
+  };
+
   sync: {
     verifyPat(pat: string): Promise<{ ok: boolean; login?: string; id?: number; name?: string | null; error?: string }>;
     checkGit(): Promise<{ ok: boolean; version?: string; error?: string; platform: NodeJS.Platform }>;
-    workspaceStatus(workspacePath: string): Promise<{ hasGit: boolean; hasOrigin: boolean; originUrl: string | null }>;
-    setupClone(opts: { workspacePath: string; remoteUrl: string }): Promise<{ ok: boolean; remoteUrl?: string; error?: string }>;
     listRepos(): Promise<{ ok: boolean; repos?: Array<{ full_name: string; clone_url: string; private: boolean; default_branch: string; pushed_at: string }>; error?: string }>;
-    setupInitAndCreate(opts: { workspacePath: string; repoName: string; private?: boolean }): Promise<{ ok: boolean; remoteUrl?: string; full_name?: string; html_url?: string; error?: string }>;
-    setupLink(opts: { workspacePath: string; remoteUrl: string }): Promise<{ ok: boolean; remoteUrl?: string; error?: string }>;
-    teardown(opts: { workspacePath: string }): Promise<{ ok: boolean; error?: string }>;
     setWorkspaceDisabled(opts: { workspacePath: string; disabled: boolean }): Promise<{ ok: boolean; error?: string }>;
     engineStart(opts: { workspacePath: string; intervalSeconds?: number }): Promise<void>;
     engineStop(): Promise<void>;

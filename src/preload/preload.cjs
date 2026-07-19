@@ -410,6 +410,50 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
 
+  // ---- Workspaces ---------------------------------------------------------
+  //
+  // A workspace IS a GitHub repo, so both calls below clone into a new folder
+  // and insert the row in main. The renderer can't create a workspace any other
+  // way — a settings save can only rename, reorder, or remove.
+
+  workspace: {
+    /** Create a new GitHub repo and clone it into `workspacePath` (must be empty).
+     *  PAT pulled from settings.
+     *  @param {{ workspacePath: string, repoName: string, name?: string, private?: boolean }} opts
+     *  @returns {Promise<{ ok: boolean, id?: string, path?: string, repoOwner?: string, repoName?: string, error?: string }>} */
+    createWithRepo: (opts) => ipcRenderer.invoke('workspace:createWithRepo', opts),
+    /** Clone an existing GitHub repo into `workspacePath` (must be empty). PAT pulled
+     *  from settings.
+     *  @param {{ workspacePath: string, owner: string, repo: string, name?: string }} opts
+     *  @returns {Promise<{ ok: boolean, id?: string, path?: string, repoOwner?: string, repoName?: string, error?: string }>} */
+    addFromRepo: (opts) => ipcRenderer.invoke('workspace:addFromRepo', opts),
+    /** Classify a picked folder: 'empty' (clone into it), 'clone' (already a
+     *  checkout — carries repoOwner/repoName), or 'occupied' (unusable, carries
+     *  `error`). Read-only.
+     *  @param {string} workspacePath
+     *  @returns {Promise<{ state: 'empty'|'clone'|'occupied', repoOwner?: string, repoName?: string, defaultBranch?: string, error?: string }>} */
+    inspectFolder: (workspacePath) => ipcRenderer.invoke('workspace:inspectFolder', workspacePath),
+    /** Adopt a folder that is already a clone. Records the row; clones nothing.
+     *  @param {{ workspacePath: string, name?: string }} opts
+     *  @returns {Promise<{ ok: boolean, id?: string, path?: string, repoOwner?: string, repoName?: string, error?: string }>} */
+    addFromClone: (opts) => ipcRenderer.invoke('workspace:addFromClone', opts),
+    /** Check out an existing workspace on this machine (it has a repo but no
+     *  local folder here). Clones into an empty folder, or accepts one that's
+     *  already a clone of the same repo.
+     *  @param {{ id: string, workspacePath: string }} opts
+     *  @returns {Promise<{ ok: boolean, id?: string, path?: string, error?: string }>} */
+    setUpHere: (opts) => ipcRenderer.invoke('workspace:setUpHere', opts),
+    /** Remove a workspace. Its own call rather than a settings save that omits
+     *  the id, so a stale list can't delete. Nothing on disk is touched.
+     *  @param {{ id: string }} opts
+     *  @returns {Promise<{ ok: boolean, error?: string }>} */
+    remove: (opts) => ipcRenderer.invoke('workspace:remove', opts),
+    /** Forget this machine's checkout, keeping the workspace. For a folder that
+     *  vanished — the repo is still valid, so the identity must survive.
+     *  @param {{ id: string }} opts @returns {Promise<{ ok: boolean }>} */
+    forgetLocal: (opts) => ipcRenderer.invoke('workspace:forgetLocal', opts),
+  },
+
   // ---- GitHub sync --------------------------------------------------------
   //
   // PAT lives encrypted in settings and is never sent across this bridge.
@@ -426,33 +470,12 @@ contextBridge.exposeInMainWorld('api', {
     /** Check whether `git` is on PATH and return its version.
      *  @returns {Promise<{ ok: boolean, version?: string, error?: string, platform: NodeJS.Platform }>} */
     checkGit: () => ipcRenderer.invoke('sync:checkGit'),
-    /** Inspect sync state of a workspace folder.
-     *  @param {string} workspacePath
-     *  @returns {Promise<{ hasGit: boolean, hasOrigin: boolean, originUrl: string|null }>} */
-    workspaceStatus: (workspacePath) => ipcRenderer.invoke('sync:workspaceStatus', workspacePath),
-    /** Clone an existing GitHub repo into an empty workspace folder. PAT pulled from settings.
-     *  @param {{ workspacePath: string, remoteUrl: string }} opts
-     *  @returns {Promise<{ ok: boolean, remoteUrl?: string, error?: string }>} */
-    setupClone: (opts) => ipcRenderer.invoke('sync:setupClone', opts),
     /** List repos visible to the configured PAT (sorted by pushed_at desc). PAT pulled from settings.
      *  @returns {Promise<{ ok: boolean, repos?: Array<{ full_name: string, clone_url: string, private: boolean, default_branch: string, pushed_at: string }>, error?: string }>} */
     listRepos: () => ipcRenderer.invoke('sync:listRepos'),
-    /** Create a new GitHub repo and wire the workspace to it. PAT pulled from settings.
-     *  @param {{ workspacePath: string, repoName: string, private?: boolean }} opts
-     *  @returns {Promise<{ ok: boolean, remoteUrl?: string, full_name?: string, html_url?: string, error?: string }>} */
-    setupInitAndCreate: (opts) => ipcRenderer.invoke('sync:setupInitAndCreate', opts),
-    /** Link a workspace to an existing GitHub repo without cloning. Runs
-     *  git init (if needed) + git remote add/set-url origin. PAT pulled from settings.
-     *  @param {{ workspacePath: string, remoteUrl: string }} opts
-     *  @returns {Promise<{ ok: boolean, remoteUrl?: string, error?: string }>} */
-    setupLink: (opts) => ipcRenderer.invoke('sync:setupLink', opts),
-    /** Remove origin from the workspace (leaves .git/ in place).
-     *  @param {{ workspacePath: string }} opts
-     *  @returns {Promise<{ ok: boolean, error?: string }>} */
-    teardown: (opts) => ipcRenderer.invoke('sync:teardown', opts),
     /** Toggle the per-workspace "user paused" flag. Persists the flag and
-     *  restarts the engine if this is the active workspace. Origin is left in
-     *  place so re-enabling is a no-touch resume.
+     *  restarts the engine if this is the active workspace. Nothing on disk
+     *  changes, so re-enabling is a no-touch resume.
      *  @param {{ workspacePath: string, disabled: boolean }} opts
      *  @returns {Promise<{ ok: boolean, error?: string }>} */
     setWorkspaceDisabled: (opts) => ipcRenderer.invoke('sync:setWorkspaceDisabled', opts),

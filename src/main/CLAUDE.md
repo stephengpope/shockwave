@@ -11,6 +11,7 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 - `settingsKeys.js` — PURE key policy + shape mapping for the above (plain `.js`, unit-tested under `node --test`): `SETTINGS_SECRET_PATTERNS` / `AGENT_SECRET_FIELDS` (what goes to `secret_value`), `OAUTH_OWNED_FIELDS` / `OAUTH_OWNED_COLUMNS`, `LEAF_KEYS`, the flatten helpers, and `splitAgentSecret`/`joinAgentSecret` (the AgentSecret ⇄ two-table mapping).
 - `masterKey.ts` — the `safeStorage`-wrapped master key at `<userData>/masterkey.enc`, plus `seal`/`unseal` (AES-256-GCM) for secret setting values.
 - `pathResolver.ts` — `isMdFile`, `uniquePath` (same-dir uniqueness), `uniqueInWorkspace` (workspace-wide basename uniqueness for `.md` files), `walkMarkdownPaths`, `collectMarkdownBasenamesLower`. The link index is keyed by basename, so two `.md` files sharing one breaks it; `uniqueInWorkspace` is what `fs:renameFile`, `fs:moveItem`, and `fs:createFile` call to auto-disambiguate. Folder renames stay same-folder-unique because folders aren't part of the link index.
+- `workspaceFolder.js` — PURE folder classification for the add-workspace flow (plain `.js`, unit-tested under `node --test`): `classifyFolder` → `empty` | `clone` | `occupied`, plus `parseGithubUrl` / `cloneUrlFor` / `repoMismatch`. No electron import, same split as `cronScheduler.js` vs `cron.ts`. `sync.ts` re-exports these.
 - `linkParser.js` — ESM mirror of the wiki-link parser in `src/renderer/linkIndex.js` (intentionally kept as `.js` so both processes load the exact same module bytes — see parser-parity rule in root).
 - `renameCorrelator.js` — pairs unlink+add events into rename events. See below.
 - `watcherDispatch.js` — maps a `@parcel/watcher` event batch to correlator/pending-state calls. Imported by BOTH `main.ts` (real sinks) and the correlator/e2e tests (tmp-dir sinks), so main and the tests exercise identical watcher logic — same parity discipline as `linkParser.js`. Handles the parcel-specific shapes: atomic-save-as-`create`-of-known-path, folder-rename via directory expansion, deletes-before-creates batch ordering.
@@ -21,7 +22,7 @@ Main-process internals. Code under `src/main/`. Cross-cutting invariants (termin
 - `agentTokensExtension.ts` — pi extension exposing `list_agent_secrets` + `get_agent_secret`; installed via `installAgentTokensBridge` at startup. `get_agent_secret` returns a usable credential for both static tokens and OAuth connections (a fresh access token for the latter) via the bridge's `getToken`.
 - `oauth.ts` — OAuth2 engine for `oauth`-kind agent secrets (arctic + a loopback callback server; BYO Desktop-app client). See "OAuth for agent secrets" below.
 - `skillLibrary.ts` — on-disk skill library under `<userData>/pi-agent/skill-library/<skill-name>/SKILL.md` and the workspace-override resolution.
-- `sync.ts` — GitHub sync support: REST helpers (`verifyPat`, `probeWrite`, `createRepo`), URL parsing, the `gitSpawn` wrapper that injects a PAT via `GIT_ASKPASS`, git-presence check, per-workspace status, and the four setup flows (clone / init+create / adopt-existing / teardown).
+- `sync.ts` — GitHub sync support: REST helpers (`verifyPat`, `probeWrite`, `createRepo`, `listRepos`), URL parsing, the `gitSpawn` wrapper that injects a PAT via `GIT_ASKPASS`, git-presence check, and the workspace setup flows. `inspectWorkspaceFolder` delegates to `workspaceFolder.js` to classify a picked folder (`empty` / `clone` / `occupied`) — the one place that reads `.git/config`, ONCE at setup, to learn what a folder already is (not the per-tick re-derivation the row replaced). Then `createWorkspaceRepo` and `cloneWorkspaceRepo` clone into an empty folder, and `adoptWorkspaceClone` records a folder that already is one without writing anything. The old `setupLink` (git-init an arbitrary folder and force a remote onto it) is gone — adopting now requires the remote to already be there.
 - `syncEngine.ts` — singleton per-workspace tick engine. Sequential ticks (pause-if-conflicts → flush → commit → fetch → **merge** if behind → push), status state machine (with a `conflicts[]` payload on pause), per-file + whole-tree conflict resolution (`resolveConflict`/`keepConflict`/`resetConflict`/`keepAll`/`resetToRemote`), flush-renderer-dirty bridge, drain-on-quit hook.
 
 ## File watcher
@@ -100,16 +101,19 @@ The correlator buffers unlinks and pairs them with subsequent adds:
 
 ## Settings persistence + secrets encryption
 
-Settings live in `<userData>/shockwave.db` across **four tables**, split by what the data *is*. `settingsStore.ts` owns `readSettings`/`writeSettings` and `DEFAULT_SETTINGS`; the `Settings` type stays in `src/shared/settings.ts`.
+Settings live in `<userData>/shockwave.db` across **five tables**, split by what the data *is*. `settingsStore.ts` owns `readSettings`/`writeSettings` and `DEFAULT_SETTINGS`; the `Settings` type stays in `src/shared/settings.ts`.
 
 | Table | Holds | Why not key-value |
 |---|---|---|
 | `setting` | scalar preferences, one row per dotted leaf key | — this is what KV is good at |
-| `workspace` | workspace entities + main-authored `origin_url` cache | an entity needs atomicity; N key rows can leave a half-record |
+| `workspace` | workspace entities — which GitHub repo each one is | an entity needs atomicity; N key rows can leave a half-record |
+| `workspace_local` | per `(workspace, machine)`: checkout path, active flag, sync on/off | machine-scoped facts; keyed by machine so the DB stays copyable |
+
+Reads LEFT-join the two, scoped to `machine = hostname()`, so a workspace with no local row here surfaces with `path: null` — "exists, not checked out on this machine" — rather than disappearing. That's the normal state for a DB copied to a second machine, and what a vanished folder degrades to: `workspace:forgetLocal` drops only the local row, because the repo is still valid and re-clonable. `workspace:setUpHere` is the inverse.
 | `agent_secret` | agent-secret entities (no crypto columns) | same |
 | `secret_value` | **every** encrypted value, crypto columns `NOT NULL` | makes a plaintext credential unrepresentable |
 
-`readSettings()` / `writeSettings(patch)` keep the signatures they had as file operations and still return/accept one flat `Settings` object, so every call site in `main.ts`, `oauth.ts`, `cron.ts` — and the whole renderer — is unchanged. The four-way split is invisible above this file.
+`readSettings()` / `writeSettings(patch)` keep the signatures they had as file operations and still return/accept one flat `Settings` object, so every call site in `main.ts`, `oauth.ts`, `cron.ts` — and the whole renderer — is unchanged. The five-way split is invisible above this file.
 
 ### The store is the source of truth
 
@@ -129,7 +133,7 @@ The old `<userData>/settings.json` was read-modify-written in full on every save
 - **No deep-merge to maintain.** A key with no row falls back to `DEFAULT_SETTINGS`. The old hand-written per-key merge in `readSettings` is gone.
 - **No write queue.** better-sqlite3 writes are synchronous and committed by the time `writeSettings` resolves, so `will-quit` no longer drains anything for settings — only the sync engine.
 - **Nested objects flatten** (`appearance.treePanel.content`); `windowBounds` is in `LEAF_KEYS` and stored whole as one JSON row.
-- **Collections get tables, not key rows.** `workspaces` and `agentSecrets` are intercepted in `writeSettings` *before* flattening and routed to their tables, so no stray settings row can reappear and shadow one. `sync.disabledWorkspaceIds` became `workspace.sync_disabled` — as an array it was a foreign key by another name, and ids outlived the workspaces they named. It is **derived on read** (`listSyncDisabledIds`) and **ignored on write**, authored only by the `sync:setWorkspaceDisabled` IPC via `setWorkspaceSyncDisabled(id, disabled)` — one boolean on one row. The renderer echoes the array back inside its `sync` object because it arrives on read; dropping it makes that echo a no-op instead of a rewrite of every workspace row. Same treatment as `workspace.origin_url`.
+- **Collections get tables, not key rows.** `workspaces` and `agentSecrets` are intercepted in `writeSettings` *before* flattening and routed to their tables, so no stray settings row can reappear and shadow one. `sync.disabledWorkspaceIds` became `workspace.sync_disabled` — as an array it was a foreign key by another name, and ids outlived the workspaces they named. It is **derived on read** (`listSyncDisabledIds`) and **ignored on write**, authored only by the `sync:setWorkspaceDisabled` IPC via `setWorkspaceSyncDisabled(id, disabled)` — one boolean on one row. The renderer echoes the array back inside its `sync` object because it arrives on read; dropping it makes that echo a no-op instead of a rewrite of every workspace row. `activeWorkspaceId` got the same treatment: it was a `setting` row (a foreign key hiding in a key-value store, global when it should be per-machine) and is now `workspace_local.active`, derived on read and routed to `setActiveWorkspace` on write. **`writeSettings` can no longer create or delete a workspace** — `updateWorkspaces` only renames and reorders, so a stale renderer list can't erase a workspace it hadn't heard about; creation is `workspace:createWithRepo`/`addFromRepo`, removal is `workspace:remove`.
 - **Agent-secret order is derived**, `createdAt` then name, rather than stored — a shared ordering row would reintroduce the cross-writer collision the design removes. Workspaces do store `sort_order` (REAL), because their order is user-visible and arbitrary.
 
 The pure half — key classification, the flatten mapping, and the entity split/join — lives in **`settingsKeys.js`** (plain `.js`, no electron import) so `node --test` exercises it directly; same split as `cronScheduler.js` vs `cron.ts`. See `tests/settingsKeys.test.js`.
@@ -279,7 +283,7 @@ While paused, the renderer surfaces the conflict list and lets the user resolve.
 
 ### Lifecycle
 
-- `start({ workspacePath, pat, intervalSeconds, windowId })` — stops any previous instance, self-checks origin + PAT, kicks the interval. **First tick fires immediately** so a workspace switch doesn't wait up to `intervalSeconds` before picking up remote changes.
+- `start({ workspacePath, pat, intervalSeconds, windowId })` — stops any previous instance, looks the workspace row up by path and takes repo + branch FROM THE ROW (no `git remote get-url`, no per-tick `rev-parse`), then kicks the interval. **First tick fires immediately** so a workspace switch doesn't wait up to `intervalSeconds` before picking up remote changes.
 - `stop()` — clears the interval and awaits the in-flight tick (so a partial commit/push never leaks).
 - `drainBeforeQuit()` — called from `before-quit`. Same as `stop()` minus the disabled-status emit. Without this, a fast Cmd+Q could kill a child mid-push.
 
@@ -312,6 +316,7 @@ The flush runs at the head of every tick, so on a fast-typing user the engine's 
 | Voice | `voice:getToken` |
 | Agent | `agent:send` (takes `sessionId`; steers if that chat is mid-turn), `agent:abort` (per sessionId), `agent:runningSessions`, `agent:listProviders`, `agent:listModels`; plus push events: `agent:event` / `agent:error` (every payload stamped with its `sessionId`) |
 | Skills | `skills:list`, `skills:libraryDir`, `skills:importPicker`, `skills:importFromPath`, `skills:remove` |
-| Sync | `sync:verifyPat`, `sync:checkGit`, `sync:workspaceStatus`, `sync:setupClone`, `sync:setupInitAndCreate`, `sync:setupExistingLocal`, `sync:teardown`, `sync:setWorkspaceDisabled`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`, `sync:listConflicts`, `sync:resolveConflict`, `sync:keepConflict`, `sync:resetConflict`, `sync:keepAll`, `sync:resetToRemote`; plus push events `sync:status` (carries `conflicts[]` when paused), `sync:flushRequest` |
+| Workspaces | `workspace:inspectFolder`, `workspace:createWithRepo`, `workspace:addFromRepo`, `workspace:addFromClone`, `workspace:setUpHere`, `workspace:remove`, `workspace:forgetLocal`, `workspace:scaffold` |
+| Sync | `sync:verifyPat`, `sync:checkGit`, `sync:listRepos`, `sync:setWorkspaceDisabled`, `sync:engineStart`, `sync:engineStop`, `sync:engineStatus`, `sync:flushDone`, `sync:listConflicts`, `sync:resolveConflict`, `sync:keepConflict`, `sync:resetConflict`, `sync:keepAll`, `sync:resetToRemote`; plus push events `sync:status` (carries `conflicts[]` when paused), `sync:flushRequest` |
 
 The renderer reaches every one of these via `window.api.*` — see `src/preload/preload.cjs`. The renderer never touches Node directly.

@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import WorkspacesSection from './settings/WorkspacesSection.jsx';
+import GitHubSection from './settings/GitHubSection.jsx';
 import AppearanceSection from './settings/AppearanceSection.jsx';
 import AgentChatSection from './settings/AgentChatSection.jsx';
 import CronSection from './settings/CronSection.jsx';
@@ -18,7 +19,6 @@ import AgentSecretsSection from './settings/AgentSecretsSection.jsx';
 import DailyNoteSection from './settings/DailyNoteSection.jsx';
 import TemplatesSection from './settings/TemplatesSection.jsx';
 import TranscriptionSection from './settings/TranscriptionSection.jsx';
-import SyncSection from './settings/SyncSection.jsx';
 import UpdatesSection from './settings/UpdatesSection.jsx';
 import AdvancedSection from './settings/AdvancedSection.jsx';
 
@@ -35,7 +35,7 @@ function buildNav(workspaceLabel) {
     { kind: 'header', label: 'General' },
     { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
     { kind: 'item', id: SETTINGS_SECTIONS.APPEARANCE, label: 'Appearance' },
-    { kind: 'item', id: SETTINGS_SECTIONS.SYNC, label: 'GitHub Sync' },
+    { kind: 'item', id: SETTINGS_SECTIONS.GITHUB, label: 'GitHub Sync' },
     { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
     { kind: 'item', id: SETTINGS_SECTIONS.UPDATES, label: 'Updates' },
     { kind: 'item', id: SETTINGS_SECTIONS.ADVANCED, label: 'Advanced' },
@@ -66,9 +66,10 @@ export default function SettingsModal({
   onClose,
   workspaces,
   activeWorkspaceId,
-  onAddWorkspace,
+  onWorkspaceAdded,
   onSwitchWorkspace,
   onRemoveWorkspace,
+  onRenameWorkspaces,
   themeMode,
   onThemeModeChange,
   hideLineNumbers,
@@ -174,14 +175,18 @@ export default function SettingsModal({
             <WorkspacesSection
               workspaces={workspaces}
               activeWorkspaceId={activeWorkspaceId}
-              onAdd={onAddWorkspace}
+              onWorkspaceAdded={(id, path, name) => { onWorkspaceAdded(id, path, name); onClose(); }}
               onSwitch={(id) => { onSwitchWorkspace(id); onClose(); }}
               onRemove={onRemoveWorkspace}
+              onRename={onRenameWorkspaces}
               syncPat={sync?.pat}
-              pullIntervalSeconds={sync?.pullIntervalSeconds}
+              onOpenGitHubSettings={() => setActive(SETTINGS_SECTIONS.GITHUB)}
               disabledWorkspaceIds={sync?.disabledWorkspaceIds || []}
               onSyncDisabledChange={onSyncDisabledChange}
             />
+          )}
+          {active === SETTINGS_SECTIONS.GITHUB && (
+            <GitHubSection sync={sync} onSyncChange={onSyncChange} />
           )}
           {/* Per-workspace config — applies to the ACTIVE workspace, stored in
               its `.shockwave/workspace.json`. */}
@@ -214,12 +219,6 @@ export default function SettingsModal({
                 onBuiltinSkillToggle={onBuiltinSkillToggle}
               />
             ) : <NoWorkspaceNote />
-          )}
-          {active === SETTINGS_SECTIONS.SYNC && (
-            <SyncSection
-              sync={sync}
-              onSyncChange={onSyncChange}
-            />
           )}
           {active === SETTINGS_SECTIONS.TRANSCRIPTION && (
             <TranscriptionSection

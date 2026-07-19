@@ -16,7 +16,7 @@ import {
   cronRunNow, cronSetMaxCatchupHours, cronSetMaxRunMinutes,
 } from './cron.js';
 import { CRON_FILE } from './cronScheduler.js';
-import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred, findWorkspaceIdByPath, setWorkspaceSyncDisabled } from './db/index.js';
+import { listSessions, listStarred, searchSessions, getMessages, getSession, deleteSession, setSessionTitle, setSessionStarred, insertWorkspace, deleteWorkspace, deleteWorkspaceLocal, insertWorkspaceLocal, getWorkspace, findWorkspaceByPath, findWorkspaceByRepo, setWorkspaceSyncDisabled } from './db/index.js';
 import { isMdFile, uniquePath, walkMarkdownPaths, isIgnoredSegment } from './pathResolver.js';
 import { scaffoldNewProject } from './prompt/index.js';
 // Static-catalog reads moved off the pi-ai root to `/compat` in pi-ai 0.80.0.
@@ -31,15 +31,15 @@ import { ensureCliShims, prependPath } from './cliTools.js';
 // `<userData>/settings.json` reader/writer and its per-field safeStorage
 // encryption were replaced wholesale; the signatures here are unchanged, so
 // every call site below (and in oauth.ts / cron.ts) is untouched.
-import { DEFAULT_SETTINGS, readSettings, writeSettings, importLegacySettingsIfNeeded } from './settingsStore.js';
+import { DEFAULT_SETTINGS, readSettings, writeSettings, importLegacySettingsIfNeeded, notifyWorkspacesChanged } from './settingsStore.js';
 import {
   verifyPat as syncVerifyPat,
   checkGit as syncCheckGit,
-  workspaceStatus as syncWorkspaceStatus,
-  setupClone as syncSetupClone,
-  setupInitAndCreate as syncSetupInitAndCreate,
-  setupLink as syncSetupLink,
-  teardown as syncTeardown,
+  createWorkspaceRepo as syncCreateWorkspaceRepo,
+  cloneWorkspaceRepo as syncCloneWorkspaceRepo,
+  inspectWorkspaceFolder as syncInspectWorkspaceFolder,
+  adoptWorkspaceClone as syncAdoptWorkspaceClone,
+  repoMismatch as syncRepoMismatch,
   listRepos as syncListRepos,
 } from './sync.js';
 import {
@@ -1076,12 +1076,6 @@ ipcMain.handle('sync:checkGit', async () => {
   return syncCheckGit();
 });
 
-// Per-workspace status — does it have .git, does it have an origin, what URL?
-// Drives the "Configure sync" UI's button enablement.
-ipcMain.handle('sync:workspaceStatus', async (_evt, workspacePath) => {
-  return syncWorkspaceStatus(workspacePath);
-});
-
 // Helper: load the decrypted PAT from settings for sync setup IPCs that need
 // it. We don't accept PAT from the renderer for these flows — the user has
 // already saved one (otherwise the UI gates them out) so we read straight
@@ -1089,30 +1083,124 @@ ipcMain.handle('sync:workspaceStatus', async (_evt, workspacePath) => {
 async function readSyncPat() {
   const settings = await readSettings();
   const pat = settings.sync?.pat || '';
-  if (!pat) return { ok: false, error: 'GitHub Sync not configured. Set a PAT in Settings → GitHub Sync.' };
+  if (!pat) return { ok: false, error: 'Connect a GitHub account first.' };
   return { ok: true, pat };
 }
 
-ipcMain.handle('sync:setupClone', async (_evt, { workspacePath, remoteUrl }) => {
+// ---- Workspace creation ----
+//
+// The two ways to get a workspace: make a repo or pick one. Both clone into a
+// new folder and, only on success, insert the row — so a failed setup leaves no
+// workspace pointing at a folder that isn't a checkout.
+//
+// `name` is display-only and defaults to the repo name. The id is minted here
+// rather than by the renderer: the row is created in main now, so there's no
+// window where the renderer holds an id for a workspace that doesn't exist.
+
+async function finishWorkspaceSetup(res: any, name: string) {
+  const id = crypto.randomUUID();
+  insertWorkspace({
+    id,
+    name: (name || '').trim() || res.repoName,
+    path: res.path,
+    repoOwner: res.repoOwner,
+    repoName: res.repoName,
+    defaultBranch: res.defaultBranch,
+  });
+  // Tell the renderer before it can save settings built from a list that
+  // doesn't include this row yet — see notifyWorkspacesChanged.
+  await notifyWorkspacesChanged();
+  return { ok: true, id, path: res.path, repoOwner: res.repoOwner, repoName: res.repoName };
+}
+
+ipcMain.handle('workspace:createWithRepo', async (_evt, { workspacePath, repoName, name, private: isPrivate = true }) => {
   const auth = await readSyncPat();
   if (!auth.ok) return auth;
-  return syncSetupClone({ workspacePath, remoteUrl, pat: auth.pat });
+  const res = await syncCreateWorkspaceRepo({ workspacePath, repoName, private: isPrivate, pat: auth.pat });
+  if (!res.ok) return res;
+  return await finishWorkspaceSetup(res, name);
 });
 
-ipcMain.handle('sync:setupInitAndCreate', async (_evt, { workspacePath, repoName, private: isPrivate = true }) => {
+// Classify a picked folder so the dialog knows what to ask next: empty (pick a
+// repo to clone in), already a clone (we know the repo — just confirm), or
+// occupied (refuse). Read-only.
+ipcMain.handle('workspace:inspectFolder', async (_evt, workspacePath) => {
+  return syncInspectWorkspaceFolder(workspacePath);
+});
+
+// Adopt a folder that's already a clone. No clone, no git writes beyond the
+// local commit identity — just records the row.
+ipcMain.handle('workspace:addFromClone', async (_evt, { workspacePath, name }) => {
   const auth = await readSyncPat();
   if (!auth.ok) return auth;
-  return syncSetupInitAndCreate({ workspacePath, repoName, private: isPrivate, pat: auth.pat });
+  const res = await syncAdoptWorkspaceClone({ workspacePath, pat: auth.pat });
+  if (!res.ok) return res;
+  const dup = findWorkspaceByRepo(res.repoOwner, res.repoName);
+  if (dup) return { ok: false, error: `${res.repoOwner}/${res.repoName} is already open as "${dup.name}".` };
+  return await finishWorkspaceSetup(res, name);
 });
 
-ipcMain.handle('sync:setupLink', async (_evt, { workspacePath, remoteUrl }) => {
+// Check out an EXISTING workspace on this machine — the workspace already has a
+// repo, it just has no local row here (a DB synced from another machine, or a
+// folder that went missing). Accepts an empty folder to clone into, or one
+// that's already a clone of the same repo.
+ipcMain.handle('workspace:setUpHere', async (_evt, { id, workspacePath }) => {
   const auth = await readSyncPat();
   if (!auth.ok) return auth;
-  return syncSetupLink({ workspacePath, remoteUrl, pat: auth.pat });
+  const ws = getWorkspace(id);
+  if (!ws) return { ok: false, error: 'Workspace not found' };
+  if (ws.path) return { ok: false, error: `"${ws.name}" is already set up at ${ws.path}.` };
+
+  const info = await syncInspectWorkspaceFolder(workspacePath);
+  if (info.state === 'clone') {
+    // Must be the SAME repo — pointing a workspace at a different remote would
+    // silently make the row lie about what the folder contains.
+    const mismatch = syncRepoMismatch(info, ws);
+    if (mismatch) return { ok: false, error: mismatch };
+  } else if (info.state === 'empty') {
+    const res = await syncCloneWorkspaceRepo({
+      workspacePath, owner: ws.repoOwner, repo: ws.repoName, pat: auth.pat,
+    });
+    if (!res.ok) return res;
+  } else {
+    return { ok: false, error: info.error ?? 'That folder can\'t be used.' };
+  }
+
+  insertWorkspaceLocal(id, workspacePath);
+  await notifyWorkspacesChanged();
+  return { ok: true, id, path: workspacePath };
 });
 
-ipcMain.handle('sync:teardown', async (_evt, { workspacePath }) => {
-  return syncTeardown({ workspacePath });
+// Removal is its own call, not a settings save that happens to omit an id.
+// That's both what the user action actually is, and what stops a stale renderer
+// list from deleting a workspace it never knew about — see `updateWorkspaces`.
+// Nothing on disk is touched: not the checkout, not the GitHub repo.
+ipcMain.handle('workspace:remove', async (_evt, { id }) => {
+  deleteWorkspace(id);
+  await notifyWorkspacesChanged();
+  return { ok: true };
+});
+
+// Forget this machine's checkout but keep the workspace. What a vanished folder
+// means: the clone is gone, the repo isn't. Deleting the whole workspace there
+// would discard a perfectly valid remote because a folder moved — the row drops
+// back to "not set up here" and can be re-cloned.
+ipcMain.handle('workspace:forgetLocal', async (_evt, { id }) => {
+  deleteWorkspaceLocal(id);
+  await notifyWorkspacesChanged();
+  return { ok: true };
+});
+
+ipcMain.handle('workspace:addFromRepo', async (_evt, { workspacePath, owner, repo, name }) => {
+  const auth = await readSyncPat();
+  if (!auth.ok) return auth;
+  // Two workspaces on one repo would sync over each other through the same
+  // branch, so the repo — not the folder — is what has to be unique.
+  const dup = findWorkspaceByRepo(owner, repo);
+  if (dup) return { ok: false, error: `${owner}/${repo} is already open as "${dup.name}".` };
+  const res = await syncCloneWorkspaceRepo({ workspacePath, owner, repo, pat: auth.pat });
+  if (!res.ok) return res;
+  return await finishWorkspaceSetup(res, name);
 });
 
 // List repos visible to the configured PAT, for the per-workspace "link to
@@ -1137,13 +1225,10 @@ ipcMain.handle('sync:engineStart', async (evt, { workspacePath, intervalSeconds 
   const disabledIds = settings.sync?.disabledWorkspaceIds || [];
   const win = BrowserWindow.fromWebContents(evt.sender);
   // User turned sync off for this workspace → don't start the engine, but show
-  // the DISABLED (stop) icon so they can re-enable from the status bar. Origin
-  // stays in .git/config so re-enabling is a single engineStart, no setup.
-  // (Only when there's a remote to sync to — otherwise it's just unconfigured.)
+  // the DISABLED (stop) icon so they can re-enable from the status bar. Nothing
+  // on disk changes, so re-enabling is a single engineStart with no setup.
   if (wsId && disabledIds.includes(wsId)) {
-    const ws = await syncWorkspaceStatus(workspacePath);
-    if (ws.hasOrigin) await engineUserDisable();
-    else await engineStop();
+    await engineUserDisable();
     return;
   }
   await engineStart({
@@ -1155,14 +1240,15 @@ ipcMain.handle('sync:engineStart', async (evt, { workspacePath, intervalSeconds 
 });
 
 // Toggle per-workspace sync. Persists the flag; if this is the active
-// workspace, reconciles by stopping or starting the engine. Origin is left
-// in .git/config either way so re-enable is a no-touch resume.
+// workspace, reconciles by stopping or starting the engine. Nothing on disk is
+// touched either way, so re-enable is a no-touch resume.
 ipcMain.handle('sync:setWorkspaceDisabled', async (evt, { workspacePath, disabled }) => {
   // One boolean on one row. This used to rebuild the whole disabledWorkspaceIds
   // array and write it back inside the sync object, which rewrote every
   // workspace row AND re-encrypted the GitHub PAT to flip one flag.
-  const wsId = findWorkspaceIdByPath(workspacePath);
-  if (!wsId) return { ok: false, error: 'Workspace not found in settings' };
+  const ws = findWorkspaceByPath(workspacePath);
+  if (!ws) return { ok: false, error: 'Workspace not found' };
+  const wsId = ws.id;
   setWorkspaceSyncDisabled(wsId, disabled);
   const settings = await readSettings();
   const nextSync = settings.sync;
@@ -1173,10 +1259,8 @@ ipcMain.handle('sync:setWorkspaceDisabled', async (evt, { workspacePath, disable
   if (settings.activeWorkspaceId === wsId) {
     if (disabled) {
       // Show the DISABLED (stop) icon — not hidden — so it can be re-enabled
-      // from the status bar. (Falls back to a plain stop if there's no remote.)
-      const ws = await syncWorkspaceStatus(workspacePath);
-      if (ws.hasOrigin) await engineUserDisable();
-      else await engineStop();
+      // from the status bar.
+      await engineUserDisable();
     } else {
       const win = BrowserWindow.fromWebContents(evt.sender);
       await engineStart({

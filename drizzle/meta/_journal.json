@@ -50,6 +50,13 @@
       "when": 1784420000000,
       "tag": "0006_chat_source",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1784430000000,
+      "tag": "0007_workspace_repo",
+      "breakpoints": true
     }
   ]
 }

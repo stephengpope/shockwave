@@ -28,7 +28,11 @@ export type TreeSortOrder =
 export interface WorkspaceEntry {
   id: string;
   name: string;
-  path: string;
+  /** Absolute path of the checkout on THIS machine, or null when the workspace
+   *  exists but isn't cloned here (a synced DB, or a folder that vanished). */
+  path: string | null;
+  /** "owner/name", for display. */
+  repo: string;
 }
 
 export type SkillState = 'enabled' | 'disabled';

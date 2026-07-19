@@ -1,23 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import { SettingsSection, SettingsGroup, SettingsDivider } from './SectionUI';
-import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group';
 import ErrorMessage from '../ErrorMessage.jsx';
 
-// GitHub sync settings.
-//   1. PAT — encrypted on disk via OS keychain (main, safeStorage). Shown
-//      masked unless the user clicks Show.
-//   2. Verify — calls GET /user with the PAT to confirm it's valid and reports
-//      the GitHub login back to the user. Doesn't probe scopes — those are
-//      checked per-repo when the user actually configures a workspace.
-//   3. Pull interval — how often the sync engine ticks (commits, pulls,
-//      pushes). 10s default.
-//   4. Git presence check — runs `git --version` on the host and shows
-//      platform-specific install instructions if git isn't found. The sync
-//      engine can't function without git; this banner prevents the user
-//      hitting that as a delayed error.
+// GitHub — the account and the machine, i.e. everything that is NOT per
+// workspace. The token is one account for all of them; the interval is one
+// engine; git is one binary on this box.
+//
+// This was briefly folded into Workspaces, on the theory that a workspace IS a
+// repo so the account belonged above the list. The list won that argument: it's
+// the thing you actually come to that page for, and three global controls on
+// top of it pushed the workspaces below the fold.
+//
+// The old split's real failure wasn't that the token lived elsewhere — it's
+// that Workspaces gave you no way to GET here, so you had to already know. The
+// add dialog now links straight to this page when no token is set.
 
 const MIN_INTERVAL = 5;
 const MAX_INTERVAL = 600;
@@ -43,7 +43,7 @@ const INSTALL_INSTRUCTIONS = {
   },
 };
 
-export default function SyncSection({ sync, onSyncChange }) {
+export default function GitHubSection({ sync, onSyncChange }) {
   const pat = sync?.pat ?? '';
   const interval = sync?.pullIntervalSeconds ?? 10;
 
@@ -51,9 +51,8 @@ export default function SyncSection({ sync, onSyncChange }) {
   const [verifyState, setVerifyState] = useState<any>({ status: 'idle' });
   const [gitState, setGitState] = useState<any>({ status: 'checking' });
 
-  // Re-run the git check on mount and whenever the section is reopened. Cheap
-  // (spawns one process) and the result can change if the user installs git
-  // while the app is running.
+  // Cheap (one process) and the answer can change while the app runs, so it's
+  // re-checked whenever the section mounts rather than cached.
   useEffect(() => {
     let cancelled = false;
     setGitState({ status: 'checking' });
@@ -64,11 +63,7 @@ export default function SyncSection({ sync, onSyncChange }) {
     return () => { cancelled = true; };
   }, []);
 
-  const update = (patch) => onSyncChange?.({
-    pat,
-    pullIntervalSeconds: interval,
-    ...patch,
-  });
+  const updateSync = (patch) => onSyncChange?.({ pat, pullIntervalSeconds: interval, ...patch });
 
   // Verifying a token the user hasn't saved yet: pass the current form value
   // (not the persisted one) so they can verify before committing.
@@ -76,49 +71,34 @@ export default function SyncSection({ sync, onSyncChange }) {
     if (!pat) return;
     setVerifyState({ status: 'checking' });
     const res = await window.api.sync.verifyPat(pat);
-    if (res.ok) {
-      setVerifyState({ status: 'ok', login: res.login, name: res.name });
-    } else {
-      setVerifyState({ status: 'error', error: res.error });
-    }
+    setVerifyState(res.ok
+      ? { status: 'ok', login: res.login, name: res.name }
+      : { status: 'error', error: res.error });
   };
 
-  // Clear stale verify result whenever the PAT field changes — it could now
-  // be wrong, and we don't want a stale green check misleading the user.
+  // A stale green check next to a changed token would be actively misleading.
   const onPatChange = (e) => {
-    update({ pat: e.target.value });
+    updateSync({ pat: e.target.value });
     if (verifyState.status !== 'idle') setVerifyState({ status: 'idle' });
   };
 
-  const onIntervalChange = (values) => {
-    const n = Number.parseInt(values?.[0], 10);
+  // Clamped here as well as on the slider: the engine clamps to this same range
+  // anyway, so anything outside it would silently not apply.
+  const setInterval = (n: number) => {
     if (!Number.isFinite(n)) return;
-    const clamped = Math.max(MIN_INTERVAL, Math.min(MAX_INTERVAL, n));
-    update({ pullIntervalSeconds: clamped });
+    updateSync({ pullIntervalSeconds: Math.max(MIN_INTERVAL, Math.min(MAX_INTERVAL, n)) });
   };
 
   const install = INSTALL_INSTRUCTIONS[gitState.platform] || INSTALL_INSTRUCTIONS.linux;
 
   return (
     <SettingsSection
-      title="GitHub Sync"
-      description={(
-        <>
-          Sync each workspace to its own GitHub repository. Create a fine-grained
-          Personal Access Token at{' '}
-          <a
-            href="#"
-            className="text-primary hover:underline"
-            onClick={(e) => { e.preventDefault(); window.api.openExternal('https://github.com/settings/tokens?type=beta'); }}
-          >github.com/settings/tokens</a>
-          {' '}with <code className="font-mono text-xs">Contents: Read and write</code> on the repos you want
-          to sync. The token is encrypted on this machine using your OS keychain.
-        </>
-      )}
+      title="GitHub"
+      description="The account your workspaces live under, and how often they sync."
     >
-      <SettingsGroup title="Authentication">
+      <SettingsGroup title="Account">
         <Field>
-          <FieldLabel htmlFor="sync-pat">GitHub Personal Access Token</FieldLabel>
+          <FieldLabel htmlFor="sync-pat">Personal Access Token</FieldLabel>
           <div className="flex gap-2">
             <InputGroup className="flex-1">
               <InputGroupInput
@@ -138,31 +118,35 @@ export default function SyncSection({ sync, onSyncChange }) {
                 </InputGroupButton>
               </InputGroupAddon>
             </InputGroup>
-            <Button
-              onClick={onVerify}
-              disabled={!pat || verifyState.status === 'checking'}
-            >
+            <Button variant="outline" onClick={onVerify} disabled={!pat || verifyState.status === 'checking'}>
               {verifyState.status === 'checking' ? 'Verifying…' : 'Verify'}
             </Button>
           </div>
+          <FieldDescription className="text-xs">
+            Needs <code className="font-mono">Contents: Read and write</code>, plus{' '}
+            <code className="font-mono">Administration: Write</code> to create repos.{' '}
+            <a
+              href="#"
+              className="text-primary hover:underline"
+              onClick={(e) => { e.preventDefault(); window.api.openExternal('https://github.com/settings/tokens?type=beta'); }}
+            >Create one</a>. Encrypted with your OS keychain.
+          </FieldDescription>
           {verifyState.status === 'ok' && (
             <p className="text-xs text-success">
               ✓ Signed in as <strong>{verifyState.login}</strong>
               {verifyState.name ? ` (${verifyState.name})` : ''}
             </p>
           )}
-          {verifyState.status === 'error' && (
-            <ErrorMessage>{verifyState.error}</ErrorMessage>
-          )}
+          {verifyState.status === 'error' && <ErrorMessage>{verifyState.error}</ErrorMessage>}
         </Field>
       </SettingsGroup>
 
       <SettingsDivider />
 
-      <SettingsGroup title="Sync engine">
+      <SettingsGroup title="Sync">
         <Field>
           <div className="flex items-center justify-between">
-            <FieldLabel htmlFor="sync-interval">Pull interval</FieldLabel>
+            <FieldLabel htmlFor="sync-interval">Sync interval</FieldLabel>
             <span className="text-xs text-muted-foreground">{interval}s</span>
           </div>
           <Slider
@@ -171,11 +155,10 @@ export default function SyncSection({ sync, onSyncChange }) {
             max={MAX_INTERVAL}
             step={1}
             value={[interval]}
-            onValueChange={onIntervalChange}
+            onValueChange={(v) => setInterval(Number.parseInt(v?.[0], 10))}
           />
           <FieldDescription className="text-xs">
-            How often each synced workspace tries to pull and push.
-            Min {MIN_INTERVAL}s, max {MAX_INTERVAL}s.
+            How often the open workspace pulls and pushes. Min {MIN_INTERVAL}s, max {MAX_INTERVAL}s.
           </FieldDescription>
         </Field>
       </SettingsGroup>
@@ -191,9 +174,7 @@ export default function SyncSection({ sync, onSyncChange }) {
         )}
         {gitState.status === 'missing' && (
           <div className="flex flex-col gap-2">
-            <ErrorMessage>
-              git not found on PATH. Sync requires git to be installed.
-            </ErrorMessage>
+            <ErrorMessage>git not found on PATH. Workspaces require git to be installed.</ErrorMessage>
             <p className="text-xs text-muted-foreground">
               <strong>{install.label}:</strong> {install.body}
             </p>

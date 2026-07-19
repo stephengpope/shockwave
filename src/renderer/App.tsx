@@ -49,10 +49,6 @@ if (import.meta.env.DEV) (window as any).__toast = toast;
 
 const SAVE_DEBOUNCE_MS = 500;
 
-function genWorkspaceId() {
-  return 'ws_' + Math.random().toString(36).slice(2, 10);
-}
-
 
 
 // Sort the tree recursively. Folders are always pinned to the top in A→Z order;
@@ -786,55 +782,63 @@ export default function App() {
   const switchWorkspace = useCallback(async (id) => {
     const ws = workspaces.find((w) => w.id === id);
     if (!ws) return;
+    // A workspace with no path isn't checked out here — Settings offers to set
+    // it up; opening it isn't possible.
+    if (!ws.path) {
+      showError(`"${ws.name}" isn't set up on this machine yet. Choose a folder for it in Settings → Workspaces.`);
+      return;
+    }
     const exists = await window.api.pathExists(ws.path);
     if (!exists) {
-      const removed = workspaces.filter((w) => w.id !== id);
-      setWorkspaces(removed);
+      // The folder is gone, the repo isn't — forget the checkout, keep the
+      // workspace so it can be re-cloned.
+      await window.api.workspace.forgetLocal({ id });
+      setWorkspaces(workspaces.map((w) => (w.id === id ? { ...w, path: null } : w)));
       setActiveWorkspaceId(null);
-      await persistSettings({ workspaces: removed, activeWorkspaceId: null });
-      showError(`Workspace "${ws.name}" no longer exists.`);
+      showError(`Workspace "${ws.name}" is no longer on disk. Set it up again in Settings.`);
       return;
     }
     setActiveWorkspaceId(id);
-    await persistSettings({ workspaces, activeWorkspaceId: id });
+    await persistSettings({ activeWorkspaceId: id });
     await loadWorkspace(ws);
   }, [workspaces, persistSettings, themeMode, loadWorkspace, showError]);
 
-  const addWorkspace = useCallback(async () => {
-    const folder = await window.api.openFolder();
-    if (!folder) return;
-    const existing = workspaces.find((w) => w.path === folder);
-    if (existing) {
-      await switchWorkspace(existing.id);
-      return;
-    }
-    const ws = { id: genWorkspaceId(), name: basenameOf(folder), path: folder };
-    // Seed SOUL.md + empty AGENTS.md so a brand-new workspace has them from the
-    // start (not only when a repo is created via GitHub sync). Idempotent — an
-    // existing folder's files are preserved. Before loadWorkspace so the tree +
-    // watcher pick them up on first render.
-    await window.api.scaffoldWorkspace(folder);
-    const next = [...workspaces, ws];
+  // Adopt a workspace main just created (repo made or cloned) — select it and
+  // load it. The row already exists, so this doesn't persist `workspaces`; it
+  // re-reads them, because main minted the id and holds the repo columns the
+  // renderer's projection doesn't carry.
+  //
+  // Scaffolding moved into the setup flow: SOUL.md + AGENTS.md are seeded when
+  // a repo is CREATED, and a cloned repo brings whatever it already has.
+  const adoptWorkspace = useCallback(async (id: string, path: string, name: string) => {
+    const ws = { id, name, path };
+    const next = [...workspaces.filter((w) => w.id !== id), ws];
     setWorkspaces(next);
-    setActiveWorkspaceId(ws.id);
-    await persistSettings({ workspaces: next, activeWorkspaceId: ws.id });
+    setActiveWorkspaceId(id);
+    await persistSettings({ activeWorkspaceId: id });
     await loadWorkspace(ws);
-  }, [workspaces, persistSettings, themeMode, loadWorkspace, switchWorkspace]);
+  }, [workspaces, persistSettings, themeMode, loadWorkspace]);
+
+  // Rename only. `updateWorkspaces` in main applies name + order and cannot
+  // create or delete, so sending the whole list here is safe.
+  const renameWorkspaces = useCallback(async (next) => {
+    setWorkspaces(next);
+    await persistSettings({ workspaces: next });
+  }, [persistSettings]);
 
   const removeWorkspace = useCallback(async (id) => {
-    const next = workspaces.filter((w) => w.id !== id);
-    setWorkspaces(next);
-    let newActive = activeWorkspaceId;
+    // Deleting the row clears `workspace_local.active` with it (ON DELETE
+    // CASCADE), so removing the open workspace needs no separate active write.
+    await window.api.workspace.remove({ id });
+    setWorkspaces(workspaces.filter((w) => w.id !== id));
     if (id === activeWorkspaceId) {
-      newActive = null;
       setActiveWorkspaceId(null);
       resetTabs();
       setTree([]);
       setSelectedFolderPath(null);
       await window.api.watchStop();
     }
-    await persistSettings({ workspaces: next, activeWorkspaceId: newActive });
-  }, [workspaces, activeWorkspaceId, persistSettings, themeMode, resetTabs]);
+  }, [workspaces, activeWorkspaceId, resetTabs]);
 
 
   // File-delete confirmation state — holds the path(s) the user asked to delete
@@ -1423,19 +1427,15 @@ export default function App() {
       const lastId = settings.activeWorkspaceId;
       if (lastId) {
         const ws = (settings.workspaces || []).find((w) => w.id === lastId);
-        if (ws) {
+        if (ws?.path) {
           const exists = await window.api.pathExists(ws.path);
           if (exists) {
             setActiveWorkspaceId(lastId);
             await loadWorkspace(ws);
           } else {
-            // Drop it from the list and persist. Route through persistSettings
-            // so the full settings object is written, not a partial that would
-            // drop dailyNote/sync/etc.
-            const next = (settings.workspaces || []).filter((w) => w.id !== lastId);
-            setWorkspaces(next);
-            await persistSettings({ workspaces: next, activeWorkspaceId: null });
-            showError(`Workspace "${ws.name}" no longer exists at ${ws.path}.`);
+            await window.api.workspace.forgetLocal({ id: lastId });
+            setWorkspaces((settings.workspaces || []).map((w) => (w.id === lastId ? { ...w, path: null } : w)));
+            showError(`Workspace "${ws.name}" is no longer at ${ws.path}. Set it up again in Settings.`);
           }
         }
       }
@@ -2133,9 +2133,10 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
           workspaces={workspaces}
           activeWorkspaceId={activeWorkspaceId}
-          onAddWorkspace={addWorkspace}
+          onWorkspaceAdded={adoptWorkspace}
           onSwitchWorkspace={switchWorkspace}
           onRemoveWorkspace={removeWorkspace}
+          onRenameWorkspaces={renameWorkspaces}
           themeMode={themeMode}
           onThemeModeChange={onThemeModeChange}
           hideLineNumbers={hideLineNumbers}

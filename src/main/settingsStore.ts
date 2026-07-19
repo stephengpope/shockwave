@@ -4,10 +4,11 @@
 // one flat `Settings` object.
 //
 // ── Four tables, by what the data IS ─────────────────────────────────────────
-//   setting       scalar preferences, one row per dotted leaf key
-//   workspace     workspace entities (+ main-authored origin_url cache)
-//   agent_secret  agent-secret entities, no crypto columns
-//   secret_value  EVERY encrypted value, crypto columns NOT NULL
+//   setting          scalar preferences, one row per dotted leaf key
+//   workspace        workspace entities — which GitHub repo each one is
+//   workspace_local  per (workspace, machine): path, active, sync on/off
+//   agent_secret     agent-secret entities, no crypto columns
+//   secret_value     EVERY encrypted value, crypto columns NOT NULL
 //
 // Key-value suits preferences — heterogeneous, sparse, unrelated scalars. It
 // suits collections badly: an entity spread across N rows has no atomicity, so a
@@ -27,14 +28,19 @@
 //   - OAuth tokens (OAUTH_OWNED_FIELDS / OAUTH_OWNED_COLUMNS) — writable only via
 //     patchAgentSecretOAuth. Google rotates refresh tokens on every refresh, so a
 //     lost write there killed the connection permanently.
-//   - workspace.origin_url / checked_at — written only by workspaceStatus().
+//   - `workspaces` and `activeWorkspaceId` — both DERIVED from the two workspace
+//     tables on read. A settings save can rename and reorder; it cannot create a
+//     workspace (it has no repo columns to create one from) and cannot delete
+//     one (removal is its own IPC), so a stale renderer list can't erase a
+//     workspace it hadn't heard about.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { app, safeStorage, BrowserWindow } from 'electron';
 import { and, eq, like, inArray, notInArray } from 'drizzle-orm';
 import {
-  getDb, listWorkspaces, replaceWorkspaces, listSyncDisabledIds,
+  getDb, listWorkspaces, updateWorkspaces, listSyncDisabledIds,
+  getActiveWorkspaceId, setActiveWorkspace,
 } from './db/index.js';
 import { setting, agentSecret, secretValue } from './db/schema.js';
 import { seal, unseal } from './masterKey.js';
@@ -164,9 +170,20 @@ export async function readSettings(): Promise<any> {
     .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || String(a.name).localeCompare(String(b.name)));
 
   // Workspaces are entities but surfaced here so the renderer keeps seeing plain
-  // Settings fields. origin_url/checked_at stay main-only.
-  merged.workspaces = listWorkspaces().map((w: any) => ({ id: w.id, name: w.name, path: w.path }));
+  // Settings fields. `path` is NULL for a workspace that exists but isn't cloned
+  // on this machine — the list renders it with a "set up here" action rather
+  // than hiding it. `repo` is display-only ("owner/name"); the columns behind it
+  // stay main-only.
+  merged.workspaces = listWorkspaces().map((w: any) => ({
+    id: w.id, name: w.name, path: w.path,
+    repo: `${w.repoOwner}/${w.repoName}`,
+  }));
   merged.sync.disabledWorkspaceIds = listSyncDisabledIds();
+  // Derived, like the list above: it's `workspace_local.active` on THIS machine,
+  // not a stored scalar. As a `setting` row it was a foreign key hiding in a
+  // key-value store — global when it should be per-machine, and free to name a
+  // workspace that had been deleted.
+  merged.activeWorkspaceId = getActiveWorkspaceId();
 
   return merged;
 }
@@ -198,7 +215,17 @@ export async function writeSettings(patch: any, opts: { notify?: boolean } = {})
       continue;
     }
     if (key === 'workspaces') {
-      replaceWorkspaces(Array.isArray(value) ? (value as any[]) : []);
+      // Renames + reorder only. It cannot insert (a workspace needs repo
+      // columns the renderer doesn't carry) and it cannot delete — removal is
+      // its own IPC, so a settings save built from a stale list can't erase a
+      // workspace the renderer hadn't heard about yet.
+      updateWorkspaces(Array.isArray(value) ? (value as any[]) : []);
+      continue;
+    }
+    if (key === 'activeWorkspaceId') {
+      // Derived on read, so it's routed to its column on write rather than
+      // flattening into a `setting` row that would then shadow the truth.
+      setActiveWorkspace(typeof value === 'string' ? value : null);
       continue;
     }
     if (key === 'codingAgent' && isPlainObject(value)) {
@@ -214,7 +241,7 @@ export async function writeSettings(patch: any, opts: { notify?: boolean } = {})
       // authored only by the sync:setWorkspaceDisabled IPC. The renderer echoes
       // it back inside the sync object because it arrives on read; dropping it
       // here means that echo is a no-op instead of a rewrite of every workspace
-      // row. Same treatment as workspace.origin_url.
+      // row. Same treatment as `workspaces` and `activeWorkspaceId`.
       const { disabledWorkspaceIds: _ignored, ...rest } = value as any;
       flattenInto(key, rest, flat);
       continue;
@@ -334,6 +361,13 @@ export async function patchAgentSecretOAuth(name: string, patch: Record<string, 
   // Always main-initiated (oauth.ts). This is what makes the renderer's manual
   // reloadAgentSecrets after Connect/Disconnect unnecessary.
   await emitChanged(['agentSecrets']);
+}
+
+// Push the workspace list after main has inserted or deleted a row. Keeps the
+// renderer's copy fresh for RENDERING; it is no longer load-bearing for
+// correctness the way it would be if a settings save could still delete.
+export async function notifyWorkspacesChanged(): Promise<void> {
+  await emitChanged(['workspaces', 'activeWorkspaceId']);
 }
 
 // ─── One-time import from the legacy settings.json ───────────────────────────
