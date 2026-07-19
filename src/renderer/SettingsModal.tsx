@@ -33,12 +33,12 @@ import AdvancedSection from './settings/AdvancedSection.jsx';
 function buildNav(workspaceLabel) {
   return [
     { kind: 'header', label: 'General' },
-    { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
     { kind: 'item', id: SETTINGS_SECTIONS.APPEARANCE, label: 'Appearance' },
+    { kind: 'item', id: SETTINGS_SECTIONS.WORKSPACES, label: 'Workspaces' },
+    { kind: 'item', id: SETTINGS_SECTIONS.ADVANCED, label: 'Advanced' },
     { kind: 'item', id: SETTINGS_SECTIONS.GITHUB, label: 'GitHub Sync' },
     { kind: 'item', id: SETTINGS_SECTIONS.TRANSCRIPTION, label: 'Transcription' },
     { kind: 'item', id: SETTINGS_SECTIONS.UPDATES, label: 'Updates' },
-    { kind: 'item', id: SETTINGS_SECTIONS.ADVANCED, label: 'Advanced' },
     { kind: 'header', label: workspaceLabel },
     { kind: 'item', id: SETTINGS_SECTIONS.DAILY_NOTE, label: 'Daily Notes' },
     { kind: 'item', id: SETTINGS_SECTIONS.TEMPLATES, label: 'Templates' },
